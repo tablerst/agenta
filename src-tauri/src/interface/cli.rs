@@ -7,7 +7,8 @@ use crate::error::{AppError, AppResult};
 use crate::interface::response::{error, success, SuccessEnvelope};
 use crate::service::{
     CreateAttachmentInput, CreateNoteInput, CreateProjectInput, CreateTaskInput, CreateVersionInput,
-    SearchInput, TaskQuery, UpdateProjectInput, UpdateTaskInput, UpdateVersionInput,
+    RequestOrigin, SearchInput, TaskQuery, UpdateProjectInput, UpdateTaskInput,
+    UpdateVersionInput,
 };
 
 #[derive(Debug, Parser)]
@@ -283,7 +284,7 @@ async fn execute_project(app: AgentaApp, command: ProjectCommand) -> AppResult<S
         ProjectCommand::Create(args) => {
             let project = app
                 .service
-                .create_project(CreateProjectInput {
+                .create_project_from(RequestOrigin::Cli, CreateProjectInput {
                     slug: args.slug,
                     name: args.name,
                     description: args.description,
@@ -310,7 +311,8 @@ async fn execute_project(app: AgentaApp, command: ProjectCommand) -> AppResult<S
         ProjectCommand::Update(args) => {
             let project = app
                 .service
-                .update_project(
+                .update_project_from(
+                    RequestOrigin::Cli,
                     &args.project,
                     UpdateProjectInput {
                         slug: args.slug,
@@ -331,7 +333,7 @@ async fn execute_version(app: AgentaApp, command: VersionCommand) -> AppResult<S
         VersionCommand::Create(args) => {
             let version = app
                 .service
-                .create_version(CreateVersionInput {
+                .create_version_from(RequestOrigin::Cli, CreateVersionInput {
                     project: args.project,
                     name: args.name,
                     description: args.description,
@@ -355,7 +357,8 @@ async fn execute_version(app: AgentaApp, command: VersionCommand) -> AppResult<S
         VersionCommand::Update(args) => {
             let version = app
                 .service
-                .update_version(
+                .update_version_from(
+                    RequestOrigin::Cli,
                     &args.version,
                     UpdateVersionInput {
                         name: args.name,
@@ -374,7 +377,7 @@ async fn execute_task(app: AgentaApp, command: TaskCommand) -> AppResult<Success
         TaskCommand::Create(args) => {
             let task = app
                 .service
-                .create_task(CreateTaskInput {
+                .create_task_from(RequestOrigin::Cli, CreateTaskInput {
                     project: args.project,
                     version: args.version,
                     title: args.title,
@@ -405,7 +408,8 @@ async fn execute_task(app: AgentaApp, command: TaskCommand) -> AppResult<Success
         TaskCommand::Update(args) => {
             let task = app
                 .service
-                .update_task(
+                .update_task_from(
+                    RequestOrigin::Cli,
                     &args.task,
                     UpdateTaskInput {
                         version: args.version,
@@ -428,7 +432,7 @@ async fn execute_note(app: AgentaApp, command: NoteCommand) -> AppResult<Success
         NoteCommand::Create(args) => {
             let activity = app
                 .service
-                .create_note(CreateNoteInput {
+                .create_note_from(RequestOrigin::Cli, CreateNoteInput {
                     task: args.task,
                     content: args.content,
                     created_by: args.created_by,
@@ -455,7 +459,7 @@ async fn execute_attachment(
         AttachmentCommand::Create(args) => {
             let attachment = app
                 .service
-                .create_attachment(CreateAttachmentInput {
+                .create_attachment_from(RequestOrigin::Cli, CreateAttachmentInput {
                     task: args.task,
                     path: args.path,
                     kind: parse_optional_enum(args.kind)?,

@@ -9,7 +9,7 @@ Agenta (Agentic + Agenda) is a local-first task and context service for agent ho
 - YAML-first runtime configuration with system app data as the default root
 - CLI entrypoint in `src-tauri/src/bin/agenta-cli.rs`
 - MCP `streamable_http` entrypoint in `src-tauri/src/bin/agenta-mcp.rs`
-- Desktop shell kept thin while the first milestone prioritizes CLI + MCP
+- Desktop shell wired back to the shared contract with project/task/approval/runtime views
 
 ## Commands
 

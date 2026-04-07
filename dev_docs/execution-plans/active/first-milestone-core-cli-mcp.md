@@ -118,6 +118,6 @@
 | [x] | 新增 MCP `streamable_http` 入口并跑通最小闭环 | 已落 `agenta-mcp`，并有 MCP 集成验证 |
 | [x] | 补 FTS5、摘要字段与 `search` service | 已完成 task/activity 检索主线 |
 | [x] | 补动作级写策略 | 已落默认策略与结构化阻断返回 |
-| [ ] | 用真实 contract 替换 Desktop 欢迎页链路 | 当前仅替换为状态壳，尚未进入真实业务页面 |
+| [x] | 用真实 contract 替换 Desktop 欢迎页链路 | 已落三栏工作台、资源管理页、Runtime 页面与 Desktop command bridge |
 | [x] | 收敛 CLI/MCP 对外 contract 并补使用文档 | 已补 `attachment.get`、`note.list` 过滤语义与 CLI/MCP 快速手册 |
-| [ ] | 规划并落地 Desktop 第一批真实页面 | 建议作为下一阶段主任务 |
+| [x] | 规划并落地 Desktop 第一批真实页面 | 已落 Projects / Tasks / Approvals / Runtime 与全局搜索面板 |

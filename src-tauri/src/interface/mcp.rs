@@ -13,7 +13,8 @@ use crate::app::AppRuntime;
 use crate::interface::response::{SuccessEnvelope, error_to_rmcp, success};
 use crate::service::{
     CreateAttachmentInput, CreateNoteInput, CreateProjectInput, CreateTaskInput, CreateVersionInput,
-    SearchInput, TaskQuery, UpdateProjectInput, UpdateTaskInput, UpdateVersionInput,
+    RequestOrigin, SearchInput, TaskQuery, UpdateProjectInput, UpdateTaskInput,
+    UpdateVersionInput,
 };
 
 #[derive(Clone)]
@@ -106,7 +107,7 @@ impl AgentaMcpServer {
             "create" => success(
                 "project.create",
                 service
-                    .create_project(CreateProjectInput {
+                    .create_project_from(RequestOrigin::Mcp, CreateProjectInput {
                         slug: required(params.slug, "slug")?,
                         name: required(params.name, "name")?,
                         description: params.description,
@@ -130,7 +131,8 @@ impl AgentaMcpServer {
             "update" => success(
                 "project.update",
                 service
-                    .update_project(
+                    .update_project_from(
+                        RequestOrigin::Mcp,
                         &required(params.project, "project")?,
                         UpdateProjectInput {
                             slug: params.slug,
@@ -163,7 +165,7 @@ impl AgentaMcpServer {
             "create" => success(
                 "version.create",
                 service
-                    .create_version(CreateVersionInput {
+                    .create_version_from(RequestOrigin::Mcp, CreateVersionInput {
                         project: required(params.project, "project")?,
                         name: required(params.name, "name")?,
                         description: params.description,
@@ -191,7 +193,8 @@ impl AgentaMcpServer {
             "update" => success(
                 "version.update",
                 service
-                    .update_version(
+                    .update_version_from(
+                        RequestOrigin::Mcp,
                         &required(params.version, "version")?,
                         UpdateVersionInput {
                             name: params.name,
@@ -222,7 +225,7 @@ impl AgentaMcpServer {
             "create" => success(
                 "task.create",
                 service
-                    .create_task(CreateTaskInput {
+                    .create_task_from(RequestOrigin::Mcp, CreateTaskInput {
                         project: required(params.project, "project")?,
                         version: params.version,
                         title: required(params.title, "title")?,
@@ -258,7 +261,8 @@ impl AgentaMcpServer {
             "update" => success(
                 "task.update",
                 service
-                    .update_task(
+                    .update_task_from(
+                        RequestOrigin::Mcp,
                         &required(params.task, "task")?,
                         UpdateTaskInput {
                             version: params.version,
@@ -293,7 +297,7 @@ impl AgentaMcpServer {
             "create" => success(
                 "note.create",
                 service
-                    .create_note(CreateNoteInput {
+                    .create_note_from(RequestOrigin::Mcp, CreateNoteInput {
                         task: required(params.task, "task")?,
                         content: required(params.content, "content")?,
                         created_by: params.created_by,
@@ -328,7 +332,7 @@ impl AgentaMcpServer {
             "create" => success(
                 "attachment.create",
                 service
-                    .create_attachment(CreateAttachmentInput {
+                    .create_attachment_from(RequestOrigin::Mcp, CreateAttachmentInput {
                         task: required(params.task, "task")?,
                         path: PathBuf::from(required(params.path, "path")?),
                         kind: parse_optional_enum(params.kind)?,

@@ -7,7 +7,7 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::domain::{
-    Attachment, Project, Task, TaskActivity, Version,
+    ApprovalRequest, Attachment, Project, Task, TaskActivity, Version,
 };
 use crate::error::{AppError, AppResult};
 
@@ -97,6 +97,34 @@ pub(crate) fn map_attachment(row: SqliteRow) -> AppResult<Attachment> {
     })
 }
 
+pub(crate) fn map_approval_request(row: SqliteRow) -> AppResult<ApprovalRequest> {
+    Ok(ApprovalRequest {
+        request_id: parse_uuid(row.get("request_id"), "request_id")?,
+        action: row.get("action"),
+        requested_via: parse_enum(row.get("requested_via"), "requested_via")?,
+        resource_ref: row.get("resource_ref"),
+        payload_json: parse_json(row.get("payload_json"), "payload_json")?,
+        request_summary: row.get("request_summary"),
+        requested_at: parse_time(row.get("requested_at"), "requested_at")?,
+        requested_by: row.get("requested_by"),
+        reviewed_at: row
+            .get::<Option<String>, _>("reviewed_at")
+            .map(|value| parse_time(value, "reviewed_at"))
+            .transpose()?,
+        reviewed_by: row.get("reviewed_by"),
+        review_note: row.get("review_note"),
+        result_json: row
+            .get::<Option<String>, _>("result_json")
+            .map(|value| parse_json(value, "result_json"))
+            .transpose()?,
+        error_json: row
+            .get::<Option<String>, _>("error_json")
+            .map(|value| parse_json(value, "error_json"))
+            .transpose()?,
+        status: parse_enum(row.get("status"), "status")?,
+    })
+}
+
 pub(crate) fn parse_uuid(value: String, field: &str) -> AppResult<Uuid> {
     Uuid::parse_str(&value)
         .map_err(|error| AppError::Storage(format!("invalid uuid in {field}: {error}")))
@@ -114,6 +142,11 @@ where
     value
         .parse::<T>()
         .map_err(|error| AppError::Storage(format!("invalid enum in {field}: {error}")))
+}
+
+pub(crate) fn parse_json(value: String, field: &str) -> AppResult<serde_json::Value> {
+    serde_json::from_str(&value)
+        .map_err(|error| AppError::Storage(format!("invalid json in {field}: {error}")))
 }
 
 pub(crate) fn format_time(value: OffsetDateTime) -> AppResult<String> {

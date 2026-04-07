@@ -1,5 +1,7 @@
 use serde_json::json;
+use serde_json::Value;
 use thiserror::Error;
+use uuid::Uuid;
 
 use crate::policy::WriteDecision;
 
@@ -21,6 +23,9 @@ pub enum AppError {
     PolicyBlocked {
         action: String,
         decision: WriteDecision,
+        approval_request_id: Option<Uuid>,
+        request_summary: Option<String>,
+        payload_snapshot: Option<Value>,
     },
     #[error("storage error: {0}")]
     Storage(String),
@@ -63,8 +68,20 @@ impl AppError {
             Self::NotFound { entity, reference } => {
                 json!({ "entity": entity, "reference": reference })
             }
-            Self::PolicyBlocked { action, decision } => {
-                json!({ "action": action, "decision": decision.as_str() })
+            Self::PolicyBlocked {
+                action,
+                decision,
+                approval_request_id,
+                request_summary,
+                payload_snapshot,
+            } => {
+                json!({
+                    "action": action,
+                    "decision": decision.as_str(),
+                    "approval_request_id": approval_request_id.map(|value| value.to_string()),
+                    "request_summary": request_summary,
+                    "payload_snapshot": payload_snapshot,
+                })
             }
         }
     }

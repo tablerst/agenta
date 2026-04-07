@@ -82,6 +82,19 @@ string_enum!(AttachmentKind {
     Other => "other",
 });
 
+string_enum!(ApprovalStatus {
+    Pending => "pending",
+    Approved => "approved",
+    Denied => "denied",
+    Failed => "failed",
+});
+
+string_enum!(ApprovalRequestedVia {
+    Cli => "cli",
+    Mcp => "mcp",
+    Desktop => "desktop",
+});
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Project {
     pub project_id: Uuid,
@@ -152,6 +165,24 @@ pub struct Attachment {
     pub created_at: OffsetDateTime,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ApprovalRequest {
+    pub request_id: Uuid,
+    pub action: String,
+    pub requested_via: ApprovalRequestedVia,
+    pub resource_ref: String,
+    pub payload_json: serde_json::Value,
+    pub request_summary: String,
+    pub requested_at: OffsetDateTime,
+    pub requested_by: String,
+    pub reviewed_at: Option<OffsetDateTime>,
+    pub reviewed_by: Option<String>,
+    pub review_note: Option<String>,
+    pub result_json: Option<serde_json::Value>,
+    pub error_json: Option<serde_json::Value>,
+    pub status: ApprovalStatus,
+}
+
 impl Default for ProjectStatus {
     fn default() -> Self {
         Self::Active
@@ -179,5 +210,11 @@ impl Default for TaskPriority {
 impl Default for AttachmentKind {
     fn default() -> Self {
         Self::Other
+    }
+}
+
+impl Default for ApprovalStatus {
+    fn default() -> Self {
+        Self::Pending
     }
 }

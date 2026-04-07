@@ -113,7 +113,7 @@ Agenta 的 canonical 能力面只有两条：
 - 多用户协作
 - 云端同步
 - 复杂 RBAC
-- Proposal / Approval 工作流引擎
+- 多级 Proposal / Approval 工作流引擎
 - run graph / subagent graph / execution tree 建模
 - 向量检索默认启用
 - PostgreSQL 作为首发运行时
@@ -317,6 +317,7 @@ MVP 保持以下工具族：
 ## 9. 写策略模型
 
 Agenta 采用动作级写策略，不引入重型审批流。
+Desktop 可以在单用户本地场景下，为 `require_human` 请求提供持久化审批中心与一次性重放。
 
 策略级别只有三档：
 
@@ -340,7 +341,7 @@ Agenta 采用动作级写策略，不引入重型审批流。
 规则：
 
 - 宿主负责系统级权限与审批
-- Agenta 只负责业务动作是否允许落账
+- Agenta 负责业务动作是否允许落账，以及 Desktop 内的单用户业务审批记录与回放
 - 策略命中结果必须进入结构化输出
 
 ## 10. MVP 验收口径

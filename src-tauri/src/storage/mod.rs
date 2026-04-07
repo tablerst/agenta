@@ -1,3 +1,4 @@
+mod approvals;
 mod attachments;
 mod mapping;
 mod projects;
