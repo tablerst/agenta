@@ -56,6 +56,28 @@ impl SqliteStore {
         rows.into_iter().map(map_attachment).collect()
     }
 
+    pub async fn get_attachment_by_ref(&self, reference: &str) -> AppResult<Attachment> {
+        let row = query(
+            r#"
+            SELECT
+                attachment_id, task_id, kind, mime, original_filename, original_path,
+                storage_path, sha256, size_bytes, summary, created_by, created_at
+            FROM attachments
+            WHERE attachment_id = ?
+            "#,
+        )
+        .bind(reference)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.map(map_attachment)
+            .transpose()?
+            .ok_or_else(|| AppError::NotFound {
+                entity: "attachment".to_string(),
+                reference: reference.to_string(),
+            })
+    }
+
     pub async fn persist_attachment_file(
         &self,
         task_id: Uuid,

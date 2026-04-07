@@ -91,9 +91,17 @@ async fn runtime_service_flow_covers_core_objects_and_search() -> Result<(), Box
             limit: Some(10),
         })
         .await?;
+    let notes = runtime.service.list_notes(&task.task_id.to_string()).await?;
+    let loaded_attachment = runtime
+        .service
+        .get_attachment(&attachment.attachment_id.to_string())
+        .await?;
 
     assert_eq!(note.kind.to_string(), "note");
+    assert_eq!(notes.len(), 1);
+    assert_eq!(notes[0].activity_id, note.activity_id);
     assert_eq!(attachment.summary, "dashboard-log");
+    assert_eq!(loaded_attachment.attachment_id, attachment.attachment_id);
     assert!(!search.tasks.is_empty());
     assert!(!search.activities.is_empty());
     assert!(runtime

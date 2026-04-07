@@ -71,6 +71,7 @@ enum NoteCommand {
 #[derive(Debug, Subcommand)]
 enum AttachmentCommand {
     Create(AttachmentCreateArgs),
+    Get(AttachmentRefArgs),
     List(TaskRefArgs),
 }
 
@@ -228,8 +229,14 @@ struct AttachmentCreateArgs {
 }
 
 #[derive(Debug, Args)]
-struct SearchQueryArgs {
+struct AttachmentRefArgs {
     #[arg(long)]
+    attachment: String,
+}
+
+#[derive(Debug, Args)]
+struct SearchQueryArgs {
+    #[arg(long = "text", alias = "query")]
     text: String,
     #[arg(long)]
     limit: Option<usize>,
@@ -430,11 +437,11 @@ async fn execute_note(app: AgentaApp, command: NoteCommand) -> AppResult<Success
             success("note.create", activity, "Created note")
         }
         NoteCommand::List(args) => {
-            let activities = app.service.list_task_activities(&args.task).await?;
+            let activities = app.service.list_notes(&args.task).await?;
             success(
                 "note.list",
                 &activities,
-                format!("Listed {} activity item(s)", activities.len()),
+                format!("Listed {} note(s)", activities.len()),
             )
         }
     }
@@ -457,6 +464,10 @@ async fn execute_attachment(
                 })
                 .await?;
             success("attachment.create", attachment, "Created attachment")
+        }
+        AttachmentCommand::Get(args) => {
+            let attachment = app.service.get_attachment(&args.attachment).await?;
+            success("attachment.get", attachment, "Loaded attachment")
         }
         AttachmentCommand::List(args) => {
             let attachments = app.service.list_attachments(&args.task).await?;

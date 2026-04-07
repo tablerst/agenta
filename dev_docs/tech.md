@@ -12,23 +12,20 @@
 
 ### 2.1 当前状态
 
-仓库当前只有：
+仓库当前已经具备：
 
-- Vue 3 单页示例前端
-- 一个 Tauri Rust crate
-- 一个示例命令 `greet`
+- Vue 3 桌面状态壳
+- 单 `src-tauri` Rust crate
+- 共享业务层、SQLite migration、附件落盘
+- CLI 与 MCP `streamable_http` 入口
 - Bun 驱动的前端开发与构建配置
 
-当前还没有：
+仓库当前仍然没有：
 
 - Rust workspace
-- Core 与 Adapter 分层
-- CLI
-- MCP server
-- SQLite schema
-- SQLx
-- FTS5
-- 附件系统
+- 独立 app crate / core crate 拆分
+- 真实 Desktop 业务页面
+- 默认启用的向量后端或 sidecar
 
 ### 2.2 目标状态
 
@@ -158,7 +155,7 @@ Desktop 必须是壳，不是业务唯一宿主。
 
 但不允许：
 
-- 新业务继续深埋在示例 `greet` 风格代码里
+- 新业务继续深埋在临时入口或桌面专属代码里
 - 为了赶 UI 把 CLI 与 MCP 继续延后
 
 ## 5. 存储设计

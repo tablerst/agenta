@@ -2,13 +2,14 @@
 
 ## 背景
 
-当前仓库仍是 `Tauri + Vue` 默认骨架：
+当前仓库已经完成首轮主线落地：
 
-- 前端只有欢迎页
-- Rust 侧只有示例 `greet`
-- 还没有 SQLite、CLI、MCP、附件、检索和写策略主线
+- Rust 侧已经建立共享业务骨架
+- SQLite、附件落盘、CLI、MCP `streamable_http` 已接通
+- Desktop 已从模板欢迎页切换为里程碑状态壳
+- 根文档与 `dev_docs/` 已按 `CLI + MCP` 首发口径收敛
 
-本轮目标不是先做 Desktop，而是在现有单 `src-tauri` package 内，先建立共享业务核心，并让 CLI 与 MCP 形成首个可验收闭环。
+当前文档的作用不再是“准备开工”，而是记录首轮里程碑已完成的内容，并明确下一阶段应如何推进。
 
 ## 方案
 
@@ -28,6 +29,11 @@
 4. 先补 CLI，再补独立 MCP HTTP 入口，复用同一套服务层。
 5. CLI/MCP 主闭环跑通后，再补 FTS5、摘要字段和写策略。
 6. 最后再把 Desktop 接回真实 contract。
+
+当前实现结果：
+
+- 已完成 1 至 5，并补上了基础集成测试
+- Desktop 仍然只到“薄壳 + 状态占位”阶段，尚未接回真实业务界面
 
 ## 执行步骤
 
@@ -104,12 +110,14 @@
 | --- | --- | --- |
 | [x] | 收口首个里程碑默认决策 | 已确定 CLI+MCP 优先、HTTP MCP 优先、系统应用数据目录、`bun`、Desktop 延后 |
 | [x] | 同步正式文档默认值 | 已更新 `baseline.md`、`tech.md`、`deps_build.md`、`migration_plan.md`、`README.md` |
-| [ ] | 建立 Rust Foundation 依赖与模块骨架 | 主线程实施 |
-| [ ] | 建立 YAML 配置与系统应用数据目录主线 | 主线程实施 |
-| [ ] | 落 SQLite migration 与五个核心对象 schema | 主线程实施 |
-| [ ] | 落 repository、service、统一错误与结果骨架 | 主线程实施 |
-| [ ] | 新增 CLI 入口并跑通最小闭环 | 主线程实施 |
-| [ ] | 新增 MCP `streamable_http` 入口并跑通最小闭环 | 主线程实施 |
-| [ ] | 补 FTS5、摘要字段与 `search` service | 主线程实施 |
-| [ ] | 补动作级写策略 | 主线程实施 |
-| [ ] | 用真实 contract 替换 Desktop 欢迎页链路 | 后续阶段 |
+| [x] | 建立 Rust Foundation 依赖与模块骨架 | 已落 `app / domain / storage / service / search / policy / interface / tauri_app` |
+| [x] | 建立 YAML 配置与系统应用数据目录主线 | 已落 `agenta.example.yaml`、`agenta.local.yaml` 约定与系统目录默认值 |
+| [x] | 落 SQLite migration 与五个核心对象 schema | 已落 migration、FTS 与五个核心对象 |
+| [x] | 落 repository、service、统一错误与结果骨架 | 已完成共享 service、CLI/MCP 统一成功/失败骨架 |
+| [x] | 新增 CLI 入口并跑通最小闭环 | 已落 `agenta-cli`，并有 CLI 集成验证 |
+| [x] | 新增 MCP `streamable_http` 入口并跑通最小闭环 | 已落 `agenta-mcp`，并有 MCP 集成验证 |
+| [x] | 补 FTS5、摘要字段与 `search` service | 已完成 task/activity 检索主线 |
+| [x] | 补动作级写策略 | 已落默认策略与结构化阻断返回 |
+| [ ] | 用真实 contract 替换 Desktop 欢迎页链路 | 当前仅替换为状态壳，尚未进入真实业务页面 |
+| [x] | 收敛 CLI/MCP 对外 contract 并补使用文档 | 已补 `attachment.get`、`note.list` 过滤语义与 CLI/MCP 快速手册 |
+| [ ] | 规划并落地 Desktop 第一批真实页面 | 建议作为下一阶段主任务 |

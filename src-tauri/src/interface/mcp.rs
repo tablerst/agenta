@@ -79,6 +79,7 @@ pub struct NoteToolInput {
 pub struct AttachmentToolInput {
     pub action: String,
     pub task: Option<String>,
+    pub attachment_id: Option<String>,
     pub path: Option<String>,
     pub kind: Option<String>,
     pub created_by: Option<String>,
@@ -89,6 +90,7 @@ pub struct AttachmentToolInput {
 pub struct SearchToolInput {
     pub action: String,
     pub text: Option<String>,
+    pub query: Option<String>,
     pub limit: Option<usize>,
 }
 
@@ -116,7 +118,7 @@ impl AgentaMcpServer {
             "get" => success(
                 "project.get",
                 service
-                    .get_project(&required(params.project, "project")?)
+                    .get_project(&project_reference(params.project, params.slug)?)
                     .await
                     .map_err(error_to_rmcp)?,
                 "Loaded project",
@@ -281,7 +283,7 @@ impl AgentaMcpServer {
         Ok(Json(envelope))
     }
 
-    #[tool(description = "Manage task notes and activity timeline items")]
+    #[tool(description = "Manage task notes")]
     pub async fn note(
         &self,
         Parameters(params): Parameters<NoteToolInput>,
@@ -302,10 +304,10 @@ impl AgentaMcpServer {
             ),
             "list" => {
                 let items = service
-                    .list_task_activities(&required(params.task, "task")?)
+                    .list_notes(&required(params.task, "task")?)
                     .await
                     .map_err(error_to_rmcp)?;
-                success("note.list", &items, format!("Listed {} activity item(s)", items.len()))
+                success("note.list", &items, format!("Listed {} note(s)", items.len()))
             }
             other => Err(crate::error::AppError::InvalidAction(format!(
                 "unsupported note action: {other}"
@@ -336,6 +338,14 @@ impl AgentaMcpServer {
                     .await
                     .map_err(error_to_rmcp)?,
                 "Created attachment",
+            ),
+            "get" => success(
+                "attachment.get",
+                service
+                    .get_attachment(&required(params.attachment_id, "attachment_id")?)
+                    .await
+                    .map_err(error_to_rmcp)?,
+                "Loaded attachment",
             ),
             "list" => {
                 let items = service
@@ -368,7 +378,7 @@ impl AgentaMcpServer {
                 "search.query",
                 service
                     .search(SearchInput {
-                        text: required(params.text, "text")?,
+                        text: search_text(params.text, params.query)?,
                         limit: params.limit,
                     })
                     .await
@@ -417,4 +427,26 @@ where
                 .map_err(|error| ErrorData::invalid_params(error, None))
         })
         .transpose()
+}
+
+fn project_reference(project: Option<String>, slug: Option<String>) -> Result<String, ErrorData> {
+    match (project, slug) {
+        (Some(project), _) if !project.trim().is_empty() => Ok(project.trim().to_string()),
+        (None, Some(slug)) if !slug.trim().is_empty() => Ok(slug.trim().to_string()),
+        _ => Err(ErrorData::invalid_params(
+            "missing required field: project or slug",
+            None,
+        )),
+    }
+}
+
+fn search_text(text: Option<String>, query: Option<String>) -> Result<String, ErrorData> {
+    match (text, query) {
+        (Some(text), _) if !text.trim().is_empty() => Ok(text.trim().to_string()),
+        (None, Some(query)) if !query.trim().is_empty() => Ok(query.trim().to_string()),
+        _ => Err(ErrorData::invalid_params(
+            "missing required field: text or query",
+            None,
+        )),
+    }
 }

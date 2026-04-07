@@ -364,6 +364,14 @@ impl AgentaService {
         self.store.list_task_activities(task.task_id).await
     }
 
+    pub async fn list_notes(&self, task_ref: &str) -> AppResult<Vec<TaskActivity>> {
+        let activities = self.list_task_activities(task_ref).await?;
+        Ok(activities
+            .into_iter()
+            .filter(|activity| activity.kind == TaskActivityKind::Note)
+            .collect())
+    }
+
     pub async fn create_attachment(
         &self,
         input: CreateAttachmentInput,
@@ -422,6 +430,10 @@ impl AgentaService {
     pub async fn list_attachments(&self, task_ref: &str) -> AppResult<Vec<Attachment>> {
         let task = self.store.get_task_by_ref(task_ref).await?;
         self.store.list_attachments(task.task_id).await
+    }
+
+    pub async fn get_attachment(&self, reference: &str) -> AppResult<Attachment> {
+        self.store.get_attachment_by_ref(reference).await
     }
 
     pub async fn search(&self, input: SearchInput) -> AppResult<SearchResponse> {

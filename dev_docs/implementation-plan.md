@@ -10,13 +10,13 @@
 
 当前代码状态：
 
-- `src/App.vue` 仍是 Tauri 欢迎页
-- `src/main.ts` 仅挂载单个组件
-- `src-tauri/src/lib.rs` 只有 `greet` 示例命令
-- 当前前端依赖只有 `vue`、`@tauri-apps/api`、`@tauri-apps/plugin-opener`
-- 当前 Rust 依赖只有 `tauri`、`serde`、`serde_json`
+- `src/App.vue` 已替换为里程碑状态壳
+- `src-tauri/src/lib.rs` 已切到共享应用装配入口
+- `src-tauri/src/bin/agenta-cli.rs` 与 `src-tauri/src/bin/agenta-mcp.rs` 已存在
+- 已落 `app / domain / storage / service / search / policy / interface / tauri_app`
+- 已接入 SQLite migration、附件落盘、FTS、CLI、MCP `streamable_http`
 
-因此，第一阶段的成功标准不是“把理想架构图写完整”，而是“在当前仓库中建立第一个可靠业务骨架”。
+因此，当前文档重点从“如何开始”转为“如何在首轮里程碑完成后继续推进”。
 
 ## 迁移原则
 
@@ -67,7 +67,7 @@
 
 建议改动：
 
-- 新增 `src-tauri/src/bin/agenta.rs`
+- 新增 `src-tauri/src/bin/agenta-cli.rs`
 - 接入 `clap`
 - 实现 `project / version / task / note / attachment / search` 命令族
 - 默认输出 JSON，保留 `--human` 或文本模式作为补充
@@ -101,7 +101,7 @@
 
 目标：
 
-- 把当前欢迎页替换成真正可操作的桌面界面
+- 把当前状态壳替换成真正可操作的桌面界面
 
 建议改动：
 
@@ -165,6 +165,15 @@
 - 默认桌面包不含多余权限
 - sidecar 若存在，则已声明白名单和参数范围
 - 发布流程与实际运行结构一致
+
+## 当前已完成的实现状态
+
+- 已完成正式文档默认值收口
+- 已完成 Rust Foundation、配置、路径、migration 和五个核心对象
+- 已完成 CLI 与 MCP `streamable_http` 闭环
+- 已完成 FTS5、摘要字段与基础写策略
+- 已完成基础单元测试与集成测试
+- Desktop 仍未进入真实业务页面阶段
 
 ## Workspace 拆分触发条件
 

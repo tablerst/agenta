@@ -8,11 +8,11 @@
 
 ## 当前起点
 
-当前仓库仍是标准 `Tauri + Vue + TypeScript` scaffold：
+当前仓库已经完成首轮主线搭建：
 
-- 前端只有 `App.vue` 欢迎页
-- Rust 侧只有 `greet` 示例命令
-- 还没有 router、store、数据库、CLI、MCP server
+- 前端已从模板欢迎页切到里程碑状态壳
+- Rust 侧已有共享业务层、SQLite、CLI、MCP server
+- 已落 migration、附件落盘、FTS 与基础写策略
 - `src-tauri/Cargo.toml` 仍是单 package
 
 因此，正式架构不能假设下面这些东西已经存在：
@@ -69,13 +69,15 @@ src-tauri/
     lib.rs
     main.rs
   src/bin/
-    agenta.rs
+    agenta-cli.rs
+    agenta-mcp.rs
 ```
 
 说明：
 
 - `main.rs` 保留 Tauri 桌面入口
-- `src/bin/agenta.rs` 承载 CLI
+- `src/bin/agenta-cli.rs` 承载 CLI
+- `src/bin/agenta-mcp.rs` 承载 MCP HTTP 入口
 - `lib.rs` 暴露共享应用装配入口
 - `domain / storage / service / search / policy` 才是长期稳定边界
 
@@ -194,7 +196,7 @@ Tauri 在当前阶段不应承担：
 
 满足下面条件，再拆更合理：
 
-1. `src/bin/agenta.rs` 已经稳定承担 CLI。
+1. `src/bin/agenta-cli.rs` 已经稳定承担 CLI。
 2. MCP 入口已存在并复用了同一服务层。
 3. 共享领域模块已经形成稳定边界。
 4. 编译时间、发布物或团队协作已经明显受单 package 影响。

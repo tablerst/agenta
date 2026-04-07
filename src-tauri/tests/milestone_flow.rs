@@ -114,6 +114,16 @@ async fn service_flow_persists_and_searches() {
         })
         .await
         .expect("search");
+    let notes = app
+        .service
+        .list_notes(&task.task_id.to_string())
+        .await
+        .expect("list notes");
+    let loaded_attachment = app
+        .service
+        .get_attachment(&attachment.attachment_id.to_string())
+        .await
+        .expect("get attachment");
 
     let attachments = app
         .service
@@ -127,8 +137,11 @@ async fn service_flow_persists_and_searches() {
         .expect("list activities");
 
     assert_eq!(note.task_id, task.task_id);
+    assert_eq!(notes.len(), 1);
+    assert_eq!(notes[0].activity_id, note.activity_id);
     assert_eq!(attachments.len(), 1);
     assert_eq!(attachment.attachment_id, attachments[0].attachment_id);
+    assert_eq!(loaded_attachment.attachment_id, attachment.attachment_id);
     assert_eq!(activities.len(), 2);
     assert_eq!(hits.query, "Alpha");
     assert!(!hits.tasks.is_empty() || !hits.activities.is_empty());

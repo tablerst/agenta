@@ -9,6 +9,10 @@
 
 `dev_docs/draft/` 只保留为历史草稿，不再作为实施依据。
 
+辅助使用文档：
+
+- [cli-mcp-quickstart.md](/e:/JetBrains/RustRover/agenta/docs/cli-mcp-quickstart.md): 当前 CLI / MCP 对外使用面、配置和示例流程
+
 当前默认决策：
 
 - MVP 先交付 CLI + MCP，不把 Desktop 设为首个必交项

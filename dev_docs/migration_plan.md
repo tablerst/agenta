@@ -10,14 +10,14 @@
 
 仓库当前状态：
 
-- 一个 Vue 示例页
-- 一个 Tauri Rust crate
-- 无数据库
-- 无 CLI
-- 无 MCP
-- 无正式领域模型
+- 一个已从模板页切到状态壳的 Vue/Tauri 桌面入口
+- 一个单 `src-tauri` Rust package
+- 已落数据库、CLI、MCP、正式领域模型
+- 已有 migration、附件落盘、FTS 与基础策略能力
 
-这意味着迁移必须遵循两个原则：
+这意味着迁移主线已经走过“从 0 到 1”的阶段，下一步要避免在 Desktop 或新增能力上重新引入分叉。
+
+当前仍需遵循两个原则：
 
 - 先形成业务主线，再回头完善桌面壳
 - 每一阶段都能独立验证，不允许大爆炸式重构
@@ -103,7 +103,7 @@
 
 建议动作：
 
-1. 先以 `src-tauri/src/bin/agenta.rs` 或等价方式补 CLI 入口
+1. 先以 `src-tauri/src/bin/agenta-cli.rs` 或等价方式补 CLI 入口
 2. 落命令族 `project/version/task/note/attachment/search`
 3. 默认输出 JSON
 4. 补最小文本输出模式
@@ -176,7 +176,7 @@
 
 1. 引入 `vue-router`
 2. 引入 `pinia`
-3. 用真实数据替换示例 `greet` 流程
+3. 用真实数据替换当前状态壳中的占位信息
 4. 建立项目、任务、附件、检索的基础界面
 
 退出条件：
@@ -240,9 +240,8 @@
 
 如果下一步直接开工，建议按这个顺序：
 
-1. 在现有 `src-tauri` 内建立核心模块与配置主线。
-2. 落 SQLite schema、repository 与 service。
-3. 立刻补 CLI，而不是先补 UI。
-4. CLI 跑通后再补 MCP `streamable_http`。
-5. MCP 跑通后再补 FTS5、摘要与写策略。
-6. 最后再评估 workspace 拆分并把 Desktop 接回真实 contract。
+1. 先收敛 CLI 与 MCP 对外 contract，补最小使用文档与示例。
+2. 为 Desktop 设计并接回第一批真实页面，继续保持薄客户端原则。
+3. 在真实使用压力下补更细的错误码、筛选能力和人类友好输出。
+4. 评估是否需要补 `stdio` 作为 MCP 次级 transport。
+5. Desktop 稳定后再评估 workspace 拆分，而不是提前拆目录。
