@@ -1,0 +1,20 @@
+paths:
+  data_dir: ./local-data
+  database_path: ./local-data/agenta.sqlite3
+  attachments_dir: ./local-data/attachments
+
+mcp:
+  bind: 127.0.0.1:8787
+  path: /mcp
+
+policy:
+  default: auto
+  actions:
+    project.create: auto
+    project.update: auto
+    version.create: auto
+    version.update: auto
+    task.create: auto
+    task.update: auto
+    note.create: auto
+    attachment.create: auto
