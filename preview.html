@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <title>Agenta UI Preview - Linear Style</title>
+  <style>
+    /* ========================================================
+       1. 主题与光感变量 (Light / Dark & Luminous Variables)
+       ======================================================== */
+    :root {
+      /* Dark 模式 - 更高级的深邃炭黑 */
+      --bg-main: #0A0A0A;
+      --bg-sidebar: #141415;
+      --bg-list: #0E0E0F;
+      --border-color: #27272A;
+      /* 琴键高光 - 元素顶部的极细亮线 */
+      --border-highlight: rgba(255,255,255,0.06); 
+      --text-main: #EDEDED;
+      --text-muted: #8F8F94;
+      /* 鼠标光斑 - 冷白微光 */
+      --spotlight-color: rgba(255,255,255,0.04);
+      --accent-bg: rgba(255,255,255,0.04);
+
+      /* 专属高级代码高亮 (Dark) - 低饱和、灰度融合 */
+      --syntax-punct: #5E5E62;
+      --syntax-key: #8B8DE6;    /* 幽静紫蓝 */
+      --syntax-str: #6ED3A6;    /* 蒙尘薄绿 */
+      --syntax-num: #E09070;    /* 灰橙 */
+    }
+    
+    [data-theme="light"] {
+      /* Light 模式 - 去除死白，使用极微弱的暖白/冷灰调和 */
+      --bg-main: #FFFFFF;
+      --bg-sidebar: #F7F7F8;
+      --bg-list: #FCFCFC;
+      --border-color: #E4E4E7;
+      /* 亮色模式下的截面线，采用极弱深色 */
+      --border-highlight: rgba(0,0,0,0.04);
+      --text-main: #111113;
+      --text-muted: #686A6D;
+      /* 鼠标光斑 - 浅色灰光 */
+      --spotlight-color: rgba(0,0,0,0.03);
+      --accent-bg: rgba(0,0,0,0.03);
+
+      /* 专属高级代码高亮 (Light) - 克制清晰 */
+      --syntax-punct: #A1A1AA;
+      --syntax-key: #5A5DDF;
+      --syntax-str: #20A464;
+      --syntax-num: #CD5D22;
+    }
+
+    /* 基础重置 */
+    body, html {
+      margin: 0; padding: 0; height: 100%;
+      font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background-color: var(--bg-main);
+      color: var(--text-main);
+      overflow: hidden;
+      /* 主题切换的瞬时过滤 150ms 锁死区间 */
+      transition: background-color 0.15s ease, color 0.15s ease;
+    }
+
+    /* ========================================================
+       2. 空间布局 (Spatial Layout)
+       ======================================================== */
+    .app-container {
+      display: flex; height: 100vh; width: 100vw;
+    }
+
+    /* 侧边栏 */
+    .sidebar {
+      width: 240px; background-color: var(--bg-sidebar);
+      border-right: 1px solid var(--border-color);
+      display: flex; flex-direction: column; padding: 16px 12px;
+    }
+    .nav-item {
+      padding: 6px 10px; margin-bottom: 4px; border-radius: 6px;
+      color: var(--text-muted); cursor: pointer; display: flex; align-items: center; gap: 8px;
+      font-size: 13px; position: relative; overflow: hidden;
+      transition: all 0.1s ease;
+    }
+    .nav-item::before {
+      content: ''; position: absolute; left: 0; top: 25%; bottom: 25%; width: 3px;
+      background: var(--text-main); border-radius: 0 3px 3px 0; opacity: 0;
+      transition: all 0.15s ease;
+    }
+    .nav-item.active {
+      color: var(--text-main); background-color: var(--bg-main); font-weight: 500;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.03), inset 0 0 0 1px var(--border-color);
+    }
+    .nav-item.active::before { opacity: 1; top: 15%; bottom: 15%; }
+    .nav-item:hover:not(.active) { color: var(--text-main); background-color: var(--accent-bg); }
+
+    /* 列表栏 */
+    .list-view {
+      width: 320px; background-color: var(--bg-list);
+      border-right: 1px solid var(--border-color);
+      display: flex; flex-direction: column;
+    }
+    .list-header {
+      padding: 16px 20px; border-bottom: 1px solid var(--border-color);
+      font-weight: 500; font-size: 13px; color: var(--text-muted);
+    }
+    .list-item {
+      padding: 16px 20px; border-bottom: 1px solid var(--border-color);
+      cursor: pointer; position: relative; overflow: hidden;
+    }
+    .list-item.active { background-color: var(--accent-bg); }
+    .list-item-title { font-size: 14px; font-weight: 500; margin-bottom: 6px; }
+    .list-item-desc { font-size: 12px; color: var(--text-muted); }
+
+    /* 详情主视口 */
+    .detail-view {
+      flex: 1; display: flex; flex-direction: column;
+      background-color: var(--bg-main);
+    }
+    .detail-header {
+      padding: 16px 24px; border-bottom: 1px solid var(--border-color);
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .detail-content {
+      padding: 24px; overflow-y: auto; flex: 1; max-width: 800px;
+    }
+
+    /* ========================================================
+       3. 字体与组件规范 (Typography & Components)
+       ======================================================== */
+    .mono { 
+      font-family: "JetBrains Mono", "Fira Code", monospace; 
+      font-size: 13px; line-height: 1.6;
+    }
+    
+    /* 光感徽章 Badges */
+    .badge {
+      display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 11px;
+      border: 1px solid var(--border-color); letter-spacing: 0.5px; text-transform: uppercase;
+    }
+    .badge.require-human {
+      /* 低饱和度黄金色内发光 */
+      color: #D97706; border-color: rgba(217,119,6,0.3);
+      box-shadow: inset 0 0 8px rgba(217,119,6,0.1);
+      animation: pulse-amber 3s ease-in-out infinite;
+    }
+    .badge.deny {
+      /* 深邃黯淡纯黑红 - 红光压制 */
+      color: #DC2626; border-color: rgba(220,38,38,0.3);
+      background: rgba(220,38,38,0.03);
+    }
+    .badge.auto { color: var(--text-muted); }
+
+    @keyframes pulse-amber {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    /* 按钮 - 琴键与边框流光 */
+    .btn {
+      background: var(--bg-sidebar); border: 1px solid var(--border-color);
+      color: var(--text-main); padding: 6px 14px; border-radius: 6px;
+      font-size: 13px; font-weight: 500; cursor: pointer; position: relative; overflow: hidden;
+      /* 顶沿高光 + 弱外发光，带来立体微距按键感 */
+      box-shadow: inset 0 1px 0 var(--border-highlight), 0 1px 2px rgba(0,0,0,0.05);
+      transition: all 0.1s ease;
+    }
+    .btn:hover { background: var(--bg-main); border-color: var(--text-muted); }
+    .btn:active { transform: scale(0.97); box-shadow: inset 0 2px 4px rgba(0,0,0,0.05); }
+    
+    .btn.primary {
+      background: var(--text-main); color: var(--bg-main);
+      border-color: transparent;
+      /* 强烈反转加厚实投影 */
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.2), 0 1px 3px rgba(0,0,0,0.15);
+    }
+    .btn.primary:hover { opacity: 0.9; }
+    html[data-theme="light"] .btn.primary {
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.4), 0 1px 3px rgba(0,0,0,0.15);
+    }
+
+    /* ========================================================
+       4. 光斑跟随与悬浮光效 (Spotlight Tracking Engine)
+       ======================================================== */
+    .spotlight-wrapper { position: relative; }
+    .spotlight-wrapper::before {
+      content: ""; position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+      /* 径向渐变跟随光源 */
+      background: radial-gradient(100px circle at var(--mouse-x, -100px) var(--mouse-y, -100px), var(--spotlight-color), transparent 100%);
+      pointer-events: none; opacity: 0; transition: opacity 0.15s;
+      z-index: 10;
+    }
+    .spotlight-wrapper:hover::before { opacity: 1; }
+
+    /* Policy 卡片特效 - 极其克制的玻璃光感 */
+    .policy-card {
+      margin-top: 24px; padding: 20px; border-radius: 8px;
+      border: 1px solid rgba(217,119,6,0.15); 
+      background: linear-gradient(180deg, rgba(217,119,6,0.035) 0%, rgba(217,119,6,0.005) 100%);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 2px 4px rgba(0,0,0,0.02);
+      position: relative; overflow: hidden;
+    }
+    html[data-theme="light"] .policy-card {
+      border-color: rgba(217,119,6,0.25);
+      background: linear-gradient(180deg, rgba(255, 237, 213, 0.4) 0%, rgba(255, 237, 213, 0.1) 100%);
+      box-shadow: inset 0 1px 0 #FFF, 0 1px 2px rgba(0,0,0,0.02);
+    }
+    .policy-action { margin-top: 24px; display: flex; gap: 8px; }
+
+    /* 底部功能栏 */
+    .theme-toggle {
+      margin-top: auto; padding: 10px 12px; cursor: pointer; border-radius: 4px;
+      font-size: 12px; color: var(--text-muted); position: relative; overflow: hidden;
+    }
+    .theme-toggle:hover { color: var(--text-main); background: var(--accent-bg); }
+  </style>
+</head>
+<body>
+  <div class="app-container">
+    
+    <!-- Sidebar -->
+    <div class="sidebar">
+      <div style="padding: 0 10px 20px 10px; font-weight: 600; font-size: 14px; letter-spacing: 0.5px;">AGENTA</div>
+      
+      <div style="font-size: 11px; color: var(--text-muted); margin: 8px 10px 6px 10px; text-transform: uppercase; font-weight: 600; letter-spacing: 0.5px;">Workspace</div>
+      <div class="nav-item spotlight-wrapper">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
+        Projects
+      </div>
+      <div class="nav-item active spotlight-wrapper">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"></polyline><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>
+        Tasks / Active
+      </div>
+      <div class="nav-item spotlight-wrapper">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+        Notes
+      </div>
+      
+      <div style="font-size: 11px; color: var(--text-muted); margin: 24px 10px 6px 10px; text-transform: uppercase; font-weight: 600; letter-spacing: 0.5px;">System</div>
+      <div class="nav-item spotlight-wrapper">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+        Policy Approvals
+        <span class="badge require-human" style="padding: 0 5px; margin-left: auto;">1 PENDING</span>
+      </div>
+      
+      <!-- 主题切换引擎 -->
+      <div class="theme-toggle spotlight-wrapper" onclick="toggleTheme()" style="margin-top: auto; display: flex; align-items: center; gap: 8px;">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+        Toggle Theme
+      </div>
+    </div>
+
+    <!-- 中间：List View (任务列表) -->
+    <div class="list-view">
+      <div class="list-header" style="display: flex; justify-content: space-between;">
+        <span>Current Version Tasks</span>
+        <span style="font-size: 11px; opacity: 0.5;">⌘ K</span>
+      </div>
+      
+      <!-- List Items 模拟 -->
+      <div class="list-item active spotlight-wrapper">
+        <div class="list-item-title">Implement MCP streamable_http</div>
+        <div class="list-item-desc">Policy intercepted. Waiting for approval...</div>
+        <div style="margin-top:10px;"><span class="badge require-human">require_human</span></div>
+      </div>
+      
+      <div class="list-item spotlight-wrapper">
+        <div class="list-item-title">Setup SQLite FTS5 Schema Migration</div>
+        <div class="list-item-desc">Completed 2 hours ago</div>
+        <div style="margin-top:10px;"><span class="badge auto">auto_allow</span></div>
+      </div>
+      
+      <div class="list-item spotlight-wrapper">
+        <div class="list-item-title">Remove root /public assets</div>
+        <div class="list-item-desc">Action was denied by policy rules</div>
+        <div style="margin-top:10px;"><span class="badge deny">policy_deny</span></div>
+      </div>
+    </div>
+
+    <!-- 右侧主体：Detail View -->
+    <div class="detail-view">
+      <div class="detail-header">
+        <div style="font-weight: 600; font-size: 15px;">Task: Implement MCP streamable_http</div>
+        <div style="display:flex; gap: 8px;">
+          <button class="btn spotlight-wrapper" title="Global Search">Cmd + K</button>
+        </div>
+      </div>
+      
+      <div class="detail-content">
+        <p style="color: var(--text-muted); font-size: 13px;">This task is evaluating an incoming Model Context Protocol connection over <b>HTTP</b> rather than stdio. A policy block has triggered.</p>
+        
+        <h4 style="margin: 32px 0 12px 0; font-size: 13px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px;">Intercepted Payload</h4>
+        
+        <!-- 代码展示框，带反光和等宽字体 -->
+        <pre class="mono" style="padding: 16px 20px; background: var(--bg-main); border: 1px solid var(--border-color); border-radius: 8px; box-shadow: inset 0 1px 0 var(--border-highlight), 0 1px 2px rgba(0,0,0,0.02); margin: 0; line-height: 1.55; overflow-x: auto;">
+<span style="color: var(--syntax-punct)">{</span>
+  <span style="color: var(--syntax-key)">"method"</span><span style="color: var(--syntax-punct)">:</span> <span style="color: var(--syntax-str)">"execute_task"</span><span style="color: var(--syntax-punct)">,</span>
+  <span style="color: var(--syntax-key)">"resource"</span><span style="color: var(--syntax-punct)">:</span> <span style="color: var(--syntax-str)">"attachment_write_path"</span><span style="color: var(--syntax-punct)">,</span>
+  <span style="color: var(--syntax-key)">"args"</span><span style="color: var(--syntax-punct)">:</span> <span style="color: var(--syntax-punct)">{</span> 
+    <span style="color: var(--syntax-key)">"transport"</span><span style="color: var(--syntax-punct)">:</span> <span style="color: var(--syntax-str)">"streamable_http"</span><span style="color: var(--syntax-punct)">,</span>
+    <span style="color: var(--syntax-key)">"port"</span><span style="color: var(--syntax-punct)">:</span> <span style="color: var(--syntax-num)">1420</span>
+  <span style="color: var(--syntax-punct)">},</span>
+  <span style="color: var(--syntax-key)">"policy_status"</span><span style="color: var(--syntax-punct)">:</span> <span style="color: var(--syntax-str)">"INTERCEPTED"</span><span style="color: var(--syntax-punct)">,</span>
+  <span style="color: var(--syntax-key)">"timestamp"</span><span style="color: var(--syntax-punct)">:</span> <span style="color: var(--syntax-str)">"2026-04-07T15:20:00Z"</span>
+<span style="color: var(--syntax-punct)">}</span></pre>
+
+        <!-- Policy 动作警报卡片 -->
+        <div class="policy-card spotlight-wrapper">
+          <h4 style="margin: 0 0 6px 0; font-size: 14px; color: #D97706;">Action Required: Manual Authorization</h4>
+          <p style="font-size: 13px; color: var(--text-muted); margin: 0; line-height: 1.5;">
+            The AI agent is attempting to establish an MCP <code style="color:var(--text-main)">streamable_http</code> connection which modifies network bindings and opens local ports.
+          </p>
+          <div class="policy-action">
+            <button class="btn primary spotlight-wrapper" style="border: none;">Approve Action</button>
+            <button class="btn spotlight-wrapper">Deny & Respond</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- 局部光影计算引擎引擎 (Spotlight Tracking) -->
+  <script>
+    const wrappers = document.querySelectorAll('.spotlight-wrapper');
+    wrappers.forEach(el => {
+      el.addEventListener('mousemove', e => {
+        const rect = el.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+        el.style.setProperty('--mouse-x', `${x}px`);
+        el.style.setProperty('--mouse-y', `${y}px`);
+      });
+    });
+
+    function toggleTheme() {
+      const html = document.documentElement;
+      if (html.getAttribute('data-theme') === 'dark') {
+        html.setAttribute('data-theme', 'light');
+      } else {
+        html.setAttribute('data-theme', 'dark');
+      }
+    }
+  </script>
+</body>
+</html>
