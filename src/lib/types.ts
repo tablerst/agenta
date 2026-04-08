@@ -15,6 +15,7 @@ export interface ErrorEnvelope {
   };
 }
 
+export type AppLocale = "zh-CN" | "en";
 export type ThemeMode = "dark" | "light" | "system";
 
 export type ProjectStatus = "active" | "archived";

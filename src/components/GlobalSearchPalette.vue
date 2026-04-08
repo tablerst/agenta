@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { Search, SquareKanban } from "@lucide/vue";
 import { nextTick, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
 
 import { useSearchStore } from "../stores/search";
@@ -9,6 +10,7 @@ import { useShellStore } from "../stores/shell";
 const shell = useShellStore();
 const search = useSearchStore();
 const router = useRouter();
+const { t } = useI18n({ useScope: "global" });
 const inputValue = ref(search.query);
 const inputEl = ref<HTMLInputElement | null>(null);
 let timer: number | undefined;
@@ -19,7 +21,11 @@ watch(
     if (isOpen) {
       await nextTick();
       inputEl.value?.focus();
+      return;
     }
+
+    search.clear();
+    inputValue.value = "";
   },
 );
 
@@ -55,19 +61,19 @@ async function jumpToTask(taskId: string) {
               ref="inputEl"
               v-model="inputValue"
               class="w-full bg-transparent text-base text-[var(--text-main)] outline-none"
-              placeholder="Search tasks and activity summaries"
+              :placeholder="t('search.placeholder')"
             />
           </label>
         </div>
 
         <div class="max-h-[60vh] overflow-y-auto px-3 py-3">
-          <div v-if="search.loading" class="empty-state">Searching…</div>
+          <div v-if="search.loading" class="empty-state">{{ t("search.loading") }}</div>
           <div v-else-if="!search.results" class="empty-state">
-            Type a query to search task and activity summaries.
+            {{ t("search.empty") }}
           </div>
           <div v-else class="space-y-4">
             <section>
-              <p class="section-label">Tasks</p>
+              <p class="section-label">{{ t("search.tasks") }}</p>
               <button
                 v-for="item in search.results.tasks"
                 :key="item.task_id"
@@ -82,12 +88,12 @@ async function jumpToTask(taskId: string) {
                   </p>
                   <p class="truncate text-xs text-[var(--text-muted)]">{{ item.summary }}</p>
                 </div>
-                <span class="status-pill">{{ item.status }}</span>
+                <span class="status-pill">{{ t(`status.task.${item.status}`) }}</span>
               </button>
             </section>
 
             <section>
-              <p class="section-label">Activity</p>
+              <p class="section-label">{{ t("search.activity") }}</p>
               <button
                 v-for="item in search.results.activities"
                 :key="item.activity_id"
@@ -98,7 +104,7 @@ async function jumpToTask(taskId: string) {
                 <Search :size="15" />
                 <div class="min-w-0 flex-1 text-left">
                   <p class="truncate text-sm font-medium text-[var(--text-main)]">
-                    {{ item.kind }}
+                    {{ t(`activityKind.${item.kind}`) }}
                   </p>
                   <p class="truncate text-xs text-[var(--text-muted)]">{{ item.summary }}</p>
                 </div>

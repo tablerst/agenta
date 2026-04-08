@@ -1,0 +1,27 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- 底层背景：主视图基础底色 Dark: #0A0A0A -->
+  <rect width="512" height="512" rx="100" fill="#0A0A0A"/>
+  <!-- UI规范中的光感微边框 -->
+  <rect x="2" y="2" width="508" height="508" rx="98" stroke="rgba(255, 255, 255, 0.06)" stroke-width="4"/>
+  
+  <!-- 内层高一级浮层 Dark: #141415，带来1px的微妙隔离感 -->
+  <rect x="64" y="64" width="384" height="384" rx="48" fill="#141415" stroke="rgba(255, 255, 255, 0.03)" stroke-width="2"/>
+
+  <!-- 核心 "A" 图形主体，采用高对比度的微渐变金属灰白 -->
+  <path d="M 256 148 L 150 340 L 210 340 L 256 255 L 302 340 L 362 340 Z" fill="url(#metalGradient)"/>
+  
+  <!-- 横向切除，代表 CLI 终端输入符和 Task 确认断点 -->
+  <path d="M 205 285 L 307 285" stroke="#141415" stroke-width="24" stroke-linecap="square"/>
+  <path d="M 215 285 L 297 285" stroke="#FFFFFF" stroke-width="8" stroke-linecap="square"/>
+
+  <!-- 顶部独立的正方形 Node，代表 Agent 智能节点 -->
+  <rect x="242" y="112" width="28" height="28" fill="#FFFFFF"/>
+
+  <defs>
+    <!-- 极弱的光效渐变，维持在灰阶体系内 -->
+    <linearGradient id="metalGradient" x1="150" y1="148" x2="362" y2="340" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="100%" stop-color="#A1A1AA"/>
+    </linearGradient>
+  </defs>
+</svg>

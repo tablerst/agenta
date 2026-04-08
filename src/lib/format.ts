@@ -1,6 +1,8 @@
+import { getCurrentLocale, i18n, resolveLocaleTag } from "../i18n";
+
 export function formatDateTime(value: string | null | undefined): string {
   if (!value) {
-    return "N/A";
+    return i18n.global.t("common.na");
   }
 
   const date = new Date(value);
@@ -8,7 +10,7 @@ export function formatDateTime(value: string | null | undefined): string {
     return value;
   }
 
-  return new Intl.DateTimeFormat("zh-CN", {
+  return new Intl.DateTimeFormat(resolveLocaleTag(getCurrentLocale()), {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(date);

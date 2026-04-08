@@ -1,9 +1,12 @@
 <script setup lang="ts">
 import { BadgeCheck, Folder, Plus } from "@lucide/vue";
 import { computed, onMounted, reactive, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 
 import { coerceString, formatDateTime } from "../lib/format";
+import { formatDesktopError } from "../lib/errorMessage";
+import { projectStatusOptions, versionStatusOptions } from "../lib/options";
 import { DesktopBridgeError } from "../lib/desktop";
 import type { ProjectStatus, VersionStatus } from "../lib/types";
 import { useProjectsStore } from "../stores/projects";
@@ -13,6 +16,7 @@ const route = useRoute();
 const router = useRouter();
 const shell = useShellStore();
 const projectsStore = useProjectsStore();
+const { t } = useI18n({ useScope: "global" });
 
 const createProjectForm = reactive({
   slug: "",
@@ -84,10 +88,51 @@ watch(
   { immediate: true },
 );
 
+watch(
+  () => projectsStore.projects.map((item) => item.project_id).join("|"),
+  async () => {
+    if (projectsStore.loadingProjects) {
+      return;
+    }
+
+    const firstProject = projectsStore.projects[0];
+    const hasSelection = firstProject
+      ? projectsStore.projects.some(
+          (item) => item.project_id === selectedProjectKey.value || item.slug === selectedProjectKey.value,
+        )
+      : false;
+
+    if (!firstProject) {
+      return;
+    }
+
+    if (!hasSelection) {
+      await router.replace({
+        path: "/projects",
+        query: {
+          ...route.query,
+          project: firstProject.slug,
+        },
+      });
+    }
+  },
+  { immediate: true },
+);
+
 onMounted(async () => {
   await projectsStore.loadProjects();
-  if (selectedProject.value) {
-    await projectsStore.loadVersions(selectedProject.value.slug);
+  const fallbackProject = selectedProject.value ?? projectsStore.projects[0] ?? null;
+  if (!selectedProject.value && fallbackProject) {
+    await router.replace({
+      path: "/projects",
+      query: {
+        ...route.query,
+        project: fallbackProject.slug,
+      },
+    });
+  }
+  if (fallbackProject) {
+    await projectsStore.loadVersions(fallbackProject.slug);
   }
 });
 
@@ -112,7 +157,7 @@ async function submitCreateProject() {
       name: createProjectForm.name,
       description: createProjectForm.description || null,
     });
-    shell.pushNotice("success", "Project created");
+    shell.pushNotice("success", t("notices.projectCreated"));
     createProjectForm.slug = "";
     createProjectForm.name = "";
     createProjectForm.description = "";
@@ -121,7 +166,7 @@ async function submitCreateProject() {
     if (await jumpToQueuedApproval(error)) {
       return;
     }
-    shell.pushNotice("error", (error as Error).message);
+    shell.pushNotice("error", formatDesktopError(error, t));
   }
 }
 
@@ -137,7 +182,7 @@ async function submitProjectUpdate() {
       description: projectForm.description || null,
       status: projectForm.status,
     });
-    shell.pushNotice("success", "Project updated");
+    shell.pushNotice("success", t("notices.projectUpdated"));
     await router.push({
       path: "/projects",
       query: {
@@ -150,7 +195,7 @@ async function submitProjectUpdate() {
     if (await jumpToQueuedApproval(error)) {
       return;
     }
-    shell.pushNotice("error", (error as Error).message);
+    shell.pushNotice("error", formatDesktopError(error, t));
   }
 }
 
@@ -166,7 +211,7 @@ async function submitCreateVersion() {
       description: createVersionForm.description || null,
       status: createVersionForm.status,
     });
-    shell.pushNotice("success", "Version created");
+    shell.pushNotice("success", t("notices.versionCreated"));
     createVersionForm.name = "";
     createVersionForm.description = "";
     createVersionForm.status = "planning";
@@ -175,7 +220,7 @@ async function submitCreateVersion() {
     if (await jumpToQueuedApproval(error)) {
       return;
     }
-    shell.pushNotice("error", (error as Error).message);
+    shell.pushNotice("error", formatDesktopError(error, t));
   }
 }
 
@@ -191,12 +236,12 @@ async function submitVersionUpdate() {
       status: versionForm.status,
     });
     await projectsStore.loadVersions(selectedProject.value.slug);
-    shell.pushNotice("success", "Version updated");
+    shell.pushNotice("success", t("notices.versionUpdated"));
   } catch (error) {
     if (await jumpToQueuedApproval(error)) {
       return;
     }
-    shell.pushNotice("error", (error as Error).message);
+    shell.pushNotice("error", formatDesktopError(error, t));
   }
 }
 
@@ -209,7 +254,7 @@ async function jumpToQueuedApproval(error: unknown) {
     "approval_request_id" in error.details
   ) {
     const requestId = (error.details as Record<string, unknown>).approval_request_id;
-    shell.pushNotice("info", "Request queued for human review.");
+    shell.pushNotice("info", t("notices.requestQueued"));
     await router.push({
       path: "/approvals",
       query: { approvalState: "pending", request: requestId as string },
@@ -226,25 +271,42 @@ async function jumpToQueuedApproval(error: unknown) {
     <aside class="page-list px-4 py-5">
       <div class="mb-4 flex items-center justify-between">
         <div>
-          <p class="section-label">Projects</p>
-          <h1 class="text-lg font-semibold text-[var(--text-main)]">Project registry</h1>
+          <p class="section-label">{{ t("projects.listKicker") }}</p>
+          <h1 class="text-lg font-semibold text-[var(--text-main)]">{{ t("projects.listTitle") }}</h1>
         </div>
         <span class="status-pill">{{ projectsStore.projects.length }}</span>
       </div>
 
       <section class="panel-section mb-4">
-        <p class="section-label">Create Project</p>
+        <p class="section-label">{{ t("projects.createProject") }}</p>
         <div class="space-y-3">
-          <input v-model="createProjectForm.slug" class="control-input" placeholder="slug" />
-          <input v-model="createProjectForm.name" class="control-input" placeholder="Project name" />
-          <textarea
-            v-model="createProjectForm.description"
-            class="control-textarea"
-            placeholder="Short context for the workspace"
-          />
+          <label class="form-field">
+            <span class="field-label">{{ t("projects.fields.slug") }}</span>
+            <input
+              v-model="createProjectForm.slug"
+              class="control-input"
+              :placeholder="t('projects.placeholders.slug')"
+            />
+          </label>
+          <label class="form-field">
+            <span class="field-label">{{ t("projects.fields.name") }}</span>
+            <input
+              v-model="createProjectForm.name"
+              class="control-input"
+              :placeholder="t('projects.placeholders.projectName')"
+            />
+          </label>
+          <label class="form-field">
+            <span class="field-label">{{ t("projects.fields.description") }}</span>
+            <textarea
+              v-model="createProjectForm.description"
+              class="control-textarea"
+              :placeholder="t('projects.placeholders.projectDescription')"
+            />
+          </label>
           <button class="primary-action spotlight-surface" @click="submitCreateProject">
             <Plus :size="15" />
-            Create project
+            {{ t("projects.createProjectAction") }}
           </button>
         </div>
       </section>
@@ -263,7 +325,7 @@ async function jumpToQueuedApproval(error: unknown) {
             <p class="truncate text-sm font-medium text-[var(--text-main)]">{{ project.name }}</p>
             <p class="truncate text-xs text-[var(--text-muted)]">{{ project.slug }}</p>
           </div>
-          <span class="status-pill">{{ project.status }}</span>
+          <span class="status-pill">{{ t(`status.project.${project.status}`) }}</span>
         </button>
       </div>
     </aside>
@@ -273,51 +335,76 @@ async function jumpToQueuedApproval(error: unknown) {
         <section class="glass-panel p-5">
           <div class="mb-4 flex items-start justify-between gap-3">
             <div>
-              <p class="section-label">Project Detail</p>
+              <p class="section-label">{{ t("projects.projectDetail") }}</p>
               <h2 class="text-2xl font-semibold text-[var(--text-main)]">
                 {{ selectedProject.name }}
               </h2>
               <p class="mt-2 max-w-3xl text-sm leading-6 text-[var(--text-muted)]">
-                {{ selectedProject.description || "No project description yet." }}
+                {{ selectedProject.description || t("projects.emptyDescription") }}
               </p>
             </div>
             <span class="status-pill status-pill-success" v-if="selectedProject.default_version_id">
-              default version set
+              {{ t("projects.defaultVersionSet") }}
             </span>
           </div>
 
           <div class="grid gap-3 md:grid-cols-2">
             <div class="panel-section">
-              <p class="section-label">Edit Project</p>
+              <p class="section-label">{{ t("projects.editProject") }}</p>
               <div class="space-y-3">
-                <input v-model="projectForm.slug" class="control-input" placeholder="slug" />
-                <input v-model="projectForm.name" class="control-input" placeholder="Project name" />
-                <textarea v-model="projectForm.description" class="control-textarea" />
-                <select v-model="projectForm.status" class="control-select">
-                  <option value="active">active</option>
-                  <option value="archived">archived</option>
-                </select>
+                <label class="form-field">
+                  <span class="field-label">{{ t("projects.fields.slug") }}</span>
+                  <input
+                    v-model="projectForm.slug"
+                    class="control-input"
+                    :placeholder="t('projects.placeholders.slug')"
+                  />
+                </label>
+                <label class="form-field">
+                  <span class="field-label">{{ t("projects.fields.name") }}</span>
+                  <input
+                    v-model="projectForm.name"
+                    class="control-input"
+                    :placeholder="t('projects.placeholders.projectName')"
+                  />
+                </label>
+                <label class="form-field">
+                  <span class="field-label">{{ t("projects.fields.description") }}</span>
+                  <textarea
+                    v-model="projectForm.description"
+                    class="control-textarea"
+                    :placeholder="t('projects.placeholders.projectDescription')"
+                  />
+                </label>
+                <label class="form-field">
+                  <span class="field-label">{{ t("common.status") }}</span>
+                  <select v-model="projectForm.status" class="control-select">
+                    <option v-for="status in projectStatusOptions" :key="status" :value="status">
+                      {{ t(`status.project.${status}`) }}
+                    </option>
+                  </select>
+                </label>
                 <button class="primary-action spotlight-surface" @click="submitProjectUpdate">
                   <BadgeCheck :size="15" />
-                  Save project
+                  {{ t("projects.saveProject") }}
                 </button>
               </div>
             </div>
 
             <div class="panel-section">
-              <p class="section-label">Metadata</p>
+              <p class="section-label">{{ t("projects.metadata") }}</p>
               <dl class="space-y-3 text-sm">
                 <div>
-                  <dt class="text-[var(--text-muted)]">Created</dt>
+                  <dt class="text-[var(--text-muted)]">{{ t("projects.created") }}</dt>
                   <dd>{{ formatDateTime(selectedProject.created_at) }}</dd>
                 </div>
                 <div>
-                  <dt class="text-[var(--text-muted)]">Updated</dt>
+                  <dt class="text-[var(--text-muted)]">{{ t("projects.updated") }}</dt>
                   <dd>{{ formatDateTime(selectedProject.updated_at) }}</dd>
                 </div>
                 <div>
-                  <dt class="text-[var(--text-muted)]">Default Version</dt>
-                  <dd>{{ selectedProject.default_version_id || "Not assigned" }}</dd>
+                  <dt class="text-[var(--text-muted)]">{{ t("projects.defaultVersion") }}</dt>
+                  <dd>{{ selectedProject.default_version_id || t("projects.notAssigned") }}</dd>
                 </div>
               </dl>
             </div>
@@ -328,14 +415,14 @@ async function jumpToQueuedApproval(error: unknown) {
           <div class="glass-panel p-5">
             <div class="mb-4 flex items-center justify-between">
               <div>
-                <p class="section-label">Versions</p>
-                <h3 class="text-lg font-semibold text-[var(--text-main)]">Release lanes</h3>
+                <p class="section-label">{{ t("projects.versions") }}</p>
+                <h3 class="text-lg font-semibold text-[var(--text-main)]">{{ t("projects.versionsTitle") }}</h3>
               </div>
               <span class="status-pill">{{ projectsStore.versions.length }}</span>
             </div>
 
             <div v-if="projectsStore.versions.length === 0" class="empty-state">
-              No versions yet for this project.
+              {{ t("projects.versionsEmpty") }}
             </div>
             <div v-else>
               <button
@@ -351,61 +438,89 @@ async function jumpToQueuedApproval(error: unknown) {
                     {{ version.name }}
                   </p>
                   <p class="truncate text-xs text-[var(--text-muted)]">
-                    {{ version.description || "No version description." }}
+                    {{ version.description || t("projects.emptyVersionDescription") }}
                   </p>
                 </div>
-                <span class="status-pill">{{ version.status }}</span>
+                <span class="status-pill">{{ t(`status.version.${version.status}`) }}</span>
               </button>
             </div>
           </div>
 
           <div class="space-y-5">
             <section class="panel-section">
-              <p class="section-label">Create Version</p>
+              <p class="section-label">{{ t("projects.createVersion") }}</p>
               <div class="space-y-3">
-                <input v-model="createVersionForm.name" class="control-input" placeholder="v1" />
-                <textarea
-                  v-model="createVersionForm.description"
-                  class="control-textarea"
-                  placeholder="Scope and release notes"
-                />
-                <select v-model="createVersionForm.status" class="control-select">
-                  <option value="planning">planning</option>
-                  <option value="active">active</option>
-                  <option value="closed">closed</option>
-                  <option value="archived">archived</option>
-                </select>
+                <label class="form-field">
+                  <span class="field-label">{{ t("projects.fields.versionName") }}</span>
+                  <input
+                    v-model="createVersionForm.name"
+                    class="control-input"
+                    :placeholder="t('projects.placeholders.versionName')"
+                  />
+                </label>
+                <label class="form-field">
+                  <span class="field-label">{{ t("projects.fields.versionDescription") }}</span>
+                  <textarea
+                    v-model="createVersionForm.description"
+                    class="control-textarea"
+                    :placeholder="t('projects.placeholders.releaseNotes')"
+                  />
+                </label>
+                <label class="form-field">
+                  <span class="field-label">{{ t("common.status") }}</span>
+                  <select v-model="createVersionForm.status" class="control-select">
+                    <option v-for="status in versionStatusOptions" :key="status" :value="status">
+                      {{ t(`status.version.${status}`) }}
+                    </option>
+                  </select>
+                </label>
                 <button class="primary-action spotlight-surface" @click="submitCreateVersion">
                   <Plus :size="15" />
-                  Add version
+                  {{ t("projects.addVersion") }}
                 </button>
               </div>
             </section>
 
             <section class="panel-section">
-              <p class="section-label">Selected Version</p>
+              <p class="section-label">{{ t("projects.selectedVersion") }}</p>
               <div v-if="selectedVersion" class="space-y-3">
-                <input v-model="versionForm.name" class="control-input" />
-                <textarea v-model="versionForm.description" class="control-textarea" />
-                <select v-model="versionForm.status" class="control-select">
-                  <option value="planning">planning</option>
-                  <option value="active">active</option>
-                  <option value="closed">closed</option>
-                  <option value="archived">archived</option>
-                </select>
+                <label class="form-field">
+                  <span class="field-label">{{ t("projects.fields.versionName") }}</span>
+                  <input
+                    v-model="versionForm.name"
+                    class="control-input"
+                    :placeholder="t('projects.placeholders.versionName')"
+                  />
+                </label>
+                <label class="form-field">
+                  <span class="field-label">{{ t("projects.fields.versionDescription") }}</span>
+                  <textarea
+                    v-model="versionForm.description"
+                    class="control-textarea"
+                    :placeholder="t('projects.placeholders.releaseNotes')"
+                  />
+                </label>
+                <label class="form-field">
+                  <span class="field-label">{{ t("common.status") }}</span>
+                  <select v-model="versionForm.status" class="control-select">
+                    <option v-for="status in versionStatusOptions" :key="status" :value="status">
+                      {{ t(`status.version.${status}`) }}
+                    </option>
+                  </select>
+                </label>
                 <button class="primary-action spotlight-surface" @click="submitVersionUpdate">
                   <BadgeCheck :size="15" />
-                  Save version
+                  {{ t("projects.saveVersion") }}
                 </button>
               </div>
-              <div v-else class="empty-state">Select a version to edit its metadata.</div>
+              <div v-else class="empty-state">{{ t("projects.selectedVersionEmpty") }}</div>
             </section>
           </div>
         </section>
       </div>
 
       <div v-else class="empty-state">
-        Select a project from the list to inspect metadata and manage versions.
+        {{ t("projects.emptySelection") }}
       </div>
     </div>
   </section>

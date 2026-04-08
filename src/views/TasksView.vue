@@ -10,10 +10,19 @@ import {
   SquareKanban,
 } from "@lucide/vue";
 import { computed, onMounted, reactive, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 
 import JsonBlock from "../components/JsonBlock.vue";
+import { formatDesktopError } from "../lib/errorMessage";
 import { coerceString, formatDateTime } from "../lib/format";
+import {
+  attachmentKindOptions,
+  taskDetailTabOptions,
+  taskPriorityOptions,
+  taskStatusOptions,
+  type TaskDetailTab,
+} from "../lib/options";
 import { DesktopBridgeError, desktopBridge } from "../lib/desktop";
 import type { TaskPriority, TaskStatus } from "../lib/types";
 import { useApprovalsStore } from "../stores/approvals";
@@ -27,8 +36,9 @@ const shell = useShellStore();
 const projectsStore = useProjectsStore();
 const tasksStore = useTasksStore();
 const approvalsStore = useApprovalsStore();
+const { t } = useI18n({ useScope: "global" });
 
-const detailTab = ref<"overview" | "notes" | "attachments" | "activity">("overview");
+const detailTab = ref<TaskDetailTab>("overview");
 
 const createTaskForm = reactive({
   title: "",
@@ -119,6 +129,44 @@ watch(
 );
 
 watch(
+  () => tasksStore.tasks.map((item) => item.task_id).join("|"),
+  async () => {
+    if (tasksStore.loadingTasks) {
+      return;
+    }
+
+    const firstTask = tasksStore.tasks[0];
+    const hasSelection = firstTask
+      ? tasksStore.tasks.some((item) => item.task_id === selectedTaskId.value)
+      : false;
+
+    if (!firstTask) {
+      if (selectedTaskId.value) {
+        await router.replace({
+          path: "/tasks",
+          query: {
+            ...route.query,
+            task: undefined,
+          },
+        });
+      }
+      return;
+    }
+
+    if (!hasSelection) {
+      await router.replace({
+        path: "/tasks",
+        query: {
+          ...route.query,
+          task: firstTask.task_id,
+        },
+      });
+    }
+  },
+  { immediate: true },
+);
+
+watch(
   selectedTaskId,
   async (task) => {
     if (task) {
@@ -147,7 +195,7 @@ async function updateQuery(values: Record<string, string | undefined>) {
 
 async function submitCreateTask() {
   if (!selectedProject.value) {
-    shell.pushNotice("error", "Select a project before creating a task.");
+    shell.pushNotice("error", t("notices.selectProjectBeforeTask"));
     return;
   }
 
@@ -165,7 +213,7 @@ async function submitCreateTask() {
       status: selectedStatus.value || undefined,
     });
     await approvalsStore.refreshPendingCount();
-    shell.pushNotice("success", "Task submission sent.");
+    shell.pushNotice("success", t("notices.taskSubmitted"));
     createTaskForm.title = "";
     createTaskForm.summary = "";
     createTaskForm.description = "";
@@ -174,7 +222,7 @@ async function submitCreateTask() {
     if (await jumpToQueuedApproval(error)) {
       return;
     }
-    shell.pushNotice("error", (error as Error).message);
+    shell.pushNotice("error", formatDesktopError(error, t));
     await approvalsStore.refreshPendingCount();
   }
 }
@@ -200,12 +248,12 @@ async function submitTaskUpdate() {
       status: selectedStatus.value || undefined,
     });
     await approvalsStore.refreshPendingCount();
-    shell.pushNotice("success", "Task updated.");
+    shell.pushNotice("success", t("notices.taskUpdated"));
   } catch (error) {
     if (await jumpToQueuedApproval(error)) {
       return;
     }
-    shell.pushNotice("error", (error as Error).message);
+    shell.pushNotice("error", formatDesktopError(error, t));
     await approvalsStore.refreshPendingCount();
   }
 }
@@ -221,12 +269,12 @@ async function submitNote() {
       created_by: "desktop",
     });
     noteForm.content = "";
-    shell.pushNotice("success", "Note added.");
+    shell.pushNotice("success", t("notices.noteAdded"));
   } catch (error) {
     if (await jumpToQueuedApproval(error)) {
       return;
     }
-    shell.pushNotice("error", (error as Error).message);
+    shell.pushNotice("error", formatDesktopError(error, t));
   }
 }
 
@@ -244,12 +292,12 @@ async function submitAttachment() {
     });
     attachmentForm.path = "";
     attachmentForm.summary = "";
-    shell.pushNotice("success", "Attachment added.");
+    shell.pushNotice("success", t("notices.attachmentAdded"));
   } catch (error) {
     if (await jumpToQueuedApproval(error)) {
       return;
     }
-    shell.pushNotice("error", (error as Error).message);
+    shell.pushNotice("error", formatDesktopError(error, t));
   }
 }
 
@@ -257,7 +305,7 @@ async function openAttachment(path: string) {
   try {
     await desktopBridge.revealAttachment(path);
   } catch (error) {
-    shell.pushNotice("error", (error as Error).message);
+    shell.pushNotice("error", formatDesktopError(error, t));
   }
 }
 
@@ -270,7 +318,7 @@ async function jumpToQueuedApproval(error: unknown) {
     "approval_request_id" in error.details
   ) {
     const requestId = (error.details as Record<string, unknown>).approval_request_id;
-    shell.pushNotice("info", "Request queued for human review.");
+    shell.pushNotice("info", t("notices.requestQueued"));
     await router.push({
       path: "/approvals",
       query: { approvalState: "pending", request: requestId as string },
@@ -287,8 +335,8 @@ async function jumpToQueuedApproval(error: unknown) {
     <aside class="page-list px-4 py-5">
       <div class="mb-4 flex items-center justify-between">
         <div>
-          <p class="section-label">Tasks</p>
-          <h1 class="text-lg font-semibold text-[var(--text-main)]">Task workspace</h1>
+          <p class="section-label">{{ t("tasks.listKicker") }}</p>
+          <h1 class="text-lg font-semibold text-[var(--text-main)]">{{ t("tasks.listTitle") }}</h1>
         </div>
         <span class="status-pill">{{ tasksStore.tasks.length }}</span>
       </div>
@@ -296,7 +344,7 @@ async function jumpToQueuedApproval(error: unknown) {
       <section class="panel-section mb-4">
         <div class="mb-3 flex items-center gap-2 text-[var(--text-muted)]">
           <ListFilter :size="14" />
-          <p class="section-label !mb-0">Filters</p>
+          <p class="section-label !mb-0">{{ t("tasks.filters") }}</p>
         </div>
         <div class="space-y-3">
           <select
@@ -304,7 +352,7 @@ async function jumpToQueuedApproval(error: unknown) {
             :value="selectedProject?.slug || ''"
             @change="updateQuery({ project: ($event.target as HTMLSelectElement).value || undefined, version: undefined, task: undefined })"
           >
-            <option value="">All projects</option>
+            <option value="">{{ t("tasks.allProjects") }}</option>
             <option v-for="project in projectsStore.projects" :key="project.project_id" :value="project.slug">
               {{ project.name }}
             </option>
@@ -314,7 +362,7 @@ async function jumpToQueuedApproval(error: unknown) {
             :value="selectedVersionId"
             @change="updateQuery({ version: ($event.target as HTMLSelectElement).value || undefined, task: undefined })"
           >
-            <option value="">All versions</option>
+            <option value="">{{ t("tasks.allVersions") }}</option>
             <option v-for="version in projectsStore.versions" :key="version.version_id" :value="version.version_id">
               {{ version.name }}
             </option>
@@ -324,47 +372,52 @@ async function jumpToQueuedApproval(error: unknown) {
             :value="selectedStatus"
             @change="updateQuery({ status: ($event.target as HTMLSelectElement).value || undefined })"
           >
-            <option value="">All statuses</option>
-            <option value="draft">draft</option>
-            <option value="ready">ready</option>
-            <option value="in_progress">in_progress</option>
-            <option value="blocked">blocked</option>
-            <option value="done">done</option>
-            <option value="cancelled">cancelled</option>
+            <option value="">{{ t("tasks.allStatuses") }}</option>
+            <option v-for="status in taskStatusOptions" :key="status" :value="status">
+              {{ t(`status.task.${status}`) }}
+            </option>
           </select>
         </div>
       </section>
 
       <section class="panel-section mb-4">
-        <p class="section-label">Create Task</p>
+        <p class="section-label">{{ t("tasks.createTask") }}</p>
         <div class="space-y-3">
-          <input v-model="createTaskForm.title" class="control-input" placeholder="Task title" />
-          <input v-model="createTaskForm.summary" class="control-input" placeholder="Summary" />
-          <textarea v-model="createTaskForm.description" class="control-textarea" placeholder="Execution context" />
+          <input
+            v-model="createTaskForm.title"
+            class="control-input"
+            :placeholder="t('tasks.placeholders.title')"
+          />
+          <input
+            v-model="createTaskForm.summary"
+            class="control-input"
+            :placeholder="t('tasks.placeholders.summary')"
+          />
+          <textarea
+            v-model="createTaskForm.description"
+            class="control-textarea"
+            :placeholder="t('tasks.placeholders.executionContext')"
+          />
           <div class="grid gap-3 md:grid-cols-2">
             <select v-model="createTaskForm.status" class="control-select">
-              <option value="draft">draft</option>
-              <option value="ready">ready</option>
-              <option value="in_progress">in_progress</option>
-              <option value="blocked">blocked</option>
-              <option value="done">done</option>
-              <option value="cancelled">cancelled</option>
+              <option v-for="status in taskStatusOptions" :key="status" :value="status">
+                {{ t(`status.task.${status}`) }}
+              </option>
             </select>
             <select v-model="createTaskForm.priority" class="control-select">
-              <option value="low">low</option>
-              <option value="normal">normal</option>
-              <option value="high">high</option>
-              <option value="critical">critical</option>
+              <option v-for="priority in taskPriorityOptions" :key="priority" :value="priority">
+                {{ t(`status.priority.${priority}`) }}
+              </option>
             </select>
           </div>
           <button class="primary-action spotlight-surface" @click="submitCreateTask">
             <Plus :size="15" />
-            Create task
+            {{ t("tasks.createTaskAction") }}
           </button>
         </div>
       </section>
 
-      <div v-if="tasksStore.tasks.length === 0" class="empty-state">No tasks match the current filters.</div>
+      <div v-if="tasksStore.tasks.length === 0" class="empty-state">{{ t("tasks.noMatches") }}</div>
       <div v-else>
         <button
           v-for="task in tasksStore.tasks"
@@ -380,8 +433,8 @@ async function jumpToQueuedApproval(error: unknown) {
             <p class="truncate text-xs text-[var(--text-muted)]">{{ task.summary || task.task_context_digest }}</p>
           </div>
           <div class="flex flex-col items-end gap-1">
-            <span class="status-pill">{{ task.status }}</span>
-            <span class="text-[11px] text-[var(--text-muted)]">{{ task.priority }}</span>
+            <span class="status-pill">{{ t(`status.task.${task.status}`) }}</span>
+            <span class="text-[11px] text-[var(--text-muted)]">{{ t(`status.priority.${task.priority}`) }}</span>
           </div>
         </button>
       </div>
@@ -392,79 +445,79 @@ async function jumpToQueuedApproval(error: unknown) {
         <section class="glass-panel p-5">
           <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
             <div>
-              <p class="section-label">Task Detail</p>
+              <p class="section-label">{{ t("tasks.taskDetail") }}</p>
               <h2 class="text-2xl font-semibold text-[var(--text-main)]">{{ selectedTask.title }}</h2>
               <p class="mt-2 max-w-3xl text-sm leading-6 text-[var(--text-muted)]">
-                {{ selectedTask.summary || "No task summary yet." }}
+                {{ selectedTask.summary || t("tasks.noSummary") }}
               </p>
             </div>
             <div class="flex items-center gap-2">
-              <span class="status-pill">{{ selectedTask.status }}</span>
-              <span class="status-pill">{{ selectedTask.priority }}</span>
+              <span class="status-pill">{{ t(`status.task.${selectedTask.status}`) }}</span>
+              <span class="status-pill">{{ t(`status.priority.${selectedTask.priority}`) }}</span>
             </div>
           </div>
 
           <div class="mb-4 flex flex-wrap gap-2">
             <button
-              v-for="tab in ['overview', 'notes', 'attachments', 'activity']"
+              v-for="tab in taskDetailTabOptions"
               :key="tab"
               class="secondary-action spotlight-surface"
               :class="{ 'border-white/15 bg-white/6': detailTab === tab }"
-              @click="detailTab = tab as typeof detailTab.value"
+              @click="detailTab = tab"
             >
-              {{ tab }}
+              {{ t(`tasks.tabs.${tab}`) }}
             </button>
           </div>
 
           <div v-if="detailTab === 'overview'" class="grid gap-5 xl:grid-cols-[minmax(0,0.68fr)_minmax(320px,0.32fr)]">
             <section class="panel-section">
-              <p class="section-label">Edit Task</p>
+              <p class="section-label">{{ t("tasks.editTask") }}</p>
               <div class="space-y-3">
                 <input v-model="taskForm.title" class="control-input" />
                 <input v-model="taskForm.summary" class="control-input" />
                 <textarea v-model="taskForm.description" class="control-textarea" />
                 <div class="grid gap-3 md:grid-cols-2">
                   <select v-model="taskForm.status" class="control-select">
-                    <option value="draft">draft</option>
-                    <option value="ready">ready</option>
-                    <option value="in_progress">in_progress</option>
-                    <option value="blocked">blocked</option>
-                    <option value="done">done</option>
-                    <option value="cancelled">cancelled</option>
+                    <option v-for="status in taskStatusOptions" :key="status" :value="status">
+                      {{ t(`status.task.${status}`) }}
+                    </option>
                   </select>
                   <select v-model="taskForm.priority" class="control-select">
-                    <option value="low">low</option>
-                    <option value="normal">normal</option>
-                    <option value="high">high</option>
-                    <option value="critical">critical</option>
+                    <option v-for="priority in taskPriorityOptions" :key="priority" :value="priority">
+                      {{ t(`status.priority.${priority}`) }}
+                    </option>
                   </select>
                 </div>
                 <button class="primary-action spotlight-surface" @click="submitTaskUpdate">
                   <BadgeCheck :size="15" />
-                  Save task
+                  {{ t("tasks.saveTask") }}
                 </button>
               </div>
             </section>
 
             <section class="panel-section">
-              <p class="section-label">Context Digest</p>
+              <p class="section-label">{{ t("tasks.contextDigest") }}</p>
               <JsonBlock :value="selectedTask" />
             </section>
           </div>
 
           <div v-else-if="detailTab === 'notes'" class="space-y-4">
             <section class="panel-section">
-              <p class="section-label">Add Note</p>
-              <textarea v-model="noteForm.content" class="control-textarea" placeholder="Captured human note or MCP transcript summary" />
+              <p class="section-label">{{ t("tasks.addNote") }}</p>
+              <textarea
+                v-model="noteForm.content"
+                class="control-textarea"
+                :placeholder="t('tasks.placeholders.note')"
+              />
               <button class="primary-action mt-3 spotlight-surface" @click="submitNote">
                 <FileText :size="15" />
-                Add note
+                {{ t("tasks.addNoteAction") }}
               </button>
             </section>
             <section class="space-y-3">
               <article v-for="note in tasksStore.notes" :key="note.activity_id" class="panel-section">
                 <div class="mb-2 flex items-center justify-between">
-                  <span class="status-pill">{{ note.kind }}</span>
+                  <span class="status-pill">{{ t(`activityKind.${note.kind}`) }}</span>
                   <span class="text-xs text-[var(--text-muted)]">{{ formatDateTime(note.created_at) }}</span>
                 </div>
                 <p class="text-sm leading-6 text-[var(--text-main)]">{{ note.content }}</p>
@@ -474,22 +527,26 @@ async function jumpToQueuedApproval(error: unknown) {
 
           <div v-else-if="detailTab === 'attachments'" class="space-y-4">
             <section class="panel-section">
-              <p class="section-label">Add Attachment</p>
+              <p class="section-label">{{ t("tasks.addAttachment") }}</p>
               <div class="space-y-3">
-                <input v-model="attachmentForm.path" class="control-input" placeholder="Absolute source path" />
-                <input v-model="attachmentForm.summary" class="control-input" placeholder="Summary" />
+                <input
+                  v-model="attachmentForm.path"
+                  class="control-input"
+                  :placeholder="t('tasks.placeholders.attachmentPath')"
+                />
+                <input
+                  v-model="attachmentForm.summary"
+                  class="control-input"
+                  :placeholder="t('tasks.placeholders.attachmentSummary')"
+                />
                 <select v-model="attachmentForm.kind" class="control-select">
-                  <option value="artifact">artifact</option>
-                  <option value="log">log</option>
-                  <option value="report">report</option>
-                  <option value="image">image</option>
-                  <option value="screenshot">screenshot</option>
-                  <option value="patch">patch</option>
-                  <option value="other">other</option>
+                  <option v-for="kind in attachmentKindOptions" :key="kind" :value="kind">
+                    {{ t(`status.attachmentKind.${kind}`) }}
+                  </option>
                 </select>
                 <button class="primary-action spotlight-surface" @click="submitAttachment">
                   <Paperclip :size="15" />
-                  Add attachment
+                  {{ t("tasks.addAttachmentAction") }}
                 </button>
               </div>
             </section>
@@ -500,10 +557,10 @@ async function jumpToQueuedApproval(error: unknown) {
                   <p class="text-xs text-[var(--text-muted)]">{{ attachment.original_filename }}</p>
                 </div>
                 <div class="flex items-center gap-2">
-                  <span class="status-pill">{{ attachment.kind }}</span>
+                  <span class="status-pill">{{ t(`status.attachmentKind.${attachment.kind}`) }}</span>
                   <button class="secondary-action spotlight-surface" @click="openAttachment(attachment.original_path)">
                     <Check :size="15" />
-                    Open path
+                    {{ t("tasks.openPath") }}
                   </button>
                 </div>
               </div>
@@ -516,7 +573,7 @@ async function jumpToQueuedApproval(error: unknown) {
           <div v-else class="space-y-3">
             <article v-for="item in tasksStore.activities" :key="item.activity_id" class="panel-section">
               <div class="mb-2 flex items-center justify-between">
-                <span class="status-pill">{{ item.kind }}</span>
+                <span class="status-pill">{{ t(`activityKind.${item.kind}`) }}</span>
                 <span class="inline-flex items-center gap-1 text-xs text-[var(--text-muted)]">
                   <Clock3 :size="13" />
                   {{ formatDateTime(item.created_at) }}
@@ -532,7 +589,7 @@ async function jumpToQueuedApproval(error: unknown) {
       </div>
 
       <div v-else class="empty-state">
-        Select a task to inspect notes, attachments, and activity records.
+        {{ t("tasks.emptySelection") }}
       </div>
     </div>
   </section>

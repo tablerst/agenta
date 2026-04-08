@@ -13,6 +13,15 @@ import type {
   TaskActivity,
   Version,
 } from "./types";
+import { mockDesktopBridge } from "./mockDesktop";
+
+export type BridgeMode = "desktop" | "preview";
+
+function hasTauriRuntime() {
+  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
+
+export const bridgeMode: BridgeMode = hasTauriRuntime() ? "desktop" : "preview";
 
 export class DesktopBridgeError extends Error implements AppBridgeError {
   code: string;
@@ -32,6 +41,16 @@ async function callDesktop<TResult>(
 ): Promise<SuccessEnvelope<TResult>> {
   try {
     return await invoke<SuccessEnvelope<TResult>>(command, input ? { input } : undefined);
+  } catch (error) {
+    throw normalizeError(error);
+  }
+}
+
+async function callPreview<TResult>(
+  loader: () => Promise<SuccessEnvelope<TResult>>,
+): Promise<SuccessEnvelope<TResult>> {
+  try {
+    return await loader();
   } catch (error) {
     throw normalizeError(error);
   }
@@ -66,31 +85,52 @@ function normalizeError(error: unknown): DesktopBridgeError {
 }
 
 export const desktopBridge = {
+  mode: bridgeMode,
   status() {
-    return callDesktop<RuntimeStatus>("desktop_status");
+    return bridgeMode === "desktop"
+      ? callDesktop<RuntimeStatus>("desktop_status")
+      : callPreview(() => mockDesktopBridge.status());
   },
   project(input: Record<string, unknown>) {
-    return callDesktop<Project | Project[]>("desktop_project", input);
+    return bridgeMode === "desktop"
+      ? callDesktop<Project | Project[]>("desktop_project", input)
+      : callPreview<Project | Project[]>(() => mockDesktopBridge.project(input));
   },
   version(input: Record<string, unknown>) {
-    return callDesktop<Version | Version[]>("desktop_version", input);
+    return bridgeMode === "desktop"
+      ? callDesktop<Version | Version[]>("desktop_version", input)
+      : callPreview<Version | Version[]>(() => mockDesktopBridge.version(input));
   },
   task(input: Record<string, unknown>) {
-    return callDesktop<Task | Task[] | TaskActivity[]>("desktop_task", input);
+    return bridgeMode === "desktop"
+      ? callDesktop<Task | Task[] | TaskActivity[]>("desktop_task", input)
+      : callPreview<Task | Task[] | TaskActivity[]>(() => mockDesktopBridge.task(input));
   },
   note(input: Record<string, unknown>) {
-    return callDesktop<TaskActivity | TaskActivity[]>("desktop_note", input);
+    return bridgeMode === "desktop"
+      ? callDesktop<TaskActivity | TaskActivity[]>("desktop_note", input)
+      : callPreview<TaskActivity | TaskActivity[]>(() => mockDesktopBridge.note(input));
   },
   attachment(input: Record<string, unknown>) {
-    return callDesktop<Attachment | Attachment[]>("desktop_attachment", input);
+    return bridgeMode === "desktop"
+      ? callDesktop<Attachment | Attachment[]>("desktop_attachment", input)
+      : callPreview<Attachment | Attachment[]>(() => mockDesktopBridge.attachment(input));
   },
   search(input: Record<string, unknown>) {
-    return callDesktop<SearchResponse>("desktop_search", input);
+    return bridgeMode === "desktop"
+      ? callDesktop<SearchResponse>("desktop_search", input)
+      : callPreview<SearchResponse>(() => mockDesktopBridge.search(input));
   },
   approval(input: Record<string, unknown>) {
-    return callDesktop<ApprovalRequest | ApprovalRequest[]>("desktop_approval", input);
+    return bridgeMode === "desktop"
+      ? callDesktop<ApprovalRequest | ApprovalRequest[]>("desktop_approval", input)
+      : callPreview<ApprovalRequest | ApprovalRequest[]>(() => mockDesktopBridge.approval(input));
   },
   async revealAttachment(path: string) {
-    await openPath(path);
+    if (bridgeMode === "desktop") {
+      await openPath(path);
+      return;
+    }
+    await mockDesktopBridge.revealAttachment(path);
   },
 };

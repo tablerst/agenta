@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { BadgeCheck, ShieldCheck, ShieldOff, Sparkles } from "@lucide/vue";
 import { computed, onMounted, reactive, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 
 import JsonBlock from "../components/JsonBlock.vue";
+import { formatDesktopError } from "../lib/errorMessage";
 import { coerceString, formatDateTime } from "../lib/format";
+import { approvalStatusOptions } from "../lib/options";
 import type { ApprovalRequest, ApprovalStatus } from "../lib/types";
 import { useApprovalsStore } from "../stores/approvals";
 import { useShellStore } from "../stores/shell";
@@ -13,6 +16,7 @@ const route = useRoute();
 const router = useRouter();
 const shell = useShellStore();
 const approvalsStore = useApprovalsStore();
+const { t } = useI18n({ useScope: "global" });
 
 const reviewForm = reactive({
   reviewed_by: "desktop",
@@ -43,8 +47,48 @@ watch(
   { immediate: true },
 );
 
+watch(
+  () => approvalsStore.approvals.map((item) => item.request_id).join("|"),
+  async () => {
+    if (approvalsStore.loading) {
+      return;
+    }
+
+    const firstRequest = approvalsStore.approvals[0];
+    const hasSelection = firstRequest
+      ? approvalsStore.approvals.some((item) => item.request_id === selectedRequestId.value)
+      : false;
+
+    if (!firstRequest) {
+      return;
+    }
+
+    if (!hasSelection) {
+      await router.replace({
+        path: "/approvals",
+        query: {
+          ...route.query,
+          request: firstRequest.request_id,
+        },
+      });
+    }
+  },
+  { immediate: true },
+);
+
 onMounted(async () => {
   await approvalsStore.refreshPendingCount();
+  await approvalsStore.loadApprovals((selectedState.value || undefined) as ApprovalStatus | undefined);
+  const fallbackRequest = selectedRequest.value ?? approvalsStore.approvals[0] ?? null;
+  if (!selectedRequest.value && fallbackRequest) {
+    await router.replace({
+      path: "/approvals",
+      query: {
+        ...route.query,
+        request: fallbackRequest.request_id,
+      },
+    });
+  }
 });
 
 async function setState(state?: ApprovalStatus) {
@@ -75,9 +119,9 @@ async function approveRequest() {
     selectedRequest.value = await approvalsStore.approve(selectedRequest.value.request_id, reviewForm);
     await approvalsStore.loadApprovals((selectedState.value || undefined) as ApprovalStatus | undefined);
     await approvalsStore.refreshPendingCount();
-    shell.pushNotice("success", "Approval processed.");
+    shell.pushNotice("success", t("notices.approvalProcessed"));
   } catch (error) {
-    shell.pushNotice("error", (error as Error).message);
+    shell.pushNotice("error", formatDesktopError(error, t));
   }
 }
 
@@ -89,9 +133,9 @@ async function denyRequest() {
     selectedRequest.value = await approvalsStore.deny(selectedRequest.value.request_id, reviewForm);
     await approvalsStore.loadApprovals((selectedState.value || undefined) as ApprovalStatus | undefined);
     await approvalsStore.refreshPendingCount();
-    shell.pushNotice("success", "Request denied.");
+    shell.pushNotice("success", t("notices.requestDenied"));
   } catch (error) {
-    shell.pushNotice("error", (error as Error).message);
+    shell.pushNotice("error", formatDesktopError(error, t));
   }
 }
 
@@ -147,22 +191,26 @@ function statusClass(status: ApprovalStatus) {
     <aside class="page-list px-4 py-5">
       <div class="mb-4 flex items-center justify-between">
         <div>
-          <p class="section-label">Approvals</p>
-          <h1 class="text-lg font-semibold text-[var(--text-main)]">Human review center</h1>
+          <p class="section-label">{{ t("approvals.listKicker") }}</p>
+          <h1 class="text-lg font-semibold text-[var(--text-main)]">{{ t("approvals.listTitle") }}</h1>
         </div>
         <span class="status-pill status-pill-warning">{{ approvalsStore.pendingCount }}</span>
       </div>
 
       <div class="mb-4 flex flex-wrap gap-2">
-        <button class="secondary-action spotlight-surface" @click="setState(undefined)">all</button>
-        <button class="secondary-action spotlight-surface" @click="setState('pending')">pending</button>
-        <button class="secondary-action spotlight-surface" @click="setState('approved')">approved</button>
-        <button class="secondary-action spotlight-surface" @click="setState('denied')">denied</button>
-        <button class="secondary-action spotlight-surface" @click="setState('failed')">failed</button>
+        <button class="secondary-action spotlight-surface" @click="setState(undefined)">{{ t("common.all") }}</button>
+        <button
+          v-for="status in approvalStatusOptions"
+          :key="status"
+          class="secondary-action spotlight-surface"
+          @click="setState(status)"
+        >
+          {{ t(`status.approval.${status}`) }}
+        </button>
       </div>
 
       <div v-if="approvalsStore.approvals.length === 0" class="empty-state">
-        No approval requests for this state.
+        {{ t("approvals.emptyList") }}
       </div>
       <div v-else>
         <button
@@ -180,7 +228,7 @@ function statusClass(status: ApprovalStatus) {
             </p>
             <p class="truncate text-xs text-[var(--text-muted)]">{{ request.action }}</p>
           </div>
-          <span :class="statusClass(request.status)">{{ request.status }}</span>
+          <span :class="statusClass(request.status)">{{ t(`status.approval.${request.status}`) }}</span>
         </button>
       </div>
     </aside>
@@ -190,41 +238,54 @@ function statusClass(status: ApprovalStatus) {
         <section class="glass-panel p-5">
           <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
             <div>
-              <p class="section-label">Approval Inspector</p>
+              <p class="section-label">{{ t("approvals.inspector") }}</p>
               <h2 class="text-2xl font-semibold text-[var(--text-main)]">
                 {{ selectedRequest.request_summary }}
               </h2>
               <p class="mt-2 text-sm text-[var(--text-muted)]">
-                {{ selectedRequest.action }} via {{ selectedRequest.requested_via }}
+                {{
+                  t("approvals.via", {
+                    action: selectedRequest.action,
+                    channel: t(`approval.requestedVia.${selectedRequest.requested_via}`),
+                  })
+                }}
               </p>
             </div>
-            <span :class="statusClass(selectedRequest.status)">{{ selectedRequest.status }}</span>
+            <span :class="statusClass(selectedRequest.status)">{{ t(`status.approval.${selectedRequest.status}`) }}</span>
           </div>
 
           <div class="grid gap-4 md:grid-cols-2">
             <section class="panel-section">
-              <p class="section-label">Request</p>
+              <p class="section-label">{{ t("approvals.request") }}</p>
               <dl class="space-y-2 text-sm">
                 <div>
-                  <dt class="text-[var(--text-muted)]">Requested at</dt>
+                  <dt class="text-[var(--text-muted)]">{{ t("approvals.requestedAt") }}</dt>
                   <dd>{{ formatDateTime(selectedRequest.requested_at) }}</dd>
                 </div>
                 <div>
-                  <dt class="text-[var(--text-muted)]">Requested by</dt>
+                  <dt class="text-[var(--text-muted)]">{{ t("approvals.requestedBy") }}</dt>
                   <dd>{{ selectedRequest.requested_by }}</dd>
                 </div>
                 <div>
-                  <dt class="text-[var(--text-muted)]">Resource ref</dt>
+                  <dt class="text-[var(--text-muted)]">{{ t("approvals.resourceRef") }}</dt>
                   <dd>{{ selectedRequest.resource_ref }}</dd>
                 </div>
               </dl>
             </section>
 
             <section class="panel-section">
-              <p class="section-label">Review</p>
+              <p class="section-label">{{ t("approvals.review") }}</p>
               <div class="space-y-3">
-                <input v-model="reviewForm.reviewed_by" class="control-input" placeholder="reviewed by" />
-                <textarea v-model="reviewForm.review_note" class="control-textarea" placeholder="Review note" />
+                <input
+                  v-model="reviewForm.reviewed_by"
+                  class="control-input"
+                  :placeholder="t('approvals.placeholders.reviewedBy')"
+                />
+                <textarea
+                  v-model="reviewForm.review_note"
+                  class="control-textarea"
+                  :placeholder="t('approvals.placeholders.reviewNote')"
+                />
                 <div class="flex flex-wrap gap-2">
                   <button
                     v-if="selectedRequest.status === 'pending'"
@@ -232,7 +293,7 @@ function statusClass(status: ApprovalStatus) {
                     @click="approveRequest"
                   >
                     <BadgeCheck :size="15" />
-                    Approve
+                    {{ t("approvals.approve") }}
                   </button>
                   <button
                     v-if="selectedRequest.status === 'pending'"
@@ -240,11 +301,11 @@ function statusClass(status: ApprovalStatus) {
                     @click="denyRequest"
                   >
                     <ShieldOff :size="15" />
-                    Deny
+                    {{ t("approvals.deny") }}
                   </button>
                   <button class="secondary-action spotlight-surface" @click="jumpToResource">
                     <Sparkles :size="15" />
-                    Jump to resource
+                    {{ t("approvals.jumpToResource") }}
                   </button>
                 </div>
               </div>
@@ -254,11 +315,11 @@ function statusClass(status: ApprovalStatus) {
 
         <section class="grid gap-5 xl:grid-cols-2">
           <section class="panel-section">
-            <p class="section-label">Payload Snapshot</p>
+            <p class="section-label">{{ t("approvals.payload") }}</p>
             <JsonBlock :value="selectedRequest.payload_json" />
           </section>
           <section class="panel-section">
-            <p class="section-label">Outcome</p>
+            <p class="section-label">{{ t("approvals.outcome") }}</p>
             <div v-if="selectedRequest.result_json" class="mb-4">
               <JsonBlock :value="selectedRequest.result_json" />
             </div>
@@ -266,14 +327,14 @@ function statusClass(status: ApprovalStatus) {
               <JsonBlock :value="selectedRequest.error_json" />
             </div>
             <div v-if="!selectedRequest.result_json && !selectedRequest.error_json" class="empty-state">
-              No replay result stored yet.
+              {{ t("approvals.emptyOutcome") }}
             </div>
           </section>
         </section>
       </div>
 
       <div v-else class="empty-state">
-        Select an approval request to inspect payload, review note, and replay outcome.
+        {{ t("approvals.emptySelection") }}
       </div>
     </div>
   </section>
