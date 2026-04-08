@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 
 use agenta_lib::{
-    app::{AppRuntime, BootstrapOptions},
+    app::{AppRuntime, BootstrapOptions, McpHostKind, McpLaunchOverrides, McpSessionLogger},
     interface::mcp::AgentaMcpServer,
     service::{
         CreateAttachmentInput, CreateNoteInput, CreateProjectInput, CreateTaskInput,
@@ -120,7 +120,7 @@ fn cli_outputs_json_and_reuses_same_database() -> Result<(), Box<dyn std::error:
     let config_path = write_test_config(&tempdir)?;
     let config_path_str = config_path.to_string_lossy().to_string();
 
-    let mut create = Command::cargo_bin("agenta-cli")?;
+    let mut create = Command::cargo_bin("agenta")?;
     let create_output = create
         .args([
             "--config",
@@ -141,6 +141,16 @@ fn cli_outputs_json_and_reuses_same_database() -> Result<(), Box<dyn std::error:
     assert_eq!(create_json["ok"], true);
     assert_eq!(create_json["action"], "project.create");
 
+    let mut compat = Command::cargo_bin("agenta-cli")?;
+    let compat_output = compat
+        .args(["--config", &config_path_str, "project", "list"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let compat_json: Value = serde_json::from_slice(&compat_output)?;
+
     let mut list = Command::cargo_bin("agenta-cli")?;
     let list_output = list
         .args(["--config", &config_path_str, "project", "list"])
@@ -152,6 +162,7 @@ fn cli_outputs_json_and_reuses_same_database() -> Result<(), Box<dyn std::error:
     let list_json: Value = serde_json::from_slice(&list_output)?;
     assert_eq!(list_json["ok"], true);
     assert_eq!(list_json["result"][0]["slug"], "cli-demo");
+    assert_eq!(compat_json["result"], list_json["result"]);
 
     Ok(())
 }
@@ -169,8 +180,21 @@ async fn mcp_streamable_http_tool_call_returns_structured_content(
     );
 
     let runtime_for_factory = runtime.clone();
+    let logger = McpSessionLogger::new(
+        "integration-mcp-session".to_string(),
+        runtime
+            .config
+            .resolve_mcp_session(McpHostKind::Standalone, &McpLaunchOverrides::default())?,
+        None,
+    );
+    let logger_for_factory = logger.clone();
     let service = StreamableHttpService::new(
-        move || Ok(AgentaMcpServer::new(runtime_for_factory.clone())),
+        move || {
+            Ok(AgentaMcpServer::new(
+                runtime_for_factory.service.clone(),
+                logger_for_factory.clone(),
+            ))
+        },
         Arc::new(LocalSessionManager::default()),
         StreamableHttpServerConfig::default(),
     );

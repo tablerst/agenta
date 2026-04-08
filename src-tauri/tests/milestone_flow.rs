@@ -2,7 +2,7 @@ use std::{path::Path, process::Command, sync::Arc, time::Duration};
 
 use assert_cmd::cargo::cargo_bin;
 use agenta_lib::{
-    app::{AppRuntime, BootstrapOptions},
+    app::{AppRuntime, BootstrapOptions, McpHostKind, McpLaunchOverrides, McpSessionLogger},
     interface::{mcp::AgentaMcpServer, response::SuccessEnvelope},
     service::{
         CreateAttachmentInput, CreateNoteInput, CreateProjectInput, CreateTaskInput,
@@ -151,7 +151,7 @@ async fn service_flow_persists_and_searches() {
 fn cli_smoke_returns_json() {
     let root = tempdir().expect("tempdir");
     let config_path = write_config(root.path(), "127.0.0.1:0");
-    let cli_bin = cargo_bin("agenta-cli");
+    let cli_bin = cargo_bin("agenta");
 
     let output = Command::new(cli_bin)
         .args([
@@ -165,7 +165,7 @@ fn cli_smoke_returns_json() {
             "Demo CLI",
         ])
         .output()
-        .expect("run agenta-cli");
+        .expect("run agenta");
 
     assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
     let payload: serde_json::Value =
@@ -188,9 +188,23 @@ async fn mcp_streamable_http_lists_tools_and_calls_project_tool() {
 
     let session_manager = Arc::new(LocalSessionManager::default());
     let runtime_for_factory = runtime.clone();
+    let logger = McpSessionLogger::new(
+        "milestone-mcp-session".to_string(),
+        runtime
+            .config
+            .resolve_mcp_session(McpHostKind::Standalone, &McpLaunchOverrides::default())
+            .expect("resolve standalone MCP config"),
+        None,
+    );
+    let logger_for_factory = logger.clone();
     let service: StreamableHttpService<AgentaMcpServer, LocalSessionManager> =
         StreamableHttpService::new(
-            move || Ok(AgentaMcpServer::new(runtime_for_factory.clone())),
+            move || {
+                Ok(AgentaMcpServer::new(
+                    runtime_for_factory.service.clone(),
+                    logger_for_factory.clone(),
+                ))
+            },
             session_manager,
             StreamableHttpServerConfig::default().with_sse_keep_alive(None),
         );

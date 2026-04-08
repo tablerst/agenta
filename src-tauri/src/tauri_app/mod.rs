@@ -1,3 +1,4 @@
+use std::ops::Deref;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -5,7 +6,10 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use crate::app::AppRuntime;
+use crate::app::{
+    AppRuntime, McpLaunchOverrides, McpLogDestination, McpLogLevel, McpLogSnapshot,
+    McpSupervisor, save_mcp_config_defaults,
+};
 use crate::domain::ApprovalStatus;
 use crate::error::AppError;
 use crate::interface::response::{ErrorEnvelope, SuccessEnvelope, error, success};
@@ -20,11 +24,35 @@ struct DesktopRuntimeStatus {
     data_dir: String,
     database_path: String,
     attachments_dir: String,
+    loaded_config_path: Option<String>,
     mcp_bind: String,
     mcp_path: String,
     project_count: i64,
     task_count: i64,
     pending_approval_count: usize,
+}
+
+struct DesktopAppState {
+    runtime: Arc<AppRuntime>,
+    mcp_supervisor: Arc<McpSupervisor>,
+}
+
+impl DesktopAppState {
+    fn new(runtime: Arc<AppRuntime>) -> Self {
+        let mcp_supervisor = Arc::new(McpSupervisor::new(runtime.clone()));
+        Self {
+            runtime,
+            mcp_supervisor,
+        }
+    }
+}
+
+impl Deref for DesktopAppState {
+    type Target = AppRuntime;
+
+    fn deref(&self) -> &Self::Target {
+        &self.runtime
+    }
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -99,30 +127,68 @@ struct DesktopApprovalInput {
     review_note: Option<String>,
 }
 
+#[derive(Debug, Deserialize, Default)]
+struct DesktopMcpStartInput {
+    bind: Option<String>,
+    path: Option<String>,
+    log_level: Option<McpLogLevel>,
+    log_destinations: Option<Vec<McpLogDestination>>,
+    log_file_path: Option<PathBuf>,
+    log_ui_buffer_lines: Option<usize>,
+    save_as_default: Option<bool>,
+}
+
+impl DesktopMcpStartInput {
+    fn into_overrides(self) -> McpLaunchOverrides {
+        McpLaunchOverrides {
+            bind: self.bind,
+            path: self.path,
+            autostart: None,
+            log_level: self.log_level,
+            log_destinations: self.log_destinations,
+            log_file_path: self.log_file_path,
+            log_ui_buffer_lines: self.log_ui_buffer_lines,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct DesktopMcpLogsSnapshotInput {
+    limit: Option<usize>,
+}
+
 #[tauri::command]
 async fn desktop_status(
-    runtime: State<'_, Arc<AppRuntime>>,
+    state: State<'_, Arc<DesktopAppState>>,
 ) -> Result<SuccessEnvelope, ErrorEnvelope> {
-    let counts = runtime
+    let counts = state
         .service
         .service_overview()
         .await
         .map_err(|app_error| error(&app_error))?;
-    let pending = runtime
+    let pending = state
         .service
         .list_approval_requests(ApprovalQuery {
             status: Some(ApprovalStatus::Pending),
         })
         .await
         .map_err(|app_error| error(&app_error))?;
+    let default_mcp_config = state.mcp_supervisor.default_config();
+
     success(
         "desktop.status",
         DesktopRuntimeStatus {
-            data_dir: runtime.config.paths.data_dir.display().to_string(),
-            database_path: runtime.config.paths.database_path.display().to_string(),
-            attachments_dir: runtime.config.paths.attachments_dir.display().to_string(),
-            mcp_bind: runtime.config.mcp.bind.clone(),
-            mcp_path: runtime.config.mcp.path.clone(),
+            data_dir: state.config.paths.data_dir.display().to_string(),
+            database_path: state.config.paths.database_path.display().to_string(),
+            attachments_dir: state.config.paths.attachments_dir.display().to_string(),
+            loaded_config_path: state
+                .config
+                .paths
+                .loaded_config_path
+                .as_ref()
+                .map(|path| path.display().to_string()),
+            mcp_bind: default_mcp_config.bind,
+            mcp_path: default_mcp_config.path,
             project_count: counts.project_count,
             task_count: counts.task_count,
             pending_approval_count: pending.len(),
@@ -134,11 +200,11 @@ async fn desktop_status(
 
 #[tauri::command]
 async fn desktop_project(
-    runtime: State<'_, Arc<AppRuntime>>,
+    state: State<'_, Arc<DesktopAppState>>,
     input: DesktopProjectInput,
 ) -> Result<SuccessEnvelope, ErrorEnvelope> {
     let result: Result<SuccessEnvelope, AppError> = async {
-        let service = &runtime.service;
+        let service = &state.service;
         match input.action.as_str() {
             "create" => success(
                 "project.create",
@@ -194,11 +260,11 @@ async fn desktop_project(
 
 #[tauri::command]
 async fn desktop_version(
-    runtime: State<'_, Arc<AppRuntime>>,
+    state: State<'_, Arc<DesktopAppState>>,
     input: DesktopVersionInput,
 ) -> Result<SuccessEnvelope, ErrorEnvelope> {
     let result: Result<SuccessEnvelope, AppError> = async {
-        let service = &runtime.service;
+        let service = &state.service;
         match input.action.as_str() {
             "create" => success(
                 "version.create",
@@ -251,11 +317,11 @@ async fn desktop_version(
 
 #[tauri::command]
 async fn desktop_task(
-    runtime: State<'_, Arc<AppRuntime>>,
+    state: State<'_, Arc<DesktopAppState>>,
     input: DesktopTaskInput,
 ) -> Result<SuccessEnvelope, ErrorEnvelope> {
     let result: Result<SuccessEnvelope, AppError> = async {
-        let service = &runtime.service;
+        let service = &state.service;
         match input.action.as_str() {
             "create" => success(
                 "task.create",
@@ -332,11 +398,11 @@ async fn desktop_task(
 
 #[tauri::command]
 async fn desktop_note(
-    runtime: State<'_, Arc<AppRuntime>>,
+    state: State<'_, Arc<DesktopAppState>>,
     input: DesktopNoteInput,
 ) -> Result<SuccessEnvelope, ErrorEnvelope> {
     let result: Result<SuccessEnvelope, AppError> = async {
-        let service = &runtime.service;
+        let service = &state.service;
         match input.action.as_str() {
             "create" => success(
                 "note.create",
@@ -368,11 +434,11 @@ async fn desktop_note(
 
 #[tauri::command]
 async fn desktop_attachment(
-    runtime: State<'_, Arc<AppRuntime>>,
+    state: State<'_, Arc<DesktopAppState>>,
     input: DesktopAttachmentInput,
 ) -> Result<SuccessEnvelope, ErrorEnvelope> {
     let result: Result<SuccessEnvelope, AppError> = async {
-        let service = &runtime.service;
+        let service = &state.service;
         match input.action.as_str() {
             "create" => success(
                 "attachment.create",
@@ -419,14 +485,14 @@ async fn desktop_attachment(
 
 #[tauri::command]
 async fn desktop_search(
-    runtime: State<'_, Arc<AppRuntime>>,
+    state: State<'_, Arc<DesktopAppState>>,
     input: DesktopSearchInput,
 ) -> Result<SuccessEnvelope, ErrorEnvelope> {
     let result: Result<SuccessEnvelope, AppError> = async {
         match input.action.as_str() {
             "query" => success(
                 "search.query",
-                runtime
+                state
                     .service
                     .search(SearchInput {
                         text: search_text(input.text, input.query)?,
@@ -447,11 +513,11 @@ async fn desktop_search(
 
 #[tauri::command]
 async fn desktop_approval(
-    runtime: State<'_, Arc<AppRuntime>>,
+    state: State<'_, Arc<DesktopAppState>>,
     input: DesktopApprovalInput,
 ) -> Result<SuccessEnvelope, ErrorEnvelope> {
     let result: Result<SuccessEnvelope, AppError> = async {
-        let service = &runtime.service;
+        let service = &state.service;
         match input.action.as_str() {
             "list" => {
                 let items = service
@@ -512,12 +578,98 @@ async fn desktop_approval(
     result.map_err(|app_error| error(&app_error))
 }
 
+#[tauri::command]
+async fn desktop_mcp_status(
+    state: State<'_, Arc<DesktopAppState>>,
+) -> Result<SuccessEnvelope, ErrorEnvelope> {
+    success(
+        "desktop.mcp_status",
+        state.mcp_supervisor.status_snapshot(),
+        "Loaded MCP runtime status",
+    )
+    .map_err(|app_error| error(&app_error))
+}
+
+#[tauri::command]
+async fn desktop_mcp_start(
+    state: State<'_, Arc<DesktopAppState>>,
+    input: DesktopMcpStartInput,
+) -> Result<SuccessEnvelope, ErrorEnvelope> {
+    let save_as_default = input.save_as_default.unwrap_or(false);
+    let overrides = input.into_overrides();
+    if save_as_default {
+        let loaded_config_path = state
+            .config
+            .paths
+            .loaded_config_path
+            .clone()
+            .ok_or_else(|| {
+                error(&AppError::InvalidArguments(
+                    "cannot save MCP defaults without a loaded config file".to_string(),
+                ))
+            })?;
+        let next_defaults = state.mcp_supervisor.resolve_default_config(&overrides);
+        save_mcp_config_defaults(&loaded_config_path, &next_defaults)
+            .map_err(|app_error| error(&app_error))?;
+        state.mcp_supervisor.replace_default_config(next_defaults);
+    }
+
+    let status = state
+        .mcp_supervisor
+        .start(overrides)
+        .await
+        .map_err(|app_error| error(&app_error))?;
+    success("desktop.mcp_start", status, "Started desktop-managed MCP host")
+        .map_err(|app_error| error(&app_error))
+}
+
+#[tauri::command]
+async fn desktop_mcp_stop(
+    state: State<'_, Arc<DesktopAppState>>,
+) -> Result<SuccessEnvelope, ErrorEnvelope> {
+    let status = state
+        .mcp_supervisor
+        .stop()
+        .await
+        .map_err(|app_error| error(&app_error))?;
+    success("desktop.mcp_stop", status, "Stopped desktop-managed MCP host")
+        .map_err(|app_error| error(&app_error))
+}
+
+#[tauri::command]
+async fn desktop_mcp_logs_snapshot(
+    state: State<'_, Arc<DesktopAppState>>,
+    input: DesktopMcpLogsSnapshotInput,
+) -> Result<SuccessEnvelope, ErrorEnvelope> {
+    let snapshot: McpLogSnapshot = state.mcp_supervisor.logs_snapshot(input.limit);
+    success(
+        "desktop.mcp_logs_snapshot",
+        snapshot,
+        "Loaded MCP log snapshot",
+    )
+    .map_err(|app_error| error(&app_error))
+}
+
 pub fn run(runtime: Arc<AppRuntime>) {
+    let state = Arc::new(DesktopAppState::new(runtime));
+    let state_for_setup = state.clone();
+    let state_for_run = state.clone();
+
     tauri::Builder::default()
-        .manage(runtime)
+        .manage(state)
         .plugin(tauri_plugin_opener::init())
+        .setup(move |app| {
+            state_for_setup
+                .mcp_supervisor
+                .attach_emitter(app.handle().clone());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             desktop_status,
+            desktop_mcp_status,
+            desktop_mcp_start,
+            desktop_mcp_stop,
+            desktop_mcp_logs_snapshot,
             desktop_project,
             desktop_version,
             desktop_task,
@@ -526,8 +678,13 @@ pub fn run(runtime: Arc<AppRuntime>) {
             desktop_search,
             desktop_approval
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(move |_app_handle, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                let _ = tauri::async_runtime::block_on(state_for_run.mcp_supervisor.shutdown());
+            }
+        });
 }
 
 fn required(value: Option<String>, field: &str) -> Result<String, AppError> {

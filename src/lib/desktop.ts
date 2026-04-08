@@ -1,10 +1,15 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { openPath } from "@tauri-apps/plugin-opener";
 
 import type {
   AppBridgeError,
   ApprovalRequest,
   Attachment,
+  McpLaunchOverrides,
+  McpLogEntry,
+  McpLogSnapshot,
+  McpRuntimeStatus,
   Project,
   RuntimeStatus,
   SearchResponse,
@@ -84,12 +89,54 @@ function normalizeError(error: unknown): DesktopBridgeError {
   });
 }
 
+async function subscribeDesktopEvent<TPayload>(
+  event: string,
+  listener: (payload: TPayload) => void,
+): Promise<UnlistenFn> {
+  if (bridgeMode !== "desktop") {
+    return async () => undefined;
+  }
+
+  return listen<TPayload>(event, (eventPayload) => {
+    listener(eventPayload.payload);
+  });
+}
+
 export const desktopBridge = {
   mode: bridgeMode,
   status() {
     return bridgeMode === "desktop"
       ? callDesktop<RuntimeStatus>("desktop_status")
       : callPreview(() => mockDesktopBridge.status());
+  },
+  mcpStatus() {
+    return bridgeMode === "desktop"
+      ? callDesktop<McpRuntimeStatus>("desktop_mcp_status")
+      : callPreview(() => mockDesktopBridge.mcpStatus());
+  },
+  mcpStart(input: McpLaunchOverrides) {
+    return bridgeMode === "desktop"
+      ? callDesktop<McpRuntimeStatus>("desktop_mcp_start", input as Record<string, unknown>)
+      : callPreview(() => mockDesktopBridge.mcpStart(input));
+  },
+  mcpStop() {
+    return bridgeMode === "desktop"
+      ? callDesktop<McpRuntimeStatus>("desktop_mcp_stop")
+      : callPreview(() => mockDesktopBridge.mcpStop());
+  },
+  mcpLogsSnapshot(limit?: number) {
+    return bridgeMode === "desktop"
+      ? callDesktop<McpLogSnapshot>(
+          "desktop_mcp_logs_snapshot",
+          { limit: typeof limit === "number" ? limit : null },
+        )
+      : callPreview(() => mockDesktopBridge.mcpLogsSnapshot(limit));
+  },
+  onMcpStatus(listener: (payload: McpRuntimeStatus) => void) {
+    return subscribeDesktopEvent<McpRuntimeStatus>("desktop://mcp-status", listener);
+  },
+  onMcpLog(listener: (payload: McpLogEntry) => void) {
+    return subscribeDesktopEvent<McpLogEntry>("desktop://mcp-log", listener);
   },
   project(input: Record<string, unknown>) {
     return bridgeMode === "desktop"
@@ -126,11 +173,14 @@ export const desktopBridge = {
       ? callDesktop<ApprovalRequest | ApprovalRequest[]>("desktop_approval", input)
       : callPreview<ApprovalRequest | ApprovalRequest[]>(() => mockDesktopBridge.approval(input));
   },
-  async revealAttachment(path: string) {
+  async openPath(path: string) {
     if (bridgeMode === "desktop") {
       await openPath(path);
       return;
     }
-    await mockDesktopBridge.revealAttachment(path);
+    await mockDesktopBridge.openPath(path);
+  },
+  async revealAttachment(path: string) {
+    await this.openPath(path);
   },
 };

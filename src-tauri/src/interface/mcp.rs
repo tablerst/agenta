@@ -1,6 +1,5 @@
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::sync::Arc;
 
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
@@ -8,26 +7,84 @@ use rmcp::model::{ProtocolVersion, ServerCapabilities, ServerInfo};
 use rmcp::{ErrorData, Json, ServerHandler, tool, tool_handler, tool_router};
 use schemars::JsonSchema;
 use serde::Deserialize;
+use serde_json::json;
 
-use crate::app::AppRuntime;
+use crate::app::McpSessionLogger;
 use crate::interface::response::{SuccessEnvelope, error_to_rmcp, success};
 use crate::service::{
-    CreateAttachmentInput, CreateNoteInput, CreateProjectInput, CreateTaskInput, CreateVersionInput,
-    RequestOrigin, SearchInput, TaskQuery, UpdateProjectInput, UpdateTaskInput,
-    UpdateVersionInput,
+    AgentaService, CreateAttachmentInput, CreateNoteInput, CreateProjectInput, CreateTaskInput,
+    CreateVersionInput, RequestOrigin, SearchInput, TaskQuery, UpdateProjectInput,
+    UpdateTaskInput, UpdateVersionInput,
 };
 
 #[derive(Clone)]
 pub struct AgentaMcpServer {
     tool_router: ToolRouter<Self>,
-    runtime: Arc<AppRuntime>,
+    service: AgentaService,
+    logger: McpSessionLogger,
 }
 
 impl AgentaMcpServer {
-    pub fn new(runtime: Arc<AppRuntime>) -> Self {
+    pub fn new(service: AgentaService, logger: McpSessionLogger) -> Self {
         Self {
             tool_router: Self::tool_router(),
-            runtime,
+            service,
+            logger,
+        }
+    }
+
+    async fn log_tool_call(&self, tool: &str, action: &str) {
+        let _ = self
+            .logger
+            .record(
+                crate::app::McpLogLevel::Info,
+                "mcp.tool",
+                "Received MCP tool call",
+                json!({
+                    "tool": tool,
+                    "action": action,
+                }),
+            )
+            .await;
+    }
+
+    async fn log_tool_result(
+        &self,
+        tool: &str,
+        action: &str,
+        result: &Result<SuccessEnvelope, ErrorData>,
+    ) {
+        match result {
+            Ok(envelope) => {
+                let _ = self
+                    .logger
+                    .record(
+                        crate::app::McpLogLevel::Info,
+                        "mcp.tool",
+                        "Completed MCP tool call",
+                        json!({
+                            "tool": tool,
+                            "action": action,
+                            "summary": envelope.summary,
+                        }),
+                    )
+                    .await;
+            }
+            Err(error) => {
+                let _ = self
+                    .logger
+                    .record(
+                        crate::app::McpLogLevel::Error,
+                        "mcp.tool",
+                        "Failed MCP tool call",
+                        json!({
+                            "tool": tool,
+                            "action": action,
+                            "error": error.to_string(),
+                        }),
+                    )
+                    .await;
+            }
         }
     }
 }
@@ -102,16 +159,21 @@ impl AgentaMcpServer {
         &self,
         Parameters(params): Parameters<ProjectToolInput>,
     ) -> Result<Json<SuccessEnvelope>, ErrorData> {
-        let service = &self.runtime.service;
-        let envelope = match params.action.as_str() {
+        let action = params.action.clone();
+        self.log_tool_call("project", &action).await;
+        let service = &self.service;
+        let envelope = match action.as_str() {
             "create" => success(
                 "project.create",
                 service
-                    .create_project_from(RequestOrigin::Mcp, CreateProjectInput {
-                        slug: required(params.slug, "slug")?,
-                        name: required(params.name, "name")?,
-                        description: params.description,
-                    })
+                    .create_project_from(
+                        RequestOrigin::Mcp,
+                        CreateProjectInput {
+                            slug: required(params.slug, "slug")?,
+                            name: required(params.name, "name")?,
+                            description: params.description,
+                        },
+                    )
                     .await
                     .map_err(error_to_rmcp)?,
                 "Created project",
@@ -150,9 +212,10 @@ impl AgentaMcpServer {
                 "unsupported project action: {other}"
             ))),
         }
-        .map_err(error_to_rmcp)?;
+        .map_err(error_to_rmcp);
+        self.log_tool_result("project", &action, &envelope).await;
 
-        Ok(Json(envelope))
+        envelope.map(Json)
     }
 
     #[tool(description = "Manage version entities")]
@@ -160,17 +223,22 @@ impl AgentaMcpServer {
         &self,
         Parameters(params): Parameters<VersionToolInput>,
     ) -> Result<Json<SuccessEnvelope>, ErrorData> {
-        let service = &self.runtime.service;
-        let envelope = match params.action.as_str() {
+        let action = params.action.clone();
+        self.log_tool_call("version", &action).await;
+        let service = &self.service;
+        let envelope = match action.as_str() {
             "create" => success(
                 "version.create",
                 service
-                    .create_version_from(RequestOrigin::Mcp, CreateVersionInput {
-                        project: required(params.project, "project")?,
-                        name: required(params.name, "name")?,
-                        description: params.description,
-                        status: parse_optional_enum(params.status)?,
-                    })
+                    .create_version_from(
+                        RequestOrigin::Mcp,
+                        CreateVersionInput {
+                            project: required(params.project, "project")?,
+                            name: required(params.name, "name")?,
+                            description: params.description,
+                            status: parse_optional_enum(params.status)?,
+                        },
+                    )
                     .await
                     .map_err(error_to_rmcp)?,
                 "Created version",
@@ -210,9 +278,10 @@ impl AgentaMcpServer {
                 "unsupported version action: {other}"
             ))),
         }
-        .map_err(error_to_rmcp)?;
+        .map_err(error_to_rmcp);
+        self.log_tool_result("version", &action, &envelope).await;
 
-        Ok(Json(envelope))
+        envelope.map(Json)
     }
 
     #[tool(description = "Manage task entities")]
@@ -220,21 +289,26 @@ impl AgentaMcpServer {
         &self,
         Parameters(params): Parameters<TaskToolInput>,
     ) -> Result<Json<SuccessEnvelope>, ErrorData> {
-        let service = &self.runtime.service;
-        let envelope = match params.action.as_str() {
+        let action = params.action.clone();
+        self.log_tool_call("task", &action).await;
+        let service = &self.service;
+        let envelope = match action.as_str() {
             "create" => success(
                 "task.create",
                 service
-                    .create_task_from(RequestOrigin::Mcp, CreateTaskInput {
-                        project: required(params.project, "project")?,
-                        version: params.version,
-                        title: required(params.title, "title")?,
-                        summary: params.summary,
-                        description: params.description,
-                        status: parse_optional_enum(params.status)?,
-                        priority: parse_optional_enum(params.priority)?,
-                        created_by: params.created_by,
-                    })
+                    .create_task_from(
+                        RequestOrigin::Mcp,
+                        CreateTaskInput {
+                            project: required(params.project, "project")?,
+                            version: params.version,
+                            title: required(params.title, "title")?,
+                            summary: params.summary,
+                            description: params.description,
+                            status: parse_optional_enum(params.status)?,
+                            priority: parse_optional_enum(params.priority)?,
+                            created_by: params.created_by,
+                        },
+                    )
                     .await
                     .map_err(error_to_rmcp)?,
                 "Created task",
@@ -282,9 +356,10 @@ impl AgentaMcpServer {
                 "unsupported task action: {other}"
             ))),
         }
-        .map_err(error_to_rmcp)?;
+        .map_err(error_to_rmcp);
+        self.log_tool_result("task", &action, &envelope).await;
 
-        Ok(Json(envelope))
+        envelope.map(Json)
     }
 
     #[tool(description = "Manage task notes")]
@@ -292,16 +367,21 @@ impl AgentaMcpServer {
         &self,
         Parameters(params): Parameters<NoteToolInput>,
     ) -> Result<Json<SuccessEnvelope>, ErrorData> {
-        let service = &self.runtime.service;
-        let envelope = match params.action.as_str() {
+        let action = params.action.clone();
+        self.log_tool_call("note", &action).await;
+        let service = &self.service;
+        let envelope = match action.as_str() {
             "create" => success(
                 "note.create",
                 service
-                    .create_note_from(RequestOrigin::Mcp, CreateNoteInput {
-                        task: required(params.task, "task")?,
-                        content: required(params.content, "content")?,
-                        created_by: params.created_by,
-                    })
+                    .create_note_from(
+                        RequestOrigin::Mcp,
+                        CreateNoteInput {
+                            task: required(params.task, "task")?,
+                            content: required(params.content, "content")?,
+                            created_by: params.created_by,
+                        },
+                    )
                     .await
                     .map_err(error_to_rmcp)?,
                 "Created note",
@@ -317,9 +397,10 @@ impl AgentaMcpServer {
                 "unsupported note action: {other}"
             ))),
         }
-        .map_err(error_to_rmcp)?;
+        .map_err(error_to_rmcp);
+        self.log_tool_result("note", &action, &envelope).await;
 
-        Ok(Json(envelope))
+        envelope.map(Json)
     }
 
     #[tool(description = "Manage task attachments")]
@@ -327,18 +408,23 @@ impl AgentaMcpServer {
         &self,
         Parameters(params): Parameters<AttachmentToolInput>,
     ) -> Result<Json<SuccessEnvelope>, ErrorData> {
-        let service = &self.runtime.service;
-        let envelope = match params.action.as_str() {
+        let action = params.action.clone();
+        self.log_tool_call("attachment", &action).await;
+        let service = &self.service;
+        let envelope = match action.as_str() {
             "create" => success(
                 "attachment.create",
                 service
-                    .create_attachment_from(RequestOrigin::Mcp, CreateAttachmentInput {
-                        task: required(params.task, "task")?,
-                        path: PathBuf::from(required(params.path, "path")?),
-                        kind: parse_optional_enum(params.kind)?,
-                        created_by: params.created_by,
-                        summary: params.summary,
-                    })
+                    .create_attachment_from(
+                        RequestOrigin::Mcp,
+                        CreateAttachmentInput {
+                            task: required(params.task, "task")?,
+                            path: PathBuf::from(required(params.path, "path")?),
+                            kind: parse_optional_enum(params.kind)?,
+                            created_by: params.created_by,
+                            summary: params.summary,
+                        },
+                    )
                     .await
                     .map_err(error_to_rmcp)?,
                 "Created attachment",
@@ -366,9 +452,10 @@ impl AgentaMcpServer {
                 "unsupported attachment action: {other}"
             ))),
         }
-        .map_err(error_to_rmcp)?;
+        .map_err(error_to_rmcp);
+        self.log_tool_result("attachment", &action, &envelope).await;
 
-        Ok(Json(envelope))
+        envelope.map(Json)
     }
 
     #[tool(description = "Search across tasks and task activities")]
@@ -376,8 +463,10 @@ impl AgentaMcpServer {
         &self,
         Parameters(params): Parameters<SearchToolInput>,
     ) -> Result<Json<SuccessEnvelope>, ErrorData> {
-        let service = &self.runtime.service;
-        let envelope = match params.action.as_str() {
+        let action = params.action.clone();
+        self.log_tool_call("search", &action).await;
+        let service = &self.service;
+        let envelope = match action.as_str() {
             "query" => success(
                 "search.query",
                 service
@@ -393,9 +482,10 @@ impl AgentaMcpServer {
                 "unsupported search action: {other}"
             ))),
         }
-        .map_err(error_to_rmcp)?;
+        .map_err(error_to_rmcp);
+        self.log_tool_result("search", &action, &envelope).await;
 
-        Ok(Json(envelope))
+        envelope.map(Json)
     }
 }
 

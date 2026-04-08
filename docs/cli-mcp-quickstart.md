@@ -1,141 +1,114 @@
-# CLI / MCP Quickstart
+# Agenta Desktop / CLI / MCP 快速开始
 
-This document describes the current stable first-milestone surface for Agenta.
+本文档反映第二里程碑基线：Desktop 负责托管 MCP 生命周期与可视化日志，CLI 与 Standalone MCP 仍保持独立入口。
 
-## Runtime Config
+## 1. 命名与入口
 
-Agenta loads config in this order:
+- 桌面产品名：`Agenta`
+- 桌面二进制：`agenta-desktop`
+- CLI 正式入口：`agenta`
+- CLI 兼容别名：`agenta-cli`
+- Standalone MCP：`agenta-mcp`
 
-1. `--config <path>`
-2. `AGENTA_CONFIG`
-3. `agenta.local.yaml` in the current working directory
-4. built-in defaults
+## 2. 配置
 
-Committed template: `agenta.example.yaml`
+Agenta 采用 YAML-first 配置：
 
-Current config keys:
+- 模板：`agenta.example.yaml`
+- 本地覆盖：`agenta.local.yaml`
 
-- `paths.data_dir`
-- `paths.database_path`
-- `paths.attachments_dir`
-- `mcp.bind`
-- `mcp.path`
-- `policy.default`
-- `policy.actions`
+MCP 配置面如下：
 
-If no config is provided, the database and attachments default to the system application data directory.
+```yaml
+mcp:
+  bind: 127.0.0.1:8787
+  path: /mcp
+  autostart: false
+  log:
+    level: info
+    # 未显式声明 destinations 时按宿主类型套默认值：
+    # Desktop 托管 => [ui, file]
+    # Standalone agenta-mcp => [stdout]
+    file:
+      path: ./local-data/logs/mcp.jsonl
+    ui:
+      buffer_lines: 1000
+```
 
-## CLI Surface
+当未提供 `--config` 且当前目录不存在 `agenta.local.yaml` 时，数据库、附件和 MCP 文件日志默认落到系统应用数据目录。
 
-Binary:
+## 3. CLI 快速开始
 
-`cargo run --manifest-path src-tauri/Cargo.toml --bin agenta-cli -- ...`
-
-Top-level command groups:
-
-- `project`
-- `version`
-- `task`
-- `note`
-- `attachment`
-- `search`
-
-Current commands:
-
-- `project create|get|list|update`
-- `version create|get|list|update`
-- `task create|get|list|update`
-- `note create|list`
-- `attachment create|get|list`
-- `search query`
-
-Current CLI conventions:
-
-- Default output is JSON.
-- Add `--human` for summary-first output.
-- Object references use the existing human-facing identifier for that command:
-  `project` uses project slug or project id.
-  `version` uses version id.
-  `task` uses task id.
-  `attachment` get uses attachment id.
-- `search query` accepts `--text` and also supports `--query` as an alias.
-
-### Example Flow
-
-Create a project:
+查看帮助：
 
 ```powershell
-cargo run --manifest-path src-tauri/Cargo.toml --bin agenta-cli -- `
+cargo run --manifest-path src-tauri/Cargo.toml --bin agenta -- --help
+```
+
+兼容别名仍可使用：
+
+```powershell
+cargo run --manifest-path src-tauri/Cargo.toml --bin agenta-cli -- --help
+```
+
+创建项目：
+
+```powershell
+cargo run --manifest-path src-tauri/Cargo.toml --bin agenta -- `
   project create --slug demo --name "Demo Project"
 ```
 
-Create a version:
+创建任务：
 
 ```powershell
-cargo run --manifest-path src-tauri/Cargo.toml --bin agenta-cli -- `
-  version create --project demo --name "v1"
+cargo run --manifest-path src-tauri/Cargo.toml --bin agenta -- `
+  task create --project demo --title "Ship runtime console" --summary "Desktop-hosted MCP baseline"
 ```
 
-Create a task:
+CLI 默认输出 JSON。
+
+## 4. Desktop Runtime 控制台
+
+桌面启动后，Runtime 页面现在是 MCP 控制台，默认行为如下：
+
+- Desktop 启动时 MCP 默认为 `stopped`
+- 由 Runtime 页面显式启动
+- 退出 App 时优雅停止
+- 本阶段不包含 tray、后台常驻、关窗保活或 daemon 化
+
+Runtime 控制台支持：
+
+- 查询 MCP 五态状态机：`stopped / starting / running / stopping / failed`
+- 本次启动覆盖：`bind`、`path`、`autostart`、`log level`、`destinations`、`file path`、`ui buffer`
+- 显式保存为默认值，仅在存在 `loaded_config_path` 时可用
+- 结构化日志快照与实时增量事件
+- 失败后的就地恢复与打开日志目录
+
+## 5. Standalone MCP
+
+启动独立 MCP：
 
 ```powershell
-cargo run --manifest-path src-tauri/Cargo.toml --bin agenta-cli -- `
-  task create --project demo --title "Wire the CLI"
+cargo run --manifest-path src-tauri/Cargo.toml --bin agenta-mcp
 ```
 
-Add a note:
+默认健康检查：
 
-```powershell
-cargo run --manifest-path src-tauri/Cargo.toml --bin agenta-cli -- `
-  note create --task <task-id> --content "First milestone note"
+```text
+GET http://127.0.0.1:8787/health
 ```
 
-Attach a file:
+默认挂载点：
 
-```powershell
-cargo run --manifest-path src-tauri/Cargo.toml --bin agenta-cli -- `
-  attachment create --task <task-id> --path .\sample.log --summary "Build log"
+```text
+http://127.0.0.1:8787/mcp
 ```
 
-Fetch an attachment directly:
+Standalone `agenta-mcp` 默认走 `stdout` 日志；若显式配置 `mcp.log.destinations`，则按配置覆盖。
 
-```powershell
-cargo run --manifest-path src-tauri/Cargo.toml --bin agenta-cli -- `
-  attachment get --attachment <attachment-id>
-```
+## 6. MCP 工具面
 
-Search:
-
-```powershell
-cargo run --manifest-path src-tauri/Cargo.toml --bin agenta-cli -- `
-  search query --query "milestone"
-```
-
-## MCP Surface
-
-Binary:
-
-`cargo run --manifest-path src-tauri/Cargo.toml --bin agenta-mcp`
-
-Current transport:
-
-- `streamable_http`
-
-Default bind path:
-
-- bind address from `mcp.bind`
-- mount path from `mcp.path`
-
-Default config value today:
-
-- `127.0.0.1:8787`
-- `/mcp`
-
-Health endpoint:
-
-- `GET /health`
-
-Current MCP tools:
+当前工具族保持不变：
 
 - `project`
 - `version`
@@ -144,107 +117,4 @@ Current MCP tools:
 - `attachment`
 - `search`
 
-Current MCP action matrix:
-
-- `project`: `create|get|list|update`
-- `version`: `create|get|list|update`
-- `task`: `create|get|list|update`
-- `note`: `create|list`
-- `attachment`: `create|get|list`
-- `search`: `query`
-
-Current tool argument conventions:
-
-- `project.get` accepts `project` and also supports `slug`.
-- `search.query` accepts `text` and also supports `query`.
-- `attachment.get` uses `attachment_id`.
-- `note.list` returns only note activities, not the full activity timeline.
-
-### Example MCP Tool Calls
-
-Create a project:
-
-```json
-{
-  "name": "project",
-  "arguments": {
-    "action": "create",
-    "slug": "demo",
-    "name": "Demo Project"
-  }
-}
-```
-
-Create a task:
-
-```json
-{
-  "name": "task",
-  "arguments": {
-    "action": "create",
-    "project": "demo",
-    "title": "Wire MCP contract"
-  }
-}
-```
-
-Fetch an attachment:
-
-```json
-{
-  "name": "attachment",
-  "arguments": {
-    "action": "get",
-    "attachment_id": "<attachment-id>"
-  }
-}
-```
-
-Search:
-
-```json
-{
-  "name": "search",
-  "arguments": {
-    "action": "query",
-    "query": "milestone",
-    "limit": 10
-  }
-}
-```
-
-## Response Shape
-
-CLI success envelope:
-
-```json
-{
-  "ok": true,
-  "action": "task.create",
-  "result": {},
-  "summary": "Created task",
-  "warnings": []
-}
-```
-
-CLI error envelope:
-
-```json
-{
-  "ok": false,
-  "error": {
-    "code": "not_found",
-    "message": "resource not found: task ...",
-    "details": {}
-  }
-}
-```
-
-MCP tool responses carry the same payload in structured content.
-
-## Current Limits
-
-- Desktop is not yet the primary interaction surface.
-- `version`, `task`, and `attachment` direct lookup currently rely on ids except for task/project list filters.
-- MCP `stdio` is not the default first transport.
-- The desktop shell has not yet been reconnected to full project/task views.
+每个工具继续采用 `action + structured arguments` 模型，并返回统一结构化结果。

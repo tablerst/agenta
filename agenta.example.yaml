@@ -6,6 +6,16 @@ paths:
 mcp:
   bind: 127.0.0.1:8787
   path: /mcp
+  autostart: false
+  log:
+    level: info
+    # Omit destinations to use host defaults:
+    # desktop-managed MCP => [ui, file]
+    # standalone agenta-mcp => [stdout]
+    file:
+      path: ./local-data/logs/mcp.jsonl
+    ui:
+      buffer_lines: 1000
 
 policy:
   default: auto

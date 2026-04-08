@@ -4,6 +4,11 @@ import type {
   ApprovalStatus,
   Attachment,
   AttachmentKind,
+  McpLaunchOverrides,
+  McpLogEntry,
+  McpLogSnapshot,
+  McpLogLevel,
+  McpRuntimeStatus,
   Project,
   RuntimeStatus,
   SearchResponse,
@@ -30,9 +35,116 @@ interface MockState {
 const PREVIEW_WARNING = "Running in browser preview mode with seeded local data.";
 
 const previewNow = Date.now();
+const PREVIEW_MCP_LOG_FILE = "D:/preview/agenta/data/logs/mcp.jsonl";
+
+let mcpRuntime = createPreviewMcpRuntime();
+let mcpLogs: McpLogEntry[] = [];
 
 function iso(hoursAgo: number) {
   return new Date(previewNow - hoursAgo * 60 * 60 * 1000).toISOString();
+}
+
+function createPreviewMcpRuntime(overrides: Partial<McpRuntimeStatus> = {}): McpRuntimeStatus {
+  return {
+    state: "stopped",
+    session_id: null,
+    bind: "127.0.0.1:8787",
+    actual_bind: null,
+    path: "/mcp",
+    autostart: false,
+    log_level: "info",
+    log_destinations: ["ui", "file"],
+    log_file_path: PREVIEW_MCP_LOG_FILE,
+    log_ui_buffer_lines: 1000,
+    last_error: null,
+    ...overrides,
+  };
+}
+
+function normalizeMcpPath(path?: string | null) {
+  const trimmed = path?.trim() ?? "";
+  if (!trimmed) {
+    return "/mcp";
+  }
+  if (trimmed === "/") {
+    return "/mcp";
+  }
+  return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+}
+
+function resolveActualBind(bind: string) {
+  if (bind.endsWith(":0")) {
+    return "127.0.0.1:9450";
+  }
+  return bind;
+}
+
+function pushMcpLog(
+  level: McpLogLevel,
+  component: string,
+  message: string,
+  fields: Record<string, unknown> = {},
+) {
+  if (!mcpRuntime.session_id) {
+    return;
+  }
+  const entry: McpLogEntry = {
+    session_id: mcpRuntime.session_id,
+    timestamp: new Date().toISOString(),
+    level,
+    component,
+    message,
+    fields,
+  };
+  mcpLogs = [...mcpLogs, entry].slice(-mcpRuntime.log_ui_buffer_lines);
+}
+
+function startPreviewMcp(input: McpLaunchOverrides = {}) {
+  const bind = input.bind?.trim() || mcpRuntime.bind;
+  const path = normalizeMcpPath(input.path);
+  const nextDestinations =
+    input.log_destinations && input.log_destinations.length > 0
+      ? [...input.log_destinations]
+      : [...mcpRuntime.log_destinations];
+  mcpLogs = [];
+  mcpRuntime = createPreviewMcpRuntime({
+    ...mcpRuntime,
+    state: "running",
+    session_id: crypto.randomUUID(),
+    bind,
+    actual_bind: resolveActualBind(bind),
+    path,
+    autostart: input.autostart ?? mcpRuntime.autostart,
+    log_level: input.log_level ?? mcpRuntime.log_level,
+    log_destinations: nextDestinations,
+    log_file_path: input.log_file_path?.trim() || mcpRuntime.log_file_path,
+    log_ui_buffer_lines:
+      typeof input.log_ui_buffer_lines === "number" && input.log_ui_buffer_lines > 0
+        ? input.log_ui_buffer_lines
+        : mcpRuntime.log_ui_buffer_lines,
+    last_error: null,
+  });
+  pushMcpLog("info", "mcp_supervisor", "Starting preview desktop-managed MCP host", {
+    bind: mcpRuntime.bind,
+    path: mcpRuntime.path,
+  });
+  pushMcpLog("info", "mcp_supervisor", "Preview desktop-managed MCP host is running", {
+    actual_bind: mcpRuntime.actual_bind,
+    path: mcpRuntime.path,
+  });
+}
+
+function stopPreviewMcp() {
+  if (mcpRuntime.state === "running") {
+    pushMcpLog("info", "mcp_supervisor", "Stopping preview desktop-managed MCP host");
+  }
+  mcpRuntime = createPreviewMcpRuntime({
+    ...mcpRuntime,
+    state: "stopped",
+    session_id: null,
+    actual_bind: null,
+    last_error: null,
+  });
 }
 
 function createSeedState(): MockState {
@@ -733,6 +845,7 @@ function runtimeStatus(): RuntimeStatus {
     data_dir: "D:/preview/agenta/data",
     database_path: "D:/preview/agenta/data/agenta.sqlite3",
     attachments_dir: "D:/preview/agenta/data/attachments",
+    loaded_config_path: "D:/preview/agenta/agenta.local.yaml",
     mcp_bind: "127.0.0.1:8787",
     mcp_path: "/mcp",
     project_count: state.projects.length,
@@ -744,6 +857,28 @@ function runtimeStatus(): RuntimeStatus {
 export const mockDesktopBridge = {
   status() {
     return Promise.resolve(envelope("desktop_status", runtimeStatus(), "Loaded preview runtime status."));
+  },
+  mcpStatus() {
+    return Promise.resolve(envelope("desktop_mcp_status", mcpRuntime, "Loaded preview MCP runtime status."));
+  },
+  mcpStart(input: McpLaunchOverrides = {}) {
+    startPreviewMcp(input);
+    return Promise.resolve(envelope("desktop_mcp_start", mcpRuntime, "Started preview MCP host."));
+  },
+  mcpStop() {
+    stopPreviewMcp();
+    return Promise.resolve(envelope("desktop_mcp_stop", mcpRuntime, "Stopped preview MCP host."));
+  },
+  mcpLogsSnapshot(limit?: number) {
+    const entries =
+      typeof limit === "number" && limit > 0 ? mcpLogs.slice(Math.max(0, mcpLogs.length - limit)) : mcpLogs;
+    const snapshot: McpLogSnapshot = {
+      session_id: mcpRuntime.session_id,
+      entries,
+    };
+    return Promise.resolve(
+      envelope("desktop_mcp_logs_snapshot", snapshot, "Loaded preview MCP log snapshot."),
+    );
   },
   project(input: JsonMap = {}) {
     const action = typeof input.action === "string" ? input.action : "list";
@@ -857,10 +992,15 @@ export const mockDesktopBridge = {
   search(input: JsonMap = {}) {
     return Promise.resolve(envelope("desktop_search", runSearch(input), "Loaded preview search results."));
   },
+  openPath(_path?: string) {
+    return Promise.resolve();
+  },
   revealAttachment(_path?: string) {
     return Promise.resolve();
   },
   reset() {
     state = createSeedState();
+    mcpRuntime = createPreviewMcpRuntime();
+    mcpLogs = [];
   },
 };

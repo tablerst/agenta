@@ -1,59 +1,52 @@
 # Agenta
 
-Agenta (Agentic + Agenda) is a local-first task and context service for agent hosts. The current milestone keeps the repository as a single Tauri package while establishing a shared Rust core, SQLite storage, a CLI, and an MCP HTTP server.
+Agenta is a local-first task and context service for agent hosts. The current active baseline is the second milestone: the desktop app now carries the MCP host lifecycle and exposes a Runtime console for launch control, structured logs, and failure recovery.
 
-## Current Milestone
+## Distribution
 
-- Shared Rust core inside `src-tauri`
-- SQLite metadata storage and local attachment storage
-- YAML-first runtime configuration with system app data as the default root
-- CLI entrypoint in `src-tauri/src/bin/agenta-cli.rs`
-- MCP `streamable_http` entrypoint in `src-tauri/src/bin/agenta-mcp.rs`
-- Desktop shell wired back to the shared contract with project/task/approval/runtime views
+- Desktop product name: `Agenta`
+- Desktop binary: `agenta-desktop`
+- Canonical CLI: `agenta`
+- CLI compatibility alias: `agenta-cli`
+- Standalone MCP binary: `agenta-mcp`
+
+## Current Structure
+
+- Shared Rust core, app runtime, CLI, and MCP server live under `src-tauri`
+- Desktop commands and Runtime console live in the Tauri shell and `src/views/RuntimeView.vue`
+- Runtime configuration is YAML-first and defaults to system application data directories
+- Desktop-managed MCP defaults to manual start from the Runtime console and stops gracefully with the app
 
 ## Commands
 
+- `bun run dev`
 - `bun run build`
 - `cargo check --manifest-path src-tauri/Cargo.toml`
 - `cargo test --manifest-path src-tauri/Cargo.toml`
+- `cargo run --manifest-path src-tauri/Cargo.toml --bin agenta -- --help`
 - `cargo run --manifest-path src-tauri/Cargo.toml --bin agenta-cli -- --help`
 - `cargo run --manifest-path src-tauri/Cargo.toml --bin agenta-mcp -- --help`
 
-## Quick Start
+## Runtime Configuration
 
-1. Create a local config from `agenta.example.yaml` if you want an explicit data location.
-2. Create a project with the CLI:
-   `cargo run --manifest-path src-tauri/Cargo.toml --bin agenta-cli -- project create --slug demo --name "Demo Project"`
-3. Add a task:
-   `cargo run --manifest-path src-tauri/Cargo.toml --bin agenta-cli -- task create --project demo --title "First task"`
-4. Start the MCP server:
-   `cargo run --manifest-path src-tauri/Cargo.toml --bin agenta-mcp`
+Use `agenta.example.yaml` as the committed template. The MCP section now supports:
 
-For the stable command/tool surface and end-to-end examples, see [docs/cli-mcp-quickstart.md](E:\JetBrains\RustRover\agenta\docs\cli-mcp-quickstart.md).
-
-## Configuration
-
-Agenta uses YAML-first runtime configuration:
-
-- committed template: `agenta.example.yaml`
-- machine-local override: `agenta.local.yaml`
-
-If no override is provided, runtime data defaults to the system application data directory.
-
-The config shape currently supports:
-
-- `paths.data_dir`
-- `paths.database_path`
-- `paths.attachments_dir`
 - `mcp.bind`
 - `mcp.path`
-- `policy.default`
-- `policy.actions`
+- `mcp.autostart`
+- `mcp.log.level`
+- `mcp.log.destinations`
+- `mcp.log.file.path`
+- `mcp.log.ui.buffer_lines`
 
-## Current Verification
+When `mcp.log.destinations` is omitted, defaults depend on the host:
 
-The current implementation has been verified with:
+- Desktop-managed MCP: `ui + file`
+- Standalone `agenta-mcp`: `stdout`
 
-- `bun run build`
-- `cargo check --manifest-path src-tauri/Cargo.toml`
-- `cargo test --manifest-path src-tauri/Cargo.toml`
+## Documentation
+
+- Quickstart: [docs/cli-mcp-quickstart.md](/e:/JetBrains/RustRover/agenta/docs/cli-mcp-quickstart.md)
+- Active execution plans: [dev_docs/execution-plans/active](/e:/JetBrains/RustRover/agenta/dev_docs/execution-plans/active)
+- Product baseline: [dev_docs/baseline.md](/e:/JetBrains/RustRover/agenta/dev_docs/baseline.md)
+- Architecture notes: [dev_docs/architecture.md](/e:/JetBrains/RustRover/agenta/dev_docs/architecture.md)

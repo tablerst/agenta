@@ -46,7 +46,7 @@ impl FromStr for WriteDecision {
     }
 }
 
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct RawPolicyConfig {
     pub default: Option<WriteDecision>,
     pub actions: Option<HashMap<String, WriteDecision>>,

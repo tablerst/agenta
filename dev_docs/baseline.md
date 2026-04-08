@@ -1,5 +1,17 @@
 # Agenta Product Baseline
 
+## 2026-04 第二里程碑补充
+
+以下口径以第二里程碑 active 基线为准，并覆盖此前“Desktop 不进入首个主交付面”的阶段性表述：
+
+- 代码层继续保持 `core + app + cli + mcp` 四层关系
+- 分发层固定为 `Desktop 主体 / CLI 主命令 / Standalone MCP 可选`
+- Desktop 默认承载 MCP 生命周期与 Runtime 控制台，但默认不自动启动 MCP
+- CLI 正式入口为 `agenta`，`agenta-cli` 作为兼容别名保留
+- Desktop 二进制固定为 `agenta-desktop`，Tauri `productName` 保持 `Agenta`
+- MCP 状态机固定为 `stopped / starting / running / stopping / failed`
+- MCP 日志与 app shell tracing 分离，Desktop 默认 `ui + file`，Standalone 默认 `stdout`
+
 ## 1. 文档定位
 
 这份文档是 Agenta 当前的唯一产品基线文档。

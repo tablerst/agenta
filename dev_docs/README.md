@@ -1,23 +1,24 @@
 # Agenta Docs Index
 
-当前正式文档只认下面几份：
+当前正式文档以第二里程碑基线为准，重点围绕 Desktop 托管 MCP、CLI 主命令和 Standalone MCP 的分工收口。
 
-- [baseline.md](/e:/JetBrains/RustRover/agenta/dev_docs/baseline.md): 产品基线、MVP 范围、核心对象、能力边界
-- [tech.md](/e:/JetBrains/RustRover/agenta/dev_docs/tech.md): 技术架构、代码组织、存储与接口策略
-- [deps_build.md](/e:/JetBrains/RustRover/agenta/dev_docs/deps_build.md): 依赖、feature、构建与打包口径
-- [migration_plan.md](/e:/JetBrains/RustRover/agenta/dev_docs/migration_plan.md): 从当前 scaffold 到目标架构的迁移顺序
+## 正式文档
 
-`dev_docs/draft/` 只保留为历史草稿，不再作为实施依据。
+- [baseline.md](/e:/JetBrains/RustRover/agenta/dev_docs/baseline.md)：产品基线、里程碑边界与默认决策
+- [architecture.md](/e:/JetBrains/RustRover/agenta/dev_docs/architecture.md)：当前可执行架构、入口关系与 Desktop 托管方式
+- [tech.md](/e:/JetBrains/RustRover/agenta/dev_docs/tech.md)：技术实现与模块组织
+- [migration_plan.md](/e:/JetBrains/RustRover/agenta/dev_docs/migration_plan.md)：迁移和阶段推进背景
+- [../docs/cli-mcp-quickstart.md](/e:/JetBrains/RustRover/agenta/docs/cli-mcp-quickstart.md)：Desktop / CLI / MCP 快速开始
 
-辅助使用文档：
+## 执行计划
 
-- [cli-mcp-quickstart.md](/e:/JetBrains/RustRover/agenta/docs/cli-mcp-quickstart.md): 当前 CLI / MCP 对外使用面、配置和示例流程
+- [execution-plans/active/second-milestone-desktop-mcp-console.md](/e:/JetBrains/RustRover/agenta/dev_docs/execution-plans/active/second-milestone-desktop-mcp-console.md)：第二里程碑 active 基线
+- [execution-plans/archive/first-milestone-core-cli-mcp.md](/e:/JetBrains/RustRover/agenta/dev_docs/execution-plans/archive/first-milestone-core-cli-mcp.md)：第一里程碑归档
 
-当前默认决策：
+## 当前默认决策
 
-- MVP 先交付 CLI + MCP，不把 Desktop 设为首个必交项
-- Rust 主线锁定 `SQLx + SQLite`
-- MCP 首发以 `streamable_http` 为主，`stdio` 延后补充
-- 默认构建不包含向量后端或 sidecar
-- 前端包管理保持 `bun`
-- 数据库与附件默认落在系统应用数据目录
+- Desktop 产品名保持 `Agenta`，二进制为 `agenta-desktop`
+- CLI 正式入口为 `agenta`，`agenta-cli` 作为兼容别名保留
+- Standalone MCP 继续使用 `agenta-mcp`
+- Desktop 默认承载 MCP 生命周期与 Runtime 控制台，但 MCP 默认为手动启动
+- YAML-first 配置继续生效，MCP 日志按宿主类型套用默认 destinations

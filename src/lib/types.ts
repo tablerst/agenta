@@ -125,11 +125,55 @@ export interface RuntimeStatus {
   data_dir: string;
   database_path: string;
   attachments_dir: string;
+  loaded_config_path: string | null;
   mcp_bind: string;
   mcp_path: string;
   project_count: number;
   task_count: number;
   pending_approval_count: number;
+}
+
+export type McpLifecycleState = "stopped" | "starting" | "running" | "stopping" | "failed";
+export type McpLogLevel = "trace" | "debug" | "info" | "warn" | "error";
+export type McpLogDestination = "ui" | "stdout" | "file";
+
+export interface McpRuntimeStatus {
+  state: McpLifecycleState;
+  session_id: string | null;
+  bind: string;
+  actual_bind: string | null;
+  path: string;
+  autostart: boolean;
+  log_level: McpLogLevel;
+  log_destinations: McpLogDestination[];
+  log_file_path: string;
+  log_ui_buffer_lines: number;
+  last_error: string | null;
+}
+
+export interface McpLaunchOverrides {
+  bind?: string | null;
+  path?: string | null;
+  autostart?: boolean | null;
+  log_level?: McpLogLevel | null;
+  log_destinations?: McpLogDestination[] | null;
+  log_file_path?: string | null;
+  log_ui_buffer_lines?: number | null;
+  save_as_default?: boolean | null;
+}
+
+export interface McpLogEntry {
+  session_id: string;
+  timestamp: string;
+  level: McpLogLevel;
+  component: string;
+  message: string;
+  fields: Record<string, unknown>;
+}
+
+export interface McpLogSnapshot {
+  session_id: string | null;
+  entries: McpLogEntry[];
 }
 
 export interface SearchTaskHit {
