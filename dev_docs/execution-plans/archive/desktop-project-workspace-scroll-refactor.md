@@ -79,4 +79,4 @@
 | [x] | 同步前端类型、预览桥接与搜索跳转 | 兼容新工作区路径 |
 | [x] | 完成前端构建与 Rust 检查 | `bun run build`、`cargo check` 通过 |
 | [x] | 完成 Rust 测试回归 | `cargo test --manifest-path src-tauri/Cargo.toml` 通过 |
-| [ ] | 完成 Rust 测试与手动视口验收记录 | 继续执行 `cargo test` 与手动桌面验收 |
+| [x] | 完成手动视口验收记录 | 用户已完成验收，当前结果满足阶段性要求 |
