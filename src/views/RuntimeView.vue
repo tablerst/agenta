@@ -19,6 +19,7 @@ import type {
   McpLaunchOverrides,
   McpLogDestination,
   McpLogEntry,
+  McpLogLevel,
   McpRuntimeStatus,
   RuntimeStatus,
 } from "../lib/types";
@@ -32,7 +33,10 @@ const busy = ref(false);
 const loadedAt = ref<string>("");
 const saveAsDefault = ref(false);
 const unlisteners: Array<() => void> = [];
-const { t } = useI18n({ useScope: "global" });
+const { locale, t } = useI18n({ useScope: "global" });
+
+const logLevelOptions: McpLogLevel[] = ["trace", "debug", "info", "warn", "error"];
+const logDestinationOptions: McpLogDestination[] = ["ui", "stdout", "file"];
 
 const form = reactive({
   bind: "",
@@ -47,8 +51,9 @@ const isTransitioning = computed(
   () => mcp.value?.state === "starting" || mcp.value?.state === "stopping",
 );
 const endpointLabel = computed(() => {
+  void locale.value;
   if (!mcp.value) {
-    return "N/A";
+    return t("common.na");
   }
   return `${mcp.value.actual_bind ?? mcp.value.bind}${mcp.value.path}`;
 });
@@ -81,6 +86,26 @@ function logLevelClass(level: McpLogEntry["level"]) {
     default:
       return "status-pill";
   }
+}
+
+function formatRuntimeState(state: McpRuntimeStatus["state"]) {
+  void locale.value;
+  return t(`runtime.state.${state}`);
+}
+
+function formatLogLevel(level: McpLogLevel) {
+  void locale.value;
+  return t(`runtime.logLevels.${level}`);
+}
+
+function formatLogDestinations(destinations: McpLogDestination[]) {
+  void locale.value;
+  return destinations.map((destination) => t(`runtime.destinations.${destination}`)).join(" + ");
+}
+
+function formatLogDestination(destination: McpLogDestination) {
+  void locale.value;
+  return t(`runtime.destinations.${destination}`);
 }
 
 function hydrateForm(status: McpRuntimeStatus | null) {
@@ -164,7 +189,7 @@ async function startMcp() {
     hydrateForm(envelope.result);
     await Promise.all([refreshLogs(), loadDesktopStatus()]);
     saveAsDefault.value = false;
-    shell.pushNotice("success", t("runtime.notices.started"));
+    shell.pushNotice("success", t("notices.runtimeStarted"));
   } catch (error) {
     shell.pushNotice("error", formatDesktopError(error, t));
   } finally {
@@ -178,7 +203,7 @@ async function stopMcp() {
     const envelope = await desktopBridge.mcpStop();
     mcp.value = envelope.result;
     await refreshLogs();
-    shell.pushNotice("info", t("runtime.notices.stopped"));
+    shell.pushNotice("info", t("notices.runtimeStopped"));
   } catch (error) {
     shell.pushNotice("error", formatDesktopError(error, t));
   } finally {
@@ -238,7 +263,7 @@ onUnmounted(() => {
             </p>
           </div>
           <div class="flex flex-wrap items-center gap-2">
-            <span :class="statusClass">{{ t(`runtime.state.${mcp?.state ?? "stopped"}`) }}</span>
+            <span :class="statusClass">{{ formatRuntimeState(mcp?.state ?? "stopped") }}</span>
             <span class="status-pill">{{ formatDateTime(loadedAt) }}</span>
           </div>
         </div>
@@ -250,7 +275,7 @@ onUnmounted(() => {
             <Activity :size="16" />
             <p class="section-label !mb-0">{{ t("runtime.lifecycle") }}</p>
           </div>
-          <p class="text-2xl font-semibold">{{ t(`runtime.state.${mcp.state}`) }}</p>
+          <p class="text-2xl font-semibold">{{ formatRuntimeState(mcp.state) }}</p>
           <p class="mt-2 text-sm text-[var(--text-muted)]">{{ mcp.session_id ?? t("runtime.noSession") }}</p>
         </section>
 
@@ -270,7 +295,7 @@ onUnmounted(() => {
             <FileText :size="16" />
             <p class="section-label !mb-0">{{ t("runtime.logRouting") }}</p>
           </div>
-          <p class="text-sm font-medium">{{ mcp.log_destinations.join(" + ") }}</p>
+          <p class="text-sm font-medium">{{ formatLogDestinations(mcp.log_destinations) }}</p>
           <p class="mt-2 text-sm text-[var(--text-muted)]">
             {{ t("runtime.bufferSize", { count: mcp.log_ui_buffer_lines }) }}
           </p>
@@ -331,11 +356,9 @@ onUnmounted(() => {
             <label class="form-field">
               <span class="field-label">{{ t("runtime.fields.logLevel") }}</span>
               <select v-model="form.logLevel" class="control-select">
-                <option value="trace">trace</option>
-                <option value="debug">debug</option>
-                <option value="info">info</option>
-                <option value="warn">warn</option>
-                <option value="error">error</option>
+                <option v-for="level in logLevelOptions" :key="level" :value="level">
+                  {{ formatLogLevel(level) }}
+                </option>
               </select>
             </label>
             <label class="form-field">
@@ -351,29 +374,17 @@ onUnmounted(() => {
           <div class="mt-4 grid gap-4 md:grid-cols-2">
             <section class="panel-section">
               <p class="section-label">{{ t("runtime.logDestinations") }}</p>
-              <label class="runtime-option-row">
+              <label
+                v-for="destination in logDestinationOptions"
+                :key="destination"
+                class="runtime-option-row"
+              >
                 <input
-                  :checked="form.logDestinations.includes('ui')"
+                  :checked="form.logDestinations.includes(destination)"
                   type="checkbox"
-                  @change="toggleDestination('ui')"
+                  @change="toggleDestination(destination)"
                 />
-                <span>ui</span>
-              </label>
-              <label class="runtime-option-row">
-                <input
-                  :checked="form.logDestinations.includes('stdout')"
-                  type="checkbox"
-                  @change="toggleDestination('stdout')"
-                />
-                <span>stdout</span>
-              </label>
-              <label class="runtime-option-row">
-                <input
-                  :checked="form.logDestinations.includes('file')"
-                  type="checkbox"
-                  @change="toggleDestination('file')"
-                />
-                <span>file</span>
+                <span>{{ formatLogDestination(destination) }}</span>
               </label>
             </section>
 
@@ -434,7 +445,7 @@ onUnmounted(() => {
           <div v-else class="runtime-log-list">
             <article v-for="entry in visibleLogs" :key="`${entry.timestamp}-${entry.component}-${entry.message}`" class="runtime-log-row">
               <div class="runtime-log-meta">
-                <span :class="logLevelClass(entry.level)">{{ entry.level }}</span>
+                <span :class="logLevelClass(entry.level)">{{ formatLogLevel(entry.level) }}</span>
                 <span>{{ formatDateTime(entry.timestamp) }}</span>
                 <span>{{ entry.component }}</span>
               </div>

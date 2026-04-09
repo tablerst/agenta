@@ -130,6 +130,14 @@ Do **not** use watchers to simulate missing state design.
 - When a workflow becomes complex, model it as a reducer-like state machine or a focused store/composable.
 - Derived display labels should be generated, not manually synchronized.
 
+## Internationalization Standards
+
+- Route titles, navigation labels, buttons, form labels, empty states, notices, status text, and other operator-facing UI copy must be sourced through `vue-i18n`.
+- When adding or changing UI copy, update both `en` and `zh-CN` entries in `src/i18n/messages.ts` in the same change. Missing keys that fall back to raw `foo.bar.baz` text are regressions.
+- Keep translation keys namespaced by feature and purpose, for example `runtime.actions.start`, `tasks.fields.title`, or `notices.runtimeStarted`. Do not mix unrelated namespaces for the same copy type.
+- Backend payloads, file paths, MCP component identifiers, and log message bodies may stay verbatim when they originate outside the UI, but the surrounding chrome that labels or explains them must still be localized.
+- Avoid hard-coded display enums in templates. If the UI shows transport values such as status, priority, log level, or destination, map them through localized keys before rendering.
+
 ## Rendering and Performance Guidance
 
 ### High-Value Defaults

@@ -88,3 +88,29 @@ GET http://127.0.0.1:8787/health
 ```text
 http://127.0.0.1:8787/mcp
 ```
+
+## MCP 工具面
+
+当前 MCP 发布面使用显式工具名，不再采用 `action` 多路复用：
+
+- `project_create` / `project_get` / `project_list` / `project_update`
+- `version_create` / `version_get` / `version_list` / `version_update`
+- `task_create` / `task_get` / `task_list` / `task_update`
+- `note_create` / `note_list`
+- `attachment_create` / `attachment_get` / `attachment_list`
+- `search_query`
+
+约束：
+
+- 工具命名遵循 `^[A-Za-z][A-Za-z0-9_]{0,63}$`
+- 不使用点号 `.`，以保证跨 provider 最小兼容性
+- `tools/list` 会直接暴露字段说明、必填项与枚举值
+
+已废弃的旧 MCP 工具名：
+
+- `project`
+- `version`
+- `task`
+- `note`
+- `attachment`
+- `search`

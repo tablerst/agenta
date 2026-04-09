@@ -3,7 +3,7 @@ use std::{path::Path, process::Command, sync::Arc, time::Duration};
 use assert_cmd::cargo::cargo_bin;
 use agenta_lib::{
     app::{AppRuntime, BootstrapOptions, McpHostKind, McpLaunchOverrides, McpSessionLogger},
-    interface::{mcp::AgentaMcpServer, response::SuccessEnvelope},
+    interface::mcp::AgentaMcpServer,
     service::{
         CreateAttachmentInput, CreateNoteInput, CreateProjectInput, CreateTaskInput,
         CreateVersionInput, SearchInput,
@@ -21,6 +21,7 @@ use rmcp::{
         },
     },
 };
+use serde_json::Value;
 use tempfile::tempdir;
 use tokio::net::TcpListener;
 
@@ -222,13 +223,35 @@ async fn mcp_streamable_http_lists_tools_and_calls_project_tool() {
     let client = ().serve(transport).await.expect("connect rmcp client");
 
     let tools = client.list_all_tools().await.expect("list tools");
-    assert!(tools.iter().any(|tool| tool.name == "project"));
+    assert!(tools.iter().any(|tool| tool.name == "project_create"));
+    assert!(tools.iter().any(|tool| tool.name == "project_get"));
+    assert!(tools.iter().any(|tool| tool.name == "project_list"));
+    assert!(tools.iter().any(|tool| tool.name == "project_update"));
+    assert!(tools.iter().any(|tool| tool.name == "version_create"));
+    assert!(tools.iter().any(|tool| tool.name == "version_get"));
+    assert!(tools.iter().any(|tool| tool.name == "version_list"));
+    assert!(tools.iter().any(|tool| tool.name == "version_update"));
+    assert!(tools.iter().any(|tool| tool.name == "task_create"));
+    assert!(tools.iter().any(|tool| tool.name == "task_get"));
+    assert!(tools.iter().any(|tool| tool.name == "task_list"));
+    assert!(tools.iter().any(|tool| tool.name == "task_update"));
+    assert!(tools.iter().any(|tool| tool.name == "note_create"));
+    assert!(tools.iter().any(|tool| tool.name == "note_list"));
+    assert!(tools.iter().any(|tool| tool.name == "attachment_create"));
+    assert!(tools.iter().any(|tool| tool.name == "attachment_get"));
+    assert!(tools.iter().any(|tool| tool.name == "attachment_list"));
+    assert!(tools.iter().any(|tool| tool.name == "search_query"));
+    assert!(!tools.iter().any(|tool| tool.name == "project"));
+    assert!(!tools.iter().any(|tool| tool.name == "version"));
+    assert!(!tools.iter().any(|tool| tool.name == "task"));
+    assert!(!tools.iter().any(|tool| tool.name == "note"));
+    assert!(!tools.iter().any(|tool| tool.name == "attachment"));
+    assert!(!tools.iter().any(|tool| tool.name == "search"));
 
     let result = client
         .call_tool(
-            CallToolRequestParams::new("project").with_arguments(
+            CallToolRequestParams::new("project_create").with_arguments(
                 serde_json::json!({
-                    "action": "create",
                     "slug": "demo-mcp",
                     "name": "Demo MCP"
                 })
@@ -240,15 +263,15 @@ async fn mcp_streamable_http_lists_tools_and_calls_project_tool() {
         .await
         .expect("call project tool");
 
-    let envelope: SuccessEnvelope = serde_json::from_value(
+    let payload: Value = serde_json::from_value(
         result
             .structured_content
             .clone()
             .expect("structured MCP response"),
     )
     .expect("deserialize MCP response");
-    assert_eq!(envelope.action, "project.create");
-    assert_eq!(envelope.ok, true);
+    assert_eq!(payload["project"]["slug"], "demo-mcp");
+    assert_eq!(payload["project"]["name"], "Demo MCP");
 
     let _ = client.cancel().await;
     server.abort();

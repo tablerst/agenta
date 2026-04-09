@@ -1,5 +1,5 @@
 use rmcp::ErrorData;
-use schemars::JsonSchema;
+use schemars::{json_schema, JsonSchema, Schema, SchemaGenerator};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -9,6 +9,7 @@ use crate::error::{AppError, AppResult};
 pub struct SuccessEnvelope {
     pub ok: bool,
     pub action: String,
+    #[schemars(schema_with = "any_json_schema")]
     pub result: Value,
     pub summary: String,
     pub warnings: Vec<String>,
@@ -59,5 +60,34 @@ pub fn error_to_rmcp(error: AppError) -> ErrorData {
         "invalid_arguments" => ErrorData::invalid_params(error.message(), data),
         "not_found" => ErrorData::resource_not_found(error.message(), data),
         _ => ErrorData::internal_error(error.message(), data),
+    }
+}
+
+fn any_json_schema(_: &mut SchemaGenerator) -> Schema {
+    json_schema!({})
+}
+
+#[cfg(test)]
+mod tests {
+    use schemars::schema_for;
+
+    use super::SuccessEnvelope;
+
+    #[test]
+    fn success_envelope_result_schema_uses_object_schema_for_any_json() {
+        let schema = serde_json::to_value(schema_for!(SuccessEnvelope)).expect("serialize schema");
+        let result_schema = &schema["properties"]["result"];
+
+        assert!(
+            result_schema.is_object(),
+            "result schema should be an object"
+        );
+        assert!(
+            result_schema
+                .as_object()
+                .expect("result schema object")
+                .is_empty(),
+            "result schema should stay permissive for arbitrary JSON payloads"
+        );
     }
 }

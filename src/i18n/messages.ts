@@ -1,4 +1,4 @@
-export const messages = {
+const baseMessages = {
   en: {
     app: {
       name: "Agenta",
@@ -537,6 +537,158 @@ export const messages = {
       taskUpdated: "任务已更新。",
       versionCreated: "版本已创建。",
       versionUpdated: "版本已更新。",
+    },
+  },
+} as const;
+
+const localeOverrides = {
+  en: {
+    notices: {
+      runtimeStarted: "Desktop-managed MCP host started.",
+      runtimeStopped: "Desktop-managed MCP host stopped.",
+    },
+    runtime: {
+      actions: {
+        openLogDirectory: "Open log directory",
+        refresh: "Refresh",
+        refreshLogs: "Refresh logs",
+        retry: "Retry start",
+        start: "Start host",
+        stop: "Stop host",
+      },
+      bufferSize: "UI buffer: {count} lines",
+      configSource: "Config source",
+      destinations: {
+        file: "File",
+        stdout: "Stdout",
+        ui: "UI",
+      },
+      emptyLogs: "No runtime logs yet.",
+      endpoint: "Endpoint",
+      failedSummary: "The desktop-managed MCP host needs attention.",
+      fields: {
+        bind: "Bind address",
+        logFilePath: "Log file path",
+        logLevel: "Log level",
+        path: "Path",
+        saveAsDefault: "Save as default",
+        uiBufferLines: "UI buffer lines",
+      },
+      launchConfig: "Launch config",
+      launchConfigSummary: "Review and adjust the MCP launch settings before starting the host.",
+      lifecycle: "Lifecycle",
+      logDestinations: "Log destinations",
+      logLevels: {
+        debug: "Debug",
+        error: "Error",
+        info: "Info",
+        trace: "Trace",
+        warn: "Warn",
+      },
+      logRouting: "Log routing",
+      logs: "Logs",
+      logsSummary: "Live MCP host events and the most recent buffered log entries.",
+      noSession: "No active session",
+      persistence: "Persistence",
+      recovery: "Recovery",
+      requestedBind: "Requested bind:",
+      saveHint: "Persist this launch config back to the active runtime config file.",
+      state: {
+        failed: "Failed",
+        running: "Running",
+        starting: "Starting",
+        stopped: "Stopped",
+        stopping: "Stopping",
+      },
+      transientHint: "Load a persisted runtime config before saving defaults.",
+      transientSession: "Transient session",
+    },
+  },
+  "zh-CN": {
+    notices: {
+      runtimeStarted: "桌面托管的 MCP 主机已启动。",
+      runtimeStopped: "桌面托管的 MCP 主机已停止。",
+    },
+    runtime: {
+      actions: {
+        openLogDirectory: "打开日志目录",
+        refresh: "刷新",
+        refreshLogs: "刷新日志",
+        retry: "重试启动",
+        start: "启动主机",
+        stop: "停止主机",
+      },
+      bufferSize: "UI 缓冲区：{count} 行",
+      configSource: "配置来源",
+      destinations: {
+        file: "文件",
+        stdout: "标准输出",
+        ui: "界面",
+      },
+      emptyLogs: "暂无运行时日志。",
+      endpoint: "端点",
+      failedSummary: "桌面托管的 MCP 主机需要处理。",
+      fields: {
+        bind: "绑定地址",
+        logFilePath: "日志文件路径",
+        logLevel: "日志级别",
+        path: "路径",
+        saveAsDefault: "保存为默认值",
+        uiBufferLines: "UI 缓冲行数",
+      },
+      launchConfig: "启动配置",
+      launchConfigSummary: "启动主机前可在这里检查并调整 MCP 启动参数。",
+      lifecycle: "生命周期",
+      logDestinations: "日志去向",
+      logLevels: {
+        debug: "调试",
+        error: "错误",
+        info: "信息",
+        trace: "跟踪",
+        warn: "警告",
+      },
+      logRouting: "日志路由",
+      logs: "日志",
+      logsSummary: "展示 MCP 主机实时事件和最近缓存的日志条目。",
+      noSession: "当前没有活动会话",
+      persistence: "持久化",
+      recovery: "恢复",
+      requestedBind: "请求绑定：",
+      saveHint: "把当前启动配置回写到当前运行时配置文件。",
+      state: {
+        failed: "失败",
+        running: "运行中",
+        starting: "启动中",
+        stopped: "已停止",
+        stopping: "停止中",
+      },
+      transientHint: "请先加载持久化的运行时配置，再保存默认值。",
+      transientSession: "临时会话",
+    },
+  },
+} as const;
+
+export const messages = {
+  en: {
+    ...baseMessages.en,
+    notices: {
+      ...baseMessages.en.notices,
+      ...localeOverrides.en.notices,
+    },
+    runtime: {
+      ...baseMessages.en.runtime,
+      ...localeOverrides.en.runtime,
+    },
+  },
+  "zh-CN": {
+    ...baseMessages["zh-CN"],
+    notices: {
+      ...baseMessages["zh-CN"].notices,
+      ...localeOverrides["zh-CN"].notices,
+    },
+    runtime: {
+      ...baseMessages["zh-CN"].runtime,
+      ...localeOverrides["zh-CN"].runtime,
     },
   },
 } as const;

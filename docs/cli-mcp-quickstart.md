@@ -108,13 +108,42 @@ Standalone `agenta-mcp` 默认走 `stdout` 日志；若显式配置 `mcp.log.des
 
 ## 6. MCP 工具面
 
-当前工具族保持不变：
+当前 MCP 发布面已经切换为显式工具名，不再使用 `action + structured arguments` 多路复用模型。
 
-- `project`
-- `version`
-- `task`
-- `note`
-- `attachment`
-- `search`
+命名约束：
 
-每个工具继续采用 `action + structured arguments` 模型，并返回统一结构化结果。
+- 所有工具名遵循最小兼容规则：`^[A-Za-z][A-Za-z0-9_]{0,63}$`
+- 不使用点号 `.`、横杠 `-` 或空格
+
+当前工具清单：
+
+- `project_create`：创建项目
+- `project_get`：按 UUID 或 slug 读取项目
+- `project_list`：列出项目
+- `project_update`：更新项目
+- `version_create`：为项目创建版本
+- `version_get`：读取版本
+- `version_list`：列出版本，可按项目过滤
+- `version_update`：更新版本
+- `task_create`：创建任务
+- `task_get`：读取任务
+- `task_list`：列出任务，可按项目、版本、状态过滤
+- `task_update`：更新任务
+- `note_create`：为任务追加备注
+- `note_list`：列出任务备注
+- `attachment_create`：为任务添加附件
+- `attachment_get`：读取附件
+- `attachment_list`：列出任务附件
+- `search_query`：搜索本地任务与任务活动
+
+当前对外 contract 约束：
+
+- 每个 Tool 对应单一意图，不再要求客户端传递 `arguments.action`
+- `tools/list` 中会直接暴露字段说明、必填约束与可用枚举值
+- `status` / `priority` / `kind` 等字段已直接进入 JSON Schema
+- `*_get` / `*_list` / `search_query` 显式标记为只读
+
+接入建议：
+
+- 客户端应优先读取 `tools/list` 中的 `description`、`inputSchema`、`outputSchema`、`annotations`
+- 不要假设仍存在旧的 `project` / `version` / `task` / `note` / `attachment` / `search` 多路复用工具

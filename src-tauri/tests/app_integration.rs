@@ -1,9 +1,14 @@
+use std::net::TcpListener;
+use std::process::{Child, Command as ProcessCommand, Stdio};
 use std::sync::Arc;
+use std::time::Duration;
 
+use assert_cmd::cargo::cargo_bin;
 use assert_cmd::Command;
 use axum::body::Body;
 use axum::http::{Request, header::CONTENT_TYPE};
 use http_body_util::BodyExt;
+use reqwest::Client;
 use rmcp::transport::streamable_http_server::{
     StreamableHttpServerConfig,
     session::local::LocalSessionManager,
@@ -251,7 +256,7 @@ async fn mcp_streamable_http_tool_call_returns_structured_content(
         .await;
     assert_eq!(initialized_response.status().as_u16(), 202);
 
-    let tool_response = service
+    let list_tools_response = service
         .handle(
             Request::builder()
                 .method("POST")
@@ -263,11 +268,134 @@ async fn mcp_streamable_http_tool_call_returns_structured_content(
                     json!({
                         "jsonrpc": "2.0",
                         "id": 2,
+                        "method": "tools/list",
+                        "params": {}
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await;
+    assert!(list_tools_response.status().is_success());
+    let list_tools_body = list_tools_response.into_body().collect().await?.to_bytes();
+    let list_tools_body_text = String::from_utf8_lossy(&list_tools_body).to_string();
+    let list_tools_json_line = list_tools_body_text
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("data: ")
+                .filter(|value| value.starts_with('{'))
+        })
+        .ok_or_else(|| format!("missing JSON event payload in SSE body: {list_tools_body_text}"))?;
+    let list_tools_payload: Value = serde_json::from_str(list_tools_json_line).map_err(|error| {
+        format!(
+            "failed to parse tools/list JSON payload: {error}; body={list_tools_body_text}"
+        )
+    })?;
+
+    let tools = list_tools_payload["result"]["tools"]
+        .as_array()
+        .ok_or("tools/list payload missing tools array")?;
+    assert!(tools.iter().any(|tool| tool["name"] == "project_create"));
+    assert!(tools.iter().any(|tool| tool["name"] == "project_get"));
+    assert!(tools.iter().any(|tool| tool["name"] == "project_list"));
+    assert!(tools.iter().any(|tool| tool["name"] == "project_update"));
+    assert!(tools.iter().any(|tool| tool["name"] == "version_create"));
+    assert!(tools.iter().any(|tool| tool["name"] == "version_get"));
+    assert!(tools.iter().any(|tool| tool["name"] == "version_list"));
+    assert!(tools.iter().any(|tool| tool["name"] == "version_update"));
+    assert!(tools.iter().any(|tool| tool["name"] == "task_create"));
+    assert!(tools.iter().any(|tool| tool["name"] == "task_get"));
+    assert!(tools.iter().any(|tool| tool["name"] == "task_list"));
+    assert!(tools.iter().any(|tool| tool["name"] == "task_update"));
+    assert!(tools.iter().any(|tool| tool["name"] == "note_create"));
+    assert!(tools.iter().any(|tool| tool["name"] == "note_list"));
+    assert!(tools.iter().any(|tool| tool["name"] == "attachment_create"));
+    assert!(tools.iter().any(|tool| tool["name"] == "attachment_get"));
+    assert!(tools.iter().any(|tool| tool["name"] == "attachment_list"));
+    assert!(tools.iter().any(|tool| tool["name"] == "search_query"));
+    assert!(!tools.iter().any(|tool| tool["name"] == "project"));
+    assert!(!tools.iter().any(|tool| tool["name"] == "version"));
+    assert!(!tools.iter().any(|tool| tool["name"] == "task"));
+    assert!(!tools.iter().any(|tool| tool["name"] == "note"));
+    assert!(!tools.iter().any(|tool| tool["name"] == "attachment"));
+    assert!(!tools.iter().any(|tool| tool["name"] == "search"));
+
+    let project_create_tool = tools
+        .iter()
+        .find(|tool| tool["name"] == "project_create")
+        .ok_or("missing project_create tool")?;
+    assert_eq!(
+        project_create_tool["description"],
+        "Create a new project."
+    );
+    assert!(project_create_tool["inputSchema"]["properties"]["action"].is_null());
+
+    let project_update_tool = tools
+        .iter()
+        .find(|tool| tool["name"] == "project_update")
+        .ok_or("missing project_update tool")?;
+    let update_input_schema = serde_json::to_string(&project_update_tool["inputSchema"])?;
+    assert!(update_input_schema.contains("\"active\""));
+    assert!(update_input_schema.contains("\"archived\""));
+
+    let version_create_tool = tools
+        .iter()
+        .find(|tool| tool["name"] == "version_create")
+        .ok_or("missing version_create tool")?;
+    let version_input_schema = serde_json::to_string(&version_create_tool["inputSchema"])?;
+    assert!(version_input_schema.contains("\"planning\""));
+    assert!(version_input_schema.contains("\"active\""));
+    assert!(version_input_schema.contains("\"closed\""));
+    assert!(version_input_schema.contains("\"archived\""));
+
+    let task_create_tool = tools
+        .iter()
+        .find(|tool| tool["name"] == "task_create")
+        .ok_or("missing task_create tool")?;
+    let task_input_schema = serde_json::to_string(&task_create_tool["inputSchema"])?;
+    assert!(task_input_schema.contains("\"draft\""));
+    assert!(task_input_schema.contains("\"ready\""));
+    assert!(task_input_schema.contains("\"in_progress\""));
+    assert!(task_input_schema.contains("\"blocked\""));
+    assert!(task_input_schema.contains("\"done\""));
+    assert!(task_input_schema.contains("\"cancelled\""));
+    assert!(task_input_schema.contains("\"low\""));
+    assert!(task_input_schema.contains("\"normal\""));
+    assert!(task_input_schema.contains("\"high\""));
+    assert!(task_input_schema.contains("\"critical\""));
+
+    let attachment_create_tool = tools
+        .iter()
+        .find(|tool| tool["name"] == "attachment_create")
+        .ok_or("missing attachment_create tool")?;
+    let attachment_input_schema =
+        serde_json::to_string(&attachment_create_tool["inputSchema"])?;
+    assert!(attachment_input_schema.contains("\"screenshot\""));
+    assert!(attachment_input_schema.contains("\"image\""));
+    assert!(attachment_input_schema.contains("\"artifact\""));
+
+    let search_query_tool = tools
+        .iter()
+        .find(|tool| tool["name"] == "search_query")
+        .ok_or("missing search_query tool")?;
+    assert!(search_query_tool["inputSchema"]["properties"]["action"].is_null());
+
+    let tool_response = service
+        .handle(
+            Request::builder()
+                .method("POST")
+                .header("Accept", ACCEPT_BOTH)
+                .header(CONTENT_TYPE, "application/json")
+                .header("mcp-session-id", &session_id)
+                .header("mcp-protocol-version", MCP_PROTOCOL_VERSION)
+                .body(Body::from(
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": 3,
                         "method": "tools/call",
                         "params": {
-                            "name": "project",
+                            "name": "project_create",
                             "arguments": {
-                                "action": "create",
                                 "slug": "mcp-demo",
                                 "name": "MCP Demo"
                             }
@@ -288,22 +416,261 @@ async fn mcp_streamable_http_tool_call_returns_structured_content(
     let payload: Value = serde_json::from_str(json_line)
         .map_err(|error| format!("failed to parse tool response JSON payload: {error}; body={body_text}"))?;
 
-    assert_eq!(payload["result"]["structuredContent"]["ok"], true);
-    assert_eq!(payload["result"]["structuredContent"]["action"], "project.create");
-    assert_eq!(
-        payload["result"]["structuredContent"]["result"]["slug"],
-        "mcp-demo"
-    );
+    assert_eq!(payload["result"]["structuredContent"]["project"]["slug"], "mcp-demo");
+    assert_eq!(payload["result"]["structuredContent"]["project"]["name"], "MCP Demo");
 
     Ok(())
 }
 
+#[tokio::test]
+async fn standalone_agenta_mcp_binary_exposes_explicit_tools_and_runs_smoke_flow(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let tempdir = TempDir::new()?;
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let bind_addr = listener.local_addr()?;
+    drop(listener);
+
+    let config_path = write_test_config_with_bind(&tempdir, &bind_addr.to_string())?;
+    let stdout_path = tempdir.path().join("agenta-mcp.stdout.log");
+    let stderr_path = tempdir.path().join("agenta-mcp.stderr.log");
+    let stdout = std::fs::File::create(&stdout_path)?;
+    let stderr = std::fs::File::create(&stderr_path)?;
+
+    let child = ProcessCommand::new(cargo_bin("agenta-mcp"))
+        .args(["--config", config_path.to_str().ok_or("invalid config path")?])
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr))
+        .spawn()?;
+    let mut child = ChildGuard { child };
+
+    let client = Client::builder().build()?;
+    let url = format!("http://{bind_addr}/mcp");
+    let (session_id, _) = initialize_mcp_session(&client, &url).await?;
+    post_jsonrpc(
+        &client,
+        &url,
+        Some(&session_id),
+        json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/initialized"
+        }),
+    )
+    .await?;
+
+    let list_payload = post_jsonrpc(
+        &client,
+        &url,
+        Some(&session_id),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/list",
+            "params": {}
+        }),
+    )
+    .await?;
+    let tools = list_payload["result"]["tools"]
+        .as_array()
+        .ok_or("tools/list payload missing tools array")?;
+    for required in [
+        "project_create",
+        "project_get",
+        "project_list",
+        "project_update",
+        "version_create",
+        "version_get",
+        "version_list",
+        "version_update",
+        "task_create",
+        "task_get",
+        "task_list",
+        "task_update",
+        "note_create",
+        "note_list",
+        "attachment_create",
+        "attachment_get",
+        "attachment_list",
+        "search_query",
+    ] {
+        assert!(
+            tools.iter().any(|tool| tool["name"] == required),
+            "missing required tool {required}"
+        );
+    }
+    for legacy in ["project", "version", "task", "note", "attachment", "search"] {
+        assert!(
+            !tools.iter().any(|tool| tool["name"] == legacy),
+            "legacy tool should not be exposed: {legacy}"
+        );
+    }
+
+    let project_payload = post_jsonrpc(
+        &client,
+        &url,
+        Some(&session_id),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {
+                "name": "project_create",
+                "arguments": {
+                    "slug": "binary-mcp-demo",
+                    "name": "Binary MCP Demo"
+                }
+            }
+        }),
+    )
+    .await?;
+    assert_eq!(
+        project_payload["result"]["structuredContent"]["project"]["slug"],
+        "binary-mcp-demo"
+    );
+
+    let version_payload = post_jsonrpc(
+        &client,
+        &url,
+        Some(&session_id),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "tools/call",
+            "params": {
+                "name": "version_create",
+                "arguments": {
+                    "project": "binary-mcp-demo",
+                    "name": "Binary Alpha",
+                    "status": "planning"
+                }
+            }
+        }),
+    )
+    .await?;
+    assert_eq!(
+        version_payload["result"]["structuredContent"]["version"]["status"],
+        "planning"
+    );
+
+    let task_payload = post_jsonrpc(
+        &client,
+        &url,
+        Some(&session_id),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 5,
+            "method": "tools/call",
+            "params": {
+                "name": "task_create",
+                "arguments": {
+                    "project": "binary-mcp-demo",
+                    "title": "Binary task",
+                    "status": "ready",
+                    "priority": "high"
+                }
+            }
+        }),
+    )
+    .await?;
+    let task_id = task_payload["result"]["structuredContent"]["task"]["task_id"]
+        .as_str()
+        .ok_or("task_create missing task_id")?
+        .to_string();
+    assert_eq!(
+        task_payload["result"]["structuredContent"]["task"]["priority"],
+        "high"
+    );
+
+    let note_payload = post_jsonrpc(
+        &client,
+        &url,
+        Some(&session_id),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 6,
+            "method": "tools/call",
+            "params": {
+                "name": "note_create",
+                "arguments": {
+                    "task": task_id,
+                    "content": "Binary search marker"
+                }
+            }
+        }),
+    )
+    .await?;
+    assert_eq!(
+        note_payload["result"]["structuredContent"]["note"]["content"],
+        "Binary search marker"
+    );
+
+    let attachment_source = tempdir.path().join("binary-smoke.txt");
+    std::fs::write(&attachment_source, "binary attachment payload")?;
+    let attachment_payload = post_jsonrpc(
+        &client,
+        &url,
+        Some(&session_id),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "tools/call",
+            "params": {
+                "name": "attachment_create",
+                "arguments": {
+                    "task": note_payload["result"]["structuredContent"]["note"]["task_id"],
+                    "path": normalize_path_for_yaml(&attachment_source),
+                    "kind": "artifact",
+                    "summary": "Binary artifact"
+                }
+            }
+        }),
+    )
+    .await?;
+    assert_eq!(
+        attachment_payload["result"]["structuredContent"]["attachment"]["kind"],
+        "artifact"
+    );
+
+    let search_payload = post_jsonrpc(
+        &client,
+        &url,
+        Some(&session_id),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 8,
+            "method": "tools/call",
+            "params": {
+                "name": "search_query",
+                "arguments": {
+                    "query": "Binary search marker",
+                    "limit": 5
+                }
+            }
+        }),
+    )
+    .await?;
+    let activities = search_payload["result"]["structuredContent"]["activities"]
+        .as_array()
+        .ok_or("search_query missing activities")?;
+    assert!(!activities.is_empty(), "expected search activity hits");
+
+    child.kill()?;
+    Ok(())
+}
+
 fn write_test_config(tempdir: &TempDir) -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
+    write_test_config_with_bind(tempdir, "127.0.0.1:8787")
+}
+
+fn write_test_config_with_bind(
+    tempdir: &TempDir,
+    bind: &str,
+) -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
     let config_path = tempdir.path().join("agenta.local.yaml");
     let data_dir = tempdir.path().join("data");
     let yaml = format!(
-        "paths:\n  data_dir: {}\nmcp:\n  bind: \"127.0.0.1:8787\"\n  path: \"/mcp\"\n",
-        normalize_path_for_yaml(&data_dir)
+        "paths:\n  data_dir: {}\nmcp:\n  bind: \"{}\"\n  path: \"/mcp\"\n",
+        normalize_path_for_yaml(&data_dir),
+        bind
     );
     std::fs::write(&config_path, yaml)?;
     Ok(config_path)
@@ -311,4 +678,107 @@ fn write_test_config(tempdir: &TempDir) -> Result<std::path::PathBuf, Box<dyn st
 
 fn normalize_path_for_yaml(path: &std::path::Path) -> String {
     path.to_string_lossy().replace('\\', "/")
+}
+
+struct ChildGuard {
+    child: Child,
+}
+
+impl ChildGuard {
+    fn kill(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        if self.child.try_wait()?.is_none() {
+            self.child.kill()?;
+            let _ = self.child.wait();
+        }
+        Ok(())
+    }
+}
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        let _ = self.kill();
+    }
+}
+
+async fn initialize_mcp_session(
+    client: &Client,
+    url: &str,
+) -> Result<(String, Value), Box<dyn std::error::Error>> {
+    let init_payload = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": MCP_PROTOCOL_VERSION,
+            "capabilities": {},
+            "clientInfo": {
+                "name": "binary-integration-test",
+                "version": "1.0.0"
+            }
+        }
+    });
+
+    for _ in 0..30 {
+        match client
+            .post(url)
+            .header("Accept", ACCEPT_BOTH)
+            .header(CONTENT_TYPE.as_str(), "application/json")
+            .json(&init_payload)
+            .send()
+            .await
+        {
+            Ok(response) if response.status().is_success() => {
+                let session_id = response
+                    .headers()
+                    .get("mcp-session-id")
+                    .ok_or("initialize response missing mcp-session-id")?
+                    .to_str()?
+                    .to_string();
+                let body_text = response.text().await?;
+                let payload = parse_sse_json_payload(&body_text)?;
+                return Ok((session_id, payload));
+            }
+            _ => tokio::time::sleep(Duration::from_millis(200)).await,
+        }
+    }
+
+    Err("failed to initialize standalone agenta-mcp binary".into())
+}
+
+async fn post_jsonrpc(
+    client: &Client,
+    url: &str,
+    session_id: Option<&str>,
+    payload: Value,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut request = client
+        .post(url)
+        .header("Accept", ACCEPT_BOTH)
+        .header(CONTENT_TYPE.as_str(), "application/json");
+
+    if let Some(session_id) = session_id {
+        request = request
+            .header("mcp-session-id", session_id)
+            .header("mcp-protocol-version", MCP_PROTOCOL_VERSION);
+    }
+
+    let response = request.json(&payload).send().await?;
+    if !response.status().is_success() && response.status().as_u16() != 202 {
+        return Err(format!("unexpected MCP response status: {}", response.status()).into());
+    }
+
+    let body_text = response.text().await?;
+    if body_text.trim().is_empty() {
+        return Ok(Value::Null);
+    }
+
+    parse_sse_json_payload(&body_text)
+}
+
+fn parse_sse_json_payload(body_text: &str) -> Result<Value, Box<dyn std::error::Error>> {
+    let json_line = body_text
+        .lines()
+        .find_map(|line| line.strip_prefix("data: ").filter(|value| value.starts_with('{')))
+        .ok_or_else(|| format!("missing JSON event payload in SSE body: {body_text}"))?;
+    Ok(serde_json::from_str(json_line)?)
 }

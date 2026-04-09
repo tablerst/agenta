@@ -13,6 +13,7 @@
 ## 执行计划
 
 - [execution-plans/active/second-milestone-desktop-mcp-console.md](/e:/JetBrains/RustRover/agenta/dev_docs/execution-plans/active/second-milestone-desktop-mcp-console.md)：第二里程碑 active 基线
+- [execution-plans/active/mcp-tool-contract-min-compat-refactor.md](/e:/JetBrains/RustRover/agenta/dev_docs/execution-plans/active/mcp-tool-contract-min-compat-refactor.md)：MCP Tool Contract 最小兼容性重构
 - [execution-plans/archive/first-milestone-core-cli-mcp.md](/e:/JetBrains/RustRover/agenta/dev_docs/execution-plans/archive/first-milestone-core-cli-mcp.md)：第一里程碑归档
 
 ## 当前默认决策

@@ -19,6 +19,7 @@ Current Tauri config points at Bun:
 - Rust: default `rustfmt`; snake_case functions, CamelCase types.
 - For project-specific language rules, use `dev_docs/coding-standard/vue-typescript-engineering-guidelines.md`, `dev_docs/coding-standard/rust-engineering-guidelines.md`, and `dev_docs/coding-standard/python-engineering-guidelines.md`.
 - When a language-specific guide under `dev_docs/coding-standard/` is more specific than the baseline rules in this file, follow the language-specific guide for that language unless a root-level repository constraint says otherwise.
+- Frontend user-facing copy must go through `vue-i18n`; when adding or changing UI text, update both `en` and `zh-CN` in `src/i18n/messages.ts` in the same change, and do not leave raw translation keys or hard-coded labels in Vue views except for backend payload/log content that is intentionally shown verbatim.
 - Root-level `UI_DESIGN.md` is the source of truth for the desktop companion UI interaction model, spatial layering, and product-facing shell behavior.
 - Root-level `UI_STYLE.md` is the source of truth for desktop UI visual tokens, material rules, motion rules, and anti-patterns.
 
