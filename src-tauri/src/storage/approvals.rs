@@ -1,4 +1,4 @@
-use sqlx::{QueryBuilder, Sqlite, query};
+use sqlx::{query, QueryBuilder, Sqlite};
 use uuid::Uuid;
 
 use crate::domain::{ApprovalRequest, ApprovalStatus};
@@ -40,8 +40,18 @@ impl SqliteStore {
         .bind(request.reviewed_at.map(format_time).transpose()?)
         .bind(&request.reviewed_by)
         .bind(&request.review_note)
-        .bind(request.result_json.as_ref().map(serde_json::Value::to_string))
-        .bind(request.error_json.as_ref().map(serde_json::Value::to_string))
+        .bind(
+            request
+                .result_json
+                .as_ref()
+                .map(serde_json::Value::to_string),
+        )
+        .bind(
+            request
+                .error_json
+                .as_ref()
+                .map(serde_json::Value::to_string),
+        )
         .bind(request.status.to_string())
         .execute(&self.pool)
         .await?;
@@ -111,8 +121,18 @@ impl SqliteStore {
         .bind(request.reviewed_at.map(format_time).transpose()?)
         .bind(&request.reviewed_by)
         .bind(&request.review_note)
-        .bind(request.result_json.as_ref().map(serde_json::Value::to_string))
-        .bind(request.error_json.as_ref().map(serde_json::Value::to_string))
+        .bind(
+            request
+                .result_json
+                .as_ref()
+                .map(serde_json::Value::to_string),
+        )
+        .bind(
+            request
+                .error_json
+                .as_ref()
+                .map(serde_json::Value::to_string),
+        )
         .bind(request.status.to_string())
         .bind(request.request_id.to_string())
         .execute(&self.pool)

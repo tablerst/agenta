@@ -10,8 +10,8 @@ use agenta_lib::{
 };
 
 #[tokio::test]
-async fn require_human_creates_pending_request_and_replay_approves() -> Result<(), Box<dyn std::error::Error>>
-{
+async fn require_human_creates_pending_request_and_replay_approves(
+) -> Result<(), Box<dyn std::error::Error>> {
     let tempdir = TempDir::new()?;
     let config_path = write_test_config(
         &tempdir,
@@ -48,10 +48,14 @@ async fn require_human_creates_pending_request_and_replay_approves() -> Result<(
     let pending = runtime
         .service
         .list_approval_requests(ApprovalQuery {
+            project: Some("approval-demo".to_string()),
             status: Some(agenta_lib::domain::ApprovalStatus::Pending),
         })
         .await?;
     assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].project_ref.as_deref(), Some("approval-demo"));
+    assert_eq!(pending[0].project_name.as_deref(), Some("Approval Demo"));
+    assert_eq!(pending[0].task_ref, None);
 
     let approved = runtime
         .service
@@ -198,8 +202,11 @@ async fn failed_replay_marks_request_failed() -> Result<(), Box<dyn std::error::
             },
         )
         .await?;
+    let task_id = task.task_id.to_string();
 
     assert_eq!(reviewed.status.to_string(), "failed");
+    assert_eq!(reviewed.project_ref.as_deref(), Some("attachment-demo"));
+    assert_eq!(reviewed.task_ref.as_deref(), Some(task_id.as_str()));
     assert!(reviewed.error_json.is_some());
     assert!(runtime
         .service
@@ -252,12 +259,14 @@ async fn pending_approvals_survive_restart() -> Result<(), Box<dyn std::error::E
     let pending = second_runtime
         .service
         .list_approval_requests(ApprovalQuery {
+            project: Some("restart-demo".to_string()),
             status: Some(agenta_lib::domain::ApprovalStatus::Pending),
         })
         .await?;
 
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].request_id.to_string(), request_id);
+    assert_eq!(pending[0].project_ref.as_deref(), Some("restart-demo"));
 
     Ok(())
 }

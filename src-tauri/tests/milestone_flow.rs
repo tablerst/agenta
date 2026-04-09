@@ -1,6 +1,5 @@
 use std::{path::Path, process::Command, sync::Arc, time::Duration};
 
-use assert_cmd::cargo::cargo_bin;
 use agenta_lib::{
     app::{AppRuntime, BootstrapOptions, McpHostKind, McpLaunchOverrides, McpSessionLogger},
     interface::mcp::AgentaMcpServer,
@@ -9,17 +8,18 @@ use agenta_lib::{
         CreateVersionInput, SearchInput,
     },
 };
+use assert_cmd::cargo::cargo_bin;
 use rmcp::{
-    ServiceExt,
     model::CallToolRequestParams,
     transport::{
-        StreamableHttpClientTransport,
         streamable_http_client::StreamableHttpClientTransportConfig,
         streamable_http_server::{
-            StreamableHttpServerConfig, session::local::LocalSessionManager,
-            tower::StreamableHttpService,
+            session::local::LocalSessionManager, tower::StreamableHttpService,
+            StreamableHttpServerConfig,
         },
+        StreamableHttpClientTransport,
     },
+    ServiceExt,
 };
 use serde_json::Value;
 use tempfile::tempdir;
@@ -168,7 +168,11 @@ fn cli_smoke_returns_json() {
         .output()
         .expect("run agenta");
 
-    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let payload: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("parse CLI json output");
     assert_eq!(payload["ok"], true);
@@ -211,7 +215,9 @@ async fn mcp_streamable_http_lists_tools_and_calls_project_tool() {
         );
 
     let router = axum::Router::new().nest_service("/mcp", service);
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind listener");
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind listener");
     let addr = listener.local_addr().expect("listener addr");
     let server = tokio::spawn(async move { axum::serve(listener, router).await });
 

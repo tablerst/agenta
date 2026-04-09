@@ -65,7 +65,10 @@ fn truncate(value: String, limit: usize) -> String {
         return value;
     }
 
-    let mut output = value.chars().take(limit.saturating_sub(1)).collect::<String>();
+    let mut output = value
+        .chars()
+        .take(limit.saturating_sub(1))
+        .collect::<String>();
     output.push('…');
     output
 }

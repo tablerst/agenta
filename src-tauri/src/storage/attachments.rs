@@ -88,7 +88,9 @@ impl SqliteStore {
             .file_name()
             .and_then(|value| value.to_str())
             .ok_or_else(|| {
-                AppError::InvalidArguments("attachment source path must point to a file".to_string())
+                AppError::InvalidArguments(
+                    "attachment source path must point to a file".to_string(),
+                )
             })?
             .to_string();
         let original_path = source_path.canonicalize()?.to_string_lossy().to_string();

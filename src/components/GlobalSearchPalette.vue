@@ -4,11 +4,16 @@ import { nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
 
+import { desktopBridge } from "../lib/desktop";
+import { buildProjectWorkspacePath, resolveProjectSlug } from "../lib/projectWorkspace";
+import type { Task } from "../lib/types";
+import { useProjectsStore } from "../stores/projects";
 import { useSearchStore } from "../stores/search";
 import { useShellStore } from "../stores/shell";
 
 const shell = useShellStore();
 const search = useSearchStore();
+const projectsStore = useProjectsStore();
 const router = useRouter();
 const { t } = useI18n({ useScope: "global" });
 const inputValue = ref(search.query);
@@ -41,7 +46,22 @@ function close() {
 }
 
 async function jumpToTask(taskId: string) {
-  await router.push({ path: "/tasks", query: { task: taskId } });
+  if (projectsStore.projects.length === 0) {
+    await projectsStore.loadProjects();
+  }
+
+  const envelope = await desktopBridge.task({ action: "get", task: taskId });
+  const task = envelope.result as Task;
+  const projectSlug = resolveProjectSlug(projectsStore.projects, task.project_id);
+
+  await router.push(
+    projectSlug
+      ? {
+          path: buildProjectWorkspacePath(projectSlug, "tasks"),
+          query: { task: taskId },
+        }
+      : "/projects",
+  );
   close();
 }
 </script>

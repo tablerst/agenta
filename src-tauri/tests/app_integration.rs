@@ -6,15 +6,13 @@ use std::time::Duration;
 use assert_cmd::cargo::cargo_bin;
 use assert_cmd::Command;
 use axum::body::Body;
-use axum::http::{Request, header::CONTENT_TYPE};
+use axum::http::{header::CONTENT_TYPE, Request};
 use http_body_util::BodyExt;
 use reqwest::Client;
 use rmcp::transport::streamable_http_server::{
-    StreamableHttpServerConfig,
-    session::local::LocalSessionManager,
-    tower::StreamableHttpService,
+    session::local::LocalSessionManager, tower::StreamableHttpService, StreamableHttpServerConfig,
 };
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tempfile::TempDir;
 
 use agenta_lib::{
@@ -29,8 +27,8 @@ use agenta_lib::{
 const ACCEPT_BOTH: &str = "application/json, text/event-stream";
 const MCP_PROTOCOL_VERSION: &str = "2025-03-26";
 #[tokio::test]
-async fn runtime_service_flow_covers_core_objects_and_search() -> Result<(), Box<dyn std::error::Error>>
-{
+async fn runtime_service_flow_covers_core_objects_and_search(
+) -> Result<(), Box<dyn std::error::Error>> {
     let tempdir = TempDir::new()?;
     let config_path = write_test_config(&tempdir)?;
     let runtime = AppRuntime::bootstrap(BootstrapOptions {
@@ -96,7 +94,10 @@ async fn runtime_service_flow_covers_core_objects_and_search() -> Result<(), Box
             limit: Some(10),
         })
         .await?;
-    let notes = runtime.service.list_notes(&task.task_id.to_string()).await?;
+    let notes = runtime
+        .service
+        .list_notes(&task.task_id.to_string())
+        .await?;
     let loaded_attachment = runtime
         .service
         .get_attachment(&attachment.attachment_id.to_string())
@@ -286,11 +287,10 @@ async fn mcp_streamable_http_tool_call_returns_structured_content(
                 .filter(|value| value.starts_with('{'))
         })
         .ok_or_else(|| format!("missing JSON event payload in SSE body: {list_tools_body_text}"))?;
-    let list_tools_payload: Value = serde_json::from_str(list_tools_json_line).map_err(|error| {
-        format!(
-            "failed to parse tools/list JSON payload: {error}; body={list_tools_body_text}"
-        )
-    })?;
+    let list_tools_payload: Value =
+        serde_json::from_str(list_tools_json_line).map_err(|error| {
+            format!("failed to parse tools/list JSON payload: {error}; body={list_tools_body_text}")
+        })?;
 
     let tools = list_tools_payload["result"]["tools"]
         .as_array()
@@ -324,10 +324,7 @@ async fn mcp_streamable_http_tool_call_returns_structured_content(
         .iter()
         .find(|tool| tool["name"] == "project_create")
         .ok_or("missing project_create tool")?;
-    assert_eq!(
-        project_create_tool["description"],
-        "Create a new project."
-    );
+    assert_eq!(project_create_tool["description"], "Create a new project.");
     assert!(project_create_tool["inputSchema"]["properties"]["action"].is_null());
 
     let project_update_tool = tools
@@ -368,8 +365,7 @@ async fn mcp_streamable_http_tool_call_returns_structured_content(
         .iter()
         .find(|tool| tool["name"] == "attachment_create")
         .ok_or("missing attachment_create tool")?;
-    let attachment_input_schema =
-        serde_json::to_string(&attachment_create_tool["inputSchema"])?;
+    let attachment_input_schema = serde_json::to_string(&attachment_create_tool["inputSchema"])?;
     assert!(attachment_input_schema.contains("\"screenshot\""));
     assert!(attachment_input_schema.contains("\"image\""));
     assert!(attachment_input_schema.contains("\"artifact\""));
@@ -411,13 +407,23 @@ async fn mcp_streamable_http_tool_call_returns_structured_content(
     let body_text = String::from_utf8_lossy(&body).to_string();
     let json_line = body_text
         .lines()
-        .find_map(|line| line.strip_prefix("data: ").filter(|value| value.starts_with('{')))
+        .find_map(|line| {
+            line.strip_prefix("data: ")
+                .filter(|value| value.starts_with('{'))
+        })
         .ok_or_else(|| format!("missing JSON event payload in SSE body: {body_text}"))?;
-    let payload: Value = serde_json::from_str(json_line)
-        .map_err(|error| format!("failed to parse tool response JSON payload: {error}; body={body_text}"))?;
+    let payload: Value = serde_json::from_str(json_line).map_err(|error| {
+        format!("failed to parse tool response JSON payload: {error}; body={body_text}")
+    })?;
 
-    assert_eq!(payload["result"]["structuredContent"]["project"]["slug"], "mcp-demo");
-    assert_eq!(payload["result"]["structuredContent"]["project"]["name"], "MCP Demo");
+    assert_eq!(
+        payload["result"]["structuredContent"]["project"]["slug"],
+        "mcp-demo"
+    );
+    assert_eq!(
+        payload["result"]["structuredContent"]["project"]["name"],
+        "MCP Demo"
+    );
 
     Ok(())
 }
@@ -437,7 +443,10 @@ async fn standalone_agenta_mcp_binary_exposes_explicit_tools_and_runs_smoke_flow
     let stderr = std::fs::File::create(&stderr_path)?;
 
     let child = ProcessCommand::new(cargo_bin("agenta-mcp"))
-        .args(["--config", config_path.to_str().ok_or("invalid config path")?])
+        .args([
+            "--config",
+            config_path.to_str().ok_or("invalid config path")?,
+        ])
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr))
         .spawn()?;
@@ -778,7 +787,10 @@ async fn post_jsonrpc(
 fn parse_sse_json_payload(body_text: &str) -> Result<Value, Box<dyn std::error::Error>> {
     let json_line = body_text
         .lines()
-        .find_map(|line| line.strip_prefix("data: ").filter(|value| value.starts_with('{')))
+        .find_map(|line| {
+            line.strip_prefix("data: ")
+                .filter(|value| value.starts_with('{'))
+        })
         .ok_or_else(|| format!("missing JSON event payload in SSE body: {body_text}"))?;
     Ok(serde_json::from_str(json_line)?)
 }

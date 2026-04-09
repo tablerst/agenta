@@ -2,8 +2,8 @@ use std::path::PathBuf;
 
 use tracing_subscriber::EnvFilter;
 
-use crate::app::config::RuntimeConfig;
 use crate::app::config::load_runtime_config;
+use crate::app::config::RuntimeConfig;
 use crate::error::AppResult;
 use crate::policy::PolicyEngine;
 use crate::service::AgentaService;

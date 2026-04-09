@@ -7,12 +7,12 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::app::{
-    AppRuntime, McpLaunchOverrides, McpLogDestination, McpLogLevel, McpLogSnapshot,
-    McpSupervisor, save_mcp_config_defaults,
+    save_mcp_config_defaults, AppRuntime, McpLaunchOverrides, McpLogDestination, McpLogLevel,
+    McpLogSnapshot, McpSupervisor,
 };
 use crate::domain::ApprovalStatus;
 use crate::error::AppError;
-use crate::interface::response::{ErrorEnvelope, SuccessEnvelope, error, success};
+use crate::interface::response::{error, success, ErrorEnvelope, SuccessEnvelope};
 use crate::service::{
     ApprovalQuery, CreateAttachmentInput, CreateNoteInput, CreateProjectInput, CreateTaskInput,
     CreateVersionInput, RequestOrigin, ReviewApprovalInput, SearchInput, TaskQuery,
@@ -121,6 +121,7 @@ struct DesktopSearchInput {
 #[derive(Debug, Deserialize, Default)]
 struct DesktopApprovalInput {
     action: String,
+    project: Option<String>,
     request_id: Option<String>,
     status: Option<String>,
     reviewed_by: Option<String>,
@@ -169,6 +170,7 @@ async fn desktop_status(
     let pending = state
         .service
         .list_approval_requests(ApprovalQuery {
+            project: None,
             status: Some(ApprovalStatus::Pending),
         })
         .await
@@ -229,7 +231,11 @@ async fn desktop_project(
             ),
             "list" => {
                 let items = service.list_projects().await?;
-                success("project.list", &items, format!("Listed {} project(s)", items.len()))
+                success(
+                    "project.list",
+                    &items,
+                    format!("Listed {} project(s)", items.len()),
+                )
             }
             "update" => success(
                 "project.update",
@@ -283,12 +289,18 @@ async fn desktop_version(
             ),
             "get" => success(
                 "version.get",
-                service.get_version(&required(input.version, "version")?).await?,
+                service
+                    .get_version(&required(input.version, "version")?)
+                    .await?,
                 "Loaded version",
             ),
             "list" => {
                 let items = service.list_versions(input.project.as_deref()).await?;
-                success("version.list", &items, format!("Listed {} version(s)", items.len()))
+                success(
+                    "version.list",
+                    &items,
+                    format!("Listed {} version(s)", items.len()),
+                )
             }
             "update" => success(
                 "version.update",
@@ -355,7 +367,11 @@ async fn desktop_task(
                         status: parse_optional_enum(input.status)?,
                     })
                     .await?;
-                success("task.list", &items, format!("Listed {} task(s)", items.len()))
+                success(
+                    "task.list",
+                    &items,
+                    format!("Listed {} task(s)", items.len()),
+                )
             }
             "update" => success(
                 "task.update",
@@ -420,7 +436,11 @@ async fn desktop_note(
             ),
             "list" => {
                 let items = service.list_notes(&required(input.task, "task")?).await?;
-                success("note.list", &items, format!("Listed {} note(s)", items.len()))
+                success(
+                    "note.list",
+                    &items,
+                    format!("Listed {} note(s)", items.len()),
+                )
             }
             other => Err(AppError::InvalidAction(format!(
                 "unsupported note action: {other}"
@@ -522,6 +542,7 @@ async fn desktop_approval(
             "list" => {
                 let items = service
                     .list_approval_requests(ApprovalQuery {
+                        project: input.project,
                         status: parse_optional_enum(input.status)?,
                     })
                     .await?;
@@ -598,16 +619,17 @@ async fn desktop_mcp_start(
     let save_as_default = input.save_as_default.unwrap_or(false);
     let overrides = input.into_overrides();
     if save_as_default {
-        let loaded_config_path = state
-            .config
-            .paths
-            .loaded_config_path
-            .clone()
-            .ok_or_else(|| {
-                error(&AppError::InvalidArguments(
-                    "cannot save MCP defaults without a loaded config file".to_string(),
-                ))
-            })?;
+        let loaded_config_path =
+            state
+                .config
+                .paths
+                .loaded_config_path
+                .clone()
+                .ok_or_else(|| {
+                    error(&AppError::InvalidArguments(
+                        "cannot save MCP defaults without a loaded config file".to_string(),
+                    ))
+                })?;
         let next_defaults = state.mcp_supervisor.resolve_default_config(&overrides);
         save_mcp_config_defaults(&loaded_config_path, &next_defaults)
             .map_err(|app_error| error(&app_error))?;
@@ -619,8 +641,12 @@ async fn desktop_mcp_start(
         .start(overrides)
         .await
         .map_err(|app_error| error(&app_error))?;
-    success("desktop.mcp_start", status, "Started desktop-managed MCP host")
-        .map_err(|app_error| error(&app_error))
+    success(
+        "desktop.mcp_start",
+        status,
+        "Started desktop-managed MCP host",
+    )
+    .map_err(|app_error| error(&app_error))
 }
 
 #[tauri::command]
@@ -632,8 +658,12 @@ async fn desktop_mcp_stop(
         .stop()
         .await
         .map_err(|app_error| error(&app_error))?;
-    success("desktop.mcp_stop", status, "Stopped desktop-managed MCP host")
-        .map_err(|app_error| error(&app_error))
+    success(
+        "desktop.mcp_stop",
+        status,
+        "Stopped desktop-managed MCP host",
+    )
+    .map_err(|app_error| error(&app_error))
 }
 
 #[tauri::command]

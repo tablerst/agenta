@@ -45,11 +45,13 @@ html[data-theme="dark"] {
   html,
   body,
   #app {
+    height: 100%;
     min-height: 100%;
   }
 
   body {
     margin: 0;
+    overflow: hidden;
     background:
       radial-gradient(circle at top left, var(--accent-soft), transparent 24%),
       radial-gradient(circle at 85% 16%, var(--accent-strong), transparent 26%),
@@ -76,7 +78,8 @@ html[data-theme="dark"] {
 
 @layer components {
   .app-shell {
-    @apply relative flex min-h-screen overflow-hidden;
+    @apply relative flex min-h-[100dvh] overflow-hidden;
+    height: 100dvh;
     --sidebar-width: 290px;
   }
 
@@ -85,7 +88,9 @@ html[data-theme="dark"] {
   }
 
   .shell-main {
-    @apply relative flex min-w-0 flex-1 flex-col;
+    @apply relative flex min-w-0 flex-1 flex-col overflow-hidden;
+    min-height: 0;
+    height: 100dvh;
   }
 
   .shell-router-view {
@@ -127,7 +132,7 @@ html[data-theme="dark"] {
   }
 
   .shell-sidebar-inner {
-    @apply flex h-screen min-h-screen flex-col gap-5 px-4 py-4;
+    @apply flex h-full min-h-0 flex-col gap-5 px-4 py-4 overflow-y-auto;
   }
 
   .shell-sidebar-header {
@@ -159,7 +164,7 @@ html[data-theme="dark"] {
   }
 
   .shell-nav {
-    @apply flex flex-col gap-2;
+    @apply flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto;
   }
 
   .shell-sidebar-footer {
@@ -262,6 +267,203 @@ html[data-theme="dark"] {
 
   .page-detail {
     @apply min-h-0 overflow-y-auto px-8 py-7;
+  }
+
+  .workspace-page {
+    display: grid;
+    min-height: 0;
+    height: 100%;
+    overflow: hidden;
+    grid-template-columns: minmax(280px, 344px) minmax(0, 1fr);
+  }
+
+  .workspace-registry {
+    @apply flex min-h-0 flex-col gap-5 overflow-hidden border-r border-[var(--border-color)] px-5 py-6;
+    background: color-mix(in srgb, var(--bg-panel) 86%, transparent);
+  }
+
+  .workspace-pane-header {
+    @apply mb-4 flex items-start justify-between gap-3;
+  }
+
+  .workspace-pane-scroll {
+    @apply flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pr-1;
+  }
+
+  .workspace-shell {
+    @apply flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden;
+  }
+
+  .workspace-header {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    @apply border-b border-[var(--border-color)] px-7 py-6;
+    background: color-mix(in srgb, var(--bg-main) 90%, transparent);
+    backdrop-filter: blur(16px);
+  }
+
+  .workspace-header-copy {
+    @apply min-w-0;
+  }
+
+  .workspace-title {
+    @apply text-2xl font-semibold text-[var(--text-main)];
+  }
+
+  .workspace-summary {
+    @apply mt-3 max-w-4xl text-sm leading-6 text-[var(--text-muted)];
+  }
+
+  .workspace-secondary-nav {
+    @apply mt-5 flex flex-wrap gap-2;
+  }
+
+  .section-route-chip,
+  .filter-chip,
+  .workspace-tab,
+  .task-detail-tab {
+    @apply inline-flex min-h-8 items-center justify-center gap-1.5 rounded-[8px] border border-transparent px-3 py-1.5 text-[13px] text-[var(--text-muted)] transition;
+    background: color-mix(in srgb, var(--bg-panel) 46%, transparent);
+  }
+
+  .section-route-chip-active,
+  .filter-chip-active,
+  .workspace-tab-active,
+  .task-detail-tab-active {
+    color: var(--text-main);
+    border-color: color-mix(in srgb, var(--accent-color) 14%, var(--border-color));
+    background: linear-gradient(180deg, var(--accent-soft), color-mix(in srgb, var(--accent-soft) 46%, transparent));
+    box-shadow: inset 0 1px 0 var(--border-highlight);
+  }
+
+  .workspace-content {
+    @apply min-h-0 flex-1 overflow-hidden;
+  }
+
+  .workspace-section-scroll {
+    @apply min-h-0 h-full overflow-y-auto px-7 py-6;
+  }
+
+  .workspace-overview-grid {
+    display: grid;
+    gap: 20px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .workspace-metric-row {
+    @apply flex items-center justify-between gap-3 text-sm text-[var(--text-main)];
+  }
+
+  .workspace-split {
+    display: grid;
+    min-height: 0;
+    height: 100%;
+    overflow: hidden;
+    grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
+  }
+
+  .workspace-pane {
+    @apply flex min-h-0 flex-col overflow-hidden px-7 py-6;
+  }
+
+  .workspace-pane-border {
+    border-right: 1px solid var(--border-color);
+    background: color-mix(in srgb, var(--bg-panel) 84%, transparent);
+  }
+
+  .workspace-pane-empty {
+    @apply rounded-[22px] border border-dashed border-[var(--border-color)] px-5 py-8 text-center text-sm leading-7 text-[var(--text-muted)];
+    display: flex;
+    min-height: 0;
+    height: 100%;
+    align-items: center;
+    justify-content: center;
+    background: color-mix(in srgb, var(--bg-panel) 42%, transparent);
+  }
+
+  .workspace-section-grid {
+    display: grid;
+    min-height: 0;
+    height: 100%;
+    grid-template-columns: minmax(340px, 420px) minmax(0, 1fr);
+  }
+
+  .workspace-list-pane {
+    @apply min-h-0 overflow-y-auto border-r border-[var(--border-color)] px-5 py-6;
+    background: color-mix(in srgb, var(--bg-panel) 84%, transparent);
+  }
+
+  .workspace-inspector-pane {
+    @apply min-h-0 overflow-y-auto px-7 py-6;
+  }
+
+  .workspace-pane-stack,
+  .workspace-list-stack {
+    @apply flex flex-col gap-5;
+  }
+
+  .workspace-empty-state {
+    @apply flex h-full min-h-0 items-center justify-center px-6 py-8;
+  }
+
+  .workspace-empty-copy {
+    @apply max-w-xl text-center;
+  }
+
+  .workspace-tablist {
+    @apply flex flex-wrap gap-2 border-b border-[var(--border-color)] pb-4;
+  }
+
+  .filter-chip-group {
+    @apply flex flex-wrap gap-2;
+  }
+
+  .task-detail-tablist {
+    @apply mb-4 flex flex-wrap gap-2 border-b border-[var(--border-color)] pb-4;
+  }
+
+  .task-detail-tab {
+    @apply inline-flex min-h-8 items-center justify-center gap-1.5 rounded-[8px] border border-transparent px-3 py-1.5 text-[13px] text-[var(--text-muted)] transition;
+    background: color-mix(in srgb, var(--bg-panel) 46%, transparent);
+  }
+
+  .task-detail-tab-active {
+    color: var(--text-main);
+    border-color: color-mix(in srgb, var(--accent-color) 14%, var(--border-color));
+    background: linear-gradient(180deg, var(--accent-soft), color-mix(in srgb, var(--accent-soft) 46%, transparent));
+    box-shadow: inset 0 1px 0 var(--border-highlight);
+  }
+
+  .task-detail-tab:focus-visible,
+  .filter-chip:focus-visible,
+  .section-route-chip:focus-visible {
+    outline: none;
+    border-color: var(--text-muted);
+    box-shadow:
+      inset 0 1px 0 var(--border-highlight),
+      0 0 0 2px color-mix(in srgb, var(--text-muted) 14%, transparent);
+  }
+
+  .task-detail-tablist,
+  .filter-chip-row {
+    @apply flex flex-wrap gap-2;
+  }
+
+  .metric-grid {
+    display: grid;
+    gap: 12px;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .metric-card {
+    @apply rounded-[10px] border border-[var(--border-color)] px-4 py-4;
+    background: linear-gradient(180deg, color-mix(in srgb, var(--bg-panel) 90%, transparent), var(--bg-panel));
+    box-shadow: inset 0 1px 0 var(--border-highlight);
+  }
+
+  .metric-value {
+    @apply mt-3 block text-2xl font-semibold text-[var(--text-main)];
   }
 
   .glass-panel {
@@ -496,10 +698,11 @@ html[data-theme="dark"] {
   }
 
   .json-block {
-    @apply overflow-x-auto rounded-[20px] border border-[var(--border-color)] px-4 py-4 text-[13px] leading-6 text-[var(--text-main)];
+    @apply overflow-auto rounded-[20px] border border-[var(--border-color)] px-4 py-4 text-[13px] leading-6 text-[var(--text-main)];
     background: linear-gradient(180deg, color-mix(in srgb, var(--bg-panel) 94%, transparent), var(--bg-panel));
     box-shadow: inset 0 1px 0 var(--border-highlight);
     font-family: "JetBrains Mono", "Fira Code", "SF Mono", monospace;
+    max-height: min(56vh, 560px);
   }
 
   .shell-notice {
@@ -530,8 +733,30 @@ html[data-theme="dark"] {
     grid-template-columns: minmax(320px, 360px) minmax(0, 1fr);
   }
 
+  .workspace-page {
+    grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
+  }
+
+  .workspace-overview-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .workspace-section-grid {
+    grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
+  }
+
+  .workspace-split {
+    grid-template-columns: minmax(280px, 320px) minmax(0, 1fr);
+  }
+
   .page-detail {
     @apply px-6;
+  }
+
+  .workspace-header,
+  .workspace-pane,
+  .workspace-section-scroll {
+    padding-inline: 24px;
   }
 
   .runtime-config-grid {
@@ -540,7 +765,13 @@ html[data-theme="dark"] {
 }
 
 @media (max-width: 1040px) {
+  body {
+    overflow: auto;
+  }
+
   .app-shell {
+    min-height: 100dvh;
+    height: auto;
     overflow: visible;
   }
 
@@ -569,6 +800,11 @@ html[data-theme="dark"] {
     overflow: visible;
   }
 
+  .shell-main {
+    height: auto;
+    overflow: visible;
+  }
+
   .page-grid {
     height: auto;
     min-height: 0;
@@ -586,6 +822,57 @@ html[data-theme="dark"] {
     overflow: visible;
     padding-top: 22px;
     padding-bottom: 28px;
+  }
+
+  .workspace-page,
+  .workspace-section-grid,
+  .workspace-split {
+    height: auto;
+    min-height: 0;
+    grid-template-columns: 1fr;
+  }
+
+  .workspace-registry,
+  .workspace-list-pane,
+  .workspace-pane-border {
+    overflow: visible;
+    border-right: 0;
+    border-bottom: 1px solid var(--border-color);
+  }
+
+  .workspace-shell,
+  .workspace-content,
+  .workspace-inspector-pane,
+  .workspace-pane {
+    overflow: visible;
+  }
+
+  .workspace-header {
+    position: static;
+    padding-inline: 18px;
+    padding-bottom: 20px;
+  }
+
+  .workspace-inspector-pane,
+  .workspace-list-pane,
+  .workspace-pane,
+  .workspace-registry,
+  .workspace-section-scroll {
+    padding-inline: 18px;
+  }
+
+  .workspace-pane-scroll,
+  .workspace-section-scroll {
+    overflow: visible;
+    padding-right: 0;
+  }
+
+  .metric-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .json-block {
+    max-height: none;
   }
 }
 

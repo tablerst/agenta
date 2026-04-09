@@ -38,6 +38,7 @@ export type AttachmentKind =
   | "other";
 export type ApprovalStatus = "pending" | "approved" | "denied" | "failed";
 export type ApprovalRequestedVia = "cli" | "mcp" | "desktop";
+export type ApprovalScope = "project" | "all";
 
 export interface Project {
   project_id: string;
@@ -109,6 +110,9 @@ export interface ApprovalRequest {
   action: string;
   requested_via: ApprovalRequestedVia;
   resource_ref: string;
+  project_ref: string | null;
+  project_name: string | null;
+  task_ref: string | null;
   payload_json: unknown;
   request_summary: string;
   requested_at: string;

@@ -1,4 +1,5 @@
 import type {
+  ApprovalScope,
   ApprovalStatus,
   AppLocale,
   AttachmentKind,
@@ -23,6 +24,9 @@ export const attachmentKindOptions: AttachmentKind[] = [
   "other",
 ];
 export const approvalStatusOptions: ApprovalStatus[] = ["pending", "approved", "denied", "failed"];
+export const approvalScopeOptions: ApprovalScope[] = ["project", "all"];
+export const projectWorkspaceSectionOptions = ["overview", "versions", "tasks", "approvals"] as const;
 export const taskDetailTabOptions = ["overview", "notes", "attachments", "activity"] as const;
 
+export type ProjectWorkspaceSection = (typeof projectWorkspaceSectionOptions)[number];
 export type TaskDetailTab = (typeof taskDetailTabOptions)[number];

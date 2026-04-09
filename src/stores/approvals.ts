@@ -4,17 +4,23 @@ import { defineStore } from "pinia";
 import { desktopBridge } from "../lib/desktop";
 import type { ApprovalRequest, ApprovalStatus } from "../lib/types";
 
+interface ApprovalFilters {
+  project?: string;
+  status?: ApprovalStatus;
+}
+
 export const useApprovalsStore = defineStore("approvals", () => {
   const approvals = ref<ApprovalRequest[]>([]);
   const loading = ref(false);
   const pendingCount = ref(0);
 
-  async function loadApprovals(status?: ApprovalStatus) {
+  async function loadApprovals(filters: ApprovalFilters = {}) {
     loading.value = true;
     try {
       const envelope = await desktopBridge.approval({
         action: "list",
-        status,
+        project: filters.project,
+        status: filters.status,
       });
       approvals.value = envelope.result as ApprovalRequest[];
       return approvals.value;
@@ -32,7 +38,11 @@ export const useApprovalsStore = defineStore("approvals", () => {
   }
 
   async function refreshPendingCount() {
-    const items = await loadApprovals("pending");
+    const envelope = await desktopBridge.approval({
+      action: "list",
+      status: "pending",
+    });
+    const items = envelope.result as ApprovalRequest[];
     pendingCount.value = items.length;
     return pendingCount.value;
   }

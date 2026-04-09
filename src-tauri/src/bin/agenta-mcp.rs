@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use agenta_lib::app::{
-    AppRuntime, BootstrapOptions, McpHostKind, McpSessionLogger, init_tracing, start_mcp_host,
+    init_tracing, start_mcp_host, AppRuntime, BootstrapOptions, McpHostKind, McpSessionLogger,
 };
 use clap::Parser;
 use serde_json::json;

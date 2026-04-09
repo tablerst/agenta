@@ -6,9 +6,7 @@ use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use crate::domain::{
-    ApprovalRequest, Attachment, Project, Task, TaskActivity, Version,
-};
+use crate::domain::{ApprovalRequest, Attachment, Project, Task, TaskActivity, Version};
 use crate::error::{AppError, AppResult};
 
 pub(crate) fn map_project(row: SqliteRow) -> AppResult<Project> {
@@ -75,8 +73,9 @@ pub(crate) fn map_activity(row: SqliteRow) -> AppResult<TaskActivity> {
         activity_search_summary: row.get("activity_search_summary"),
         created_by: row.get("created_by"),
         created_at: parse_time(row.get("created_at"), "created_at")?,
-        metadata_json: serde_json::from_str(&metadata_json)
-            .map_err(|error| AppError::Storage(format!("invalid activity metadata_json: {error}")))?,
+        metadata_json: serde_json::from_str(&metadata_json).map_err(|error| {
+            AppError::Storage(format!("invalid activity metadata_json: {error}"))
+        })?,
     })
 }
 
@@ -103,6 +102,9 @@ pub(crate) fn map_approval_request(row: SqliteRow) -> AppResult<ApprovalRequest>
         action: row.get("action"),
         requested_via: parse_enum(row.get("requested_via"), "requested_via")?,
         resource_ref: row.get("resource_ref"),
+        project_ref: None,
+        project_name: None,
+        task_ref: None,
         payload_json: parse_json(row.get("payload_json"), "payload_json")?,
         request_summary: row.get("request_summary"),
         requested_at: parse_time(row.get("requested_at"), "requested_at")?,

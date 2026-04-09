@@ -3,13 +3,13 @@ pub mod mcp;
 pub mod runtime;
 
 pub use config::{
-    AppPaths, McpConfig, McpHostKind, McpLaunchOverrides, McpLogConfig, McpLogDestination,
-    McpLogLevel, ResolvedMcpLogConfig, ResolvedMcpSessionConfig, RuntimeConfig,
-    load_runtime_config, save_mcp_config_defaults,
+    load_runtime_config, save_mcp_config_defaults, AppPaths, McpConfig, McpHostKind,
+    McpLaunchOverrides, McpLogConfig, McpLogDestination, McpLogLevel, ResolvedMcpLogConfig,
+    ResolvedMcpSessionConfig, RuntimeConfig,
 };
 pub use mcp::{
-    MCP_LOG_EVENT, MCP_STATUS_EVENT, McpLifecycleState, McpLogEntry, McpLogSnapshot,
-    McpRuntimeStatus, McpSessionLogger, McpSupervisor, RunningMcpHost, build_mcp_router,
-    start_mcp_host,
+    build_mcp_router, start_mcp_host, McpLifecycleState, McpLogEntry, McpLogSnapshot,
+    McpRuntimeStatus, McpSessionLogger, McpSupervisor, RunningMcpHost, MCP_LOG_EVENT,
+    MCP_STATUS_EVENT,
 };
-pub use runtime::{AgentaApp as AppRuntime, BootstrapOptions, init_tracing};
+pub use runtime::{init_tracing, AgentaApp as AppRuntime, BootstrapOptions};

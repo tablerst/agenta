@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -13,8 +13,8 @@ use crate::domain::{
 use crate::error::{AppError, AppResult};
 use crate::policy::{PolicyEngine, WriteDecision};
 use crate::search::{
-    SearchResponse, build_activity_search_summary, build_task_context_digest,
-    build_task_search_summary,
+    build_activity_search_summary, build_task_context_digest, build_task_search_summary,
+    SearchResponse,
 };
 use crate::storage::{SqliteStore, TaskListFilter};
 
@@ -122,6 +122,7 @@ pub struct SearchInput {
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct ApprovalQuery {
+    pub project: Option<String>,
     pub status: Option<ApprovalStatus>,
 }
 
@@ -138,6 +139,13 @@ struct ApprovalSeed {
     payload_json: Value,
     request_summary: String,
     requested_by: String,
+}
+
+#[derive(Default)]
+struct ApprovalContext {
+    project_ref: Option<String>,
+    project_name: Option<String>,
+    task_ref: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -253,7 +261,11 @@ impl AgentaService {
         let approval = self.approval_seed(
             origin,
             input.project.clone(),
-            format!("Create version {} in {}", input.name.trim(), input.project.trim()),
+            format!(
+                "Create version {} in {}",
+                input.name.trim(),
+                input.project.trim()
+            ),
             actor_or_default(None, origin),
             &input,
         )?;
@@ -311,7 +323,11 @@ impl AgentaService {
         origin: RequestOrigin,
         mut input: CreateTaskInput,
     ) -> AppResult<Task> {
-        if input.created_by.as_deref().is_none_or(|value| value.trim().is_empty()) {
+        if input
+            .created_by
+            .as_deref()
+            .is_none_or(|value| value.trim().is_empty())
+        {
             input.created_by = Some(origin.fallback_actor().to_string());
         }
         let approval = self.approval_seed(
@@ -332,11 +348,15 @@ impl AgentaService {
     pub async fn list_tasks(&self, query: TaskQuery) -> AppResult<Vec<Task>> {
         let filter = TaskListFilter {
             project_id: match query.project {
-                Some(reference) => Some(self.store.get_project_by_ref(&reference).await?.project_id),
+                Some(reference) => {
+                    Some(self.store.get_project_by_ref(&reference).await?.project_id)
+                }
                 None => None,
             },
             version_id: match query.version {
-                Some(reference) => Some(self.store.get_version_by_ref(&reference).await?.version_id),
+                Some(reference) => {
+                    Some(self.store.get_version_by_ref(&reference).await?.version_id)
+                }
                 None => None,
             },
             status: query.status,
@@ -355,7 +375,11 @@ impl AgentaService {
         reference: &str,
         mut input: UpdateTaskInput,
     ) -> AppResult<Task> {
-        if input.updated_by.as_deref().is_none_or(|value| value.trim().is_empty()) {
+        if input
+            .updated_by
+            .as_deref()
+            .is_none_or(|value| value.trim().is_empty())
+        {
             input.updated_by = Some(origin.fallback_actor().to_string());
         }
         let approval = self.approval_seed(
@@ -381,7 +405,11 @@ impl AgentaService {
         origin: RequestOrigin,
         mut input: CreateNoteInput,
     ) -> AppResult<TaskActivity> {
-        if input.created_by.as_deref().is_none_or(|value| value.trim().is_empty()) {
+        if input
+            .created_by
+            .as_deref()
+            .is_none_or(|value| value.trim().is_empty())
+        {
             input.created_by = Some(origin.fallback_actor().to_string());
         }
         let approval = self.approval_seed(
@@ -417,7 +445,11 @@ impl AgentaService {
         origin: RequestOrigin,
         mut input: CreateAttachmentInput,
     ) -> AppResult<Attachment> {
-        if input.created_by.as_deref().is_none_or(|value| value.trim().is_empty()) {
+        if input
+            .created_by
+            .as_deref()
+            .is_none_or(|value| value.trim().is_empty())
+        {
             input.created_by = Some(origin.fallback_actor().to_string());
         }
         let summary = input
@@ -425,7 +457,8 @@ impl AgentaService {
             .as_deref()
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| {
-                input.path
+                input
+                    .path
                     .file_name()
                     .and_then(|value| value.to_str())
                     .unwrap_or("attachment")
@@ -461,13 +494,36 @@ impl AgentaService {
         &self,
         query: ApprovalQuery,
     ) -> AppResult<Vec<ApprovalRequest>> {
-        self.store.list_approval_requests(query.status).await
+        let (project_slug_filter, project_id_filter) = match query.project.as_deref() {
+            Some(reference) => match self.store.get_project_by_ref(reference).await {
+                Ok(project) => (Some(project.slug), Some(project.project_id.to_string())),
+                Err(AppError::NotFound { .. }) => (Some(reference.to_string()), None),
+                Err(error) => return Err(error),
+            },
+            None => (None, None),
+        };
+        let items = self.store.list_approval_requests(query.status).await?;
+        let mut approvals = Vec::with_capacity(items.len());
+
+        for item in items {
+            let approval = self.enrich_approval_request(item).await;
+            if let Some(project_slug) = project_slug_filter.as_deref() {
+                if !matches_project_filter(&approval, project_slug, project_id_filter.as_deref()) {
+                    continue;
+                }
+            }
+            approvals.push(approval);
+        }
+
+        Ok(approvals)
     }
 
     pub async fn get_approval_request(&self, request_id: &str) -> AppResult<ApprovalRequest> {
-        self.store
+        let request = self
+            .store
             .get_approval_request(parse_uuid(request_id, "request_id")?)
-            .await
+            .await?;
+        Ok(self.enrich_approval_request(request).await)
     }
 
     pub async fn approve_approval_request(
@@ -502,7 +558,7 @@ impl AgentaService {
             }
         }
         self.store.update_approval_request(&request).await?;
-        Ok(request)
+        Ok(self.enrich_approval_request(request).await)
     }
 
     pub async fn deny_approval_request(
@@ -523,7 +579,7 @@ impl AgentaService {
         request.error_json = None;
         request.status = ApprovalStatus::Denied;
         self.store.update_approval_request(&request).await?;
-        Ok(request)
+        Ok(self.enrich_approval_request(request).await)
     }
 
     async fn create_project_internal(
@@ -738,7 +794,10 @@ impl AgentaService {
             task_id: task.task_id,
             kind: TaskActivityKind::Note,
             content: content.clone(),
-            activity_search_summary: build_activity_search_summary(TaskActivityKind::Note, &content),
+            activity_search_summary: build_activity_search_summary(
+                TaskActivityKind::Note,
+                &content,
+            ),
             created_by: input
                 .created_by
                 .filter(|value| !value.trim().is_empty())
@@ -817,6 +876,9 @@ impl AgentaService {
                         action: action.to_string(),
                         requested_via: seed.requested_via,
                         resource_ref: seed.resource_ref,
+                        project_ref: None,
+                        project_name: None,
+                        task_ref: None,
                         payload_json: seed.payload_json,
                         request_summary: seed.request_summary,
                         requested_at: OffsetDateTime::now_utc(),
@@ -828,7 +890,9 @@ impl AgentaService {
                         error_json: None,
                         status: ApprovalStatus::Pending,
                     };
-                    self.store.insert_approval_request(&approval_request).await?;
+                    self.store
+                        .insert_approval_request(&approval_request)
+                        .await?;
                     Err(AppError::PolicyBlocked {
                         action: action.to_string(),
                         decision: WriteDecision::RequireHuman,
@@ -859,83 +923,255 @@ impl AgentaService {
         Ok(ApprovalSeed {
             requested_via: origin.requested_via(),
             resource_ref,
-            payload_json: serde_json::to_value(payload)
-                .map_err(|error| AppError::internal(format!("failed to serialize payload: {error}")))?,
+            payload_json: serde_json::to_value(payload).map_err(|error| {
+                AppError::internal(format!("failed to serialize payload: {error}"))
+            })?,
             request_summary,
             requested_by,
         })
     }
 
+    async fn enrich_approval_request(&self, mut request: ApprovalRequest) -> ApprovalRequest {
+        let context = self.resolve_approval_context(&request).await;
+        request.project_ref = context.project_ref;
+        request.project_name = context.project_name;
+        request.task_ref = context.task_ref;
+        request
+    }
+
+    async fn resolve_approval_context(&self, request: &ApprovalRequest) -> ApprovalContext {
+        match request.action.as_str() {
+            "project.create" => {
+                let project_ref = json_string(&request.payload_json, "slug")
+                    .or_else(|| Some(request.resource_ref.clone()));
+                let project_name = json_string(&request.payload_json, "name");
+                self.project_context_from_reference(project_ref, project_name)
+                    .await
+            }
+            "project.update" => {
+                let project_name = json_string(&request.payload_json, "name");
+                self.project_context_from_reference(
+                    Some(request.resource_ref.clone()),
+                    project_name,
+                )
+                .await
+            }
+            "version.create" => {
+                self.project_context_from_reference(
+                    json_string(&request.payload_json, "project"),
+                    None,
+                )
+                .await
+            }
+            "version.update" => {
+                self.version_context_from_reference(&request.resource_ref)
+                    .await
+            }
+            "task.create" => {
+                let mut context = self
+                    .project_context_from_reference(
+                        json_string(&request.payload_json, "project"),
+                        None,
+                    )
+                    .await;
+                context.task_ref = request
+                    .result_json
+                    .as_ref()
+                    .and_then(|value| json_string(value, "task_id"));
+                context
+            }
+            "task.update" => {
+                self.task_context_from_reference(&request.resource_ref)
+                    .await
+            }
+            "note.create" | "attachment.create" => {
+                let task_ref = json_string(&request.payload_json, "task")
+                    .unwrap_or_else(|| request.resource_ref.clone());
+                self.task_context_from_reference(&task_ref).await
+            }
+            _ => ApprovalContext::default(),
+        }
+    }
+
+    async fn project_context_from_reference(
+        &self,
+        project_ref: Option<String>,
+        project_name: Option<String>,
+    ) -> ApprovalContext {
+        let Some(reference) = project_ref else {
+            return ApprovalContext {
+                project_name,
+                ..ApprovalContext::default()
+            };
+        };
+
+        if let Ok(project) = self.store.get_project_by_ref(&reference).await {
+            return ApprovalContext {
+                project_ref: Some(project.slug),
+                project_name: Some(project.name),
+                task_ref: None,
+            };
+        }
+
+        ApprovalContext {
+            project_ref: Some(reference),
+            project_name,
+            task_ref: None,
+        }
+    }
+
+    async fn version_context_from_reference(&self, reference: &str) -> ApprovalContext {
+        let Ok(version) = self.store.get_version_by_ref(reference).await else {
+            return ApprovalContext::default();
+        };
+
+        self.project_context_from_reference(Some(version.project_id.to_string()), None)
+            .await
+    }
+
+    async fn task_context_from_reference(&self, reference: &str) -> ApprovalContext {
+        let Ok(task) = self.store.get_task_by_ref(reference).await else {
+            return ApprovalContext {
+                task_ref: Some(reference.to_string()),
+                ..ApprovalContext::default()
+            };
+        };
+
+        let mut context = self
+            .project_context_from_reference(Some(task.project_id.to_string()), None)
+            .await;
+        context.task_ref = Some(task.task_id.to_string());
+        context
+    }
+
     async fn replay_approval_request(&self, request: &ApprovalRequest) -> AppResult<Value> {
         match request.action.as_str() {
             "project.create" => {
-                let input = serde_json::from_value::<CreateProjectInput>(request.payload_json.clone())
-                    .map_err(|error| AppError::InvalidArguments(format!("invalid approval payload: {error}")))?;
-                serde_json::to_value(self.create_project_internal(input, ApprovalMode::Replay).await?)
-                    .map_err(|error| AppError::internal(format!("failed to serialize replay result: {error}")))
+                let input =
+                    serde_json::from_value::<CreateProjectInput>(request.payload_json.clone())
+                        .map_err(|error| {
+                            AppError::InvalidArguments(format!("invalid approval payload: {error}"))
+                        })?;
+                serde_json::to_value(
+                    self.create_project_internal(input, ApprovalMode::Replay)
+                        .await?,
+                )
+                .map_err(|error| {
+                    AppError::internal(format!("failed to serialize replay result: {error}"))
+                })
             }
             "project.update" => {
-                let payload = serde_json::from_value::<ReferencedUpdatePayload<UpdateProjectInput>>(
-                    request.payload_json.clone(),
-                )
-                .map_err(|error| AppError::InvalidArguments(format!("invalid approval payload: {error}")))?;
+                let payload =
+                    serde_json::from_value::<ReferencedUpdatePayload<UpdateProjectInput>>(
+                        request.payload_json.clone(),
+                    )
+                    .map_err(|error| {
+                        AppError::InvalidArguments(format!("invalid approval payload: {error}"))
+                    })?;
                 serde_json::to_value(
-                    self.update_project_internal(&payload.reference, payload.input, ApprovalMode::Replay)
-                        .await?,
+                    self.update_project_internal(
+                        &payload.reference,
+                        payload.input,
+                        ApprovalMode::Replay,
+                    )
+                    .await?,
                 )
-                .map_err(|error| AppError::internal(format!("failed to serialize replay result: {error}")))
+                .map_err(|error| {
+                    AppError::internal(format!("failed to serialize replay result: {error}"))
+                })
             }
             "version.create" => {
-                let input = serde_json::from_value::<CreateVersionInput>(request.payload_json.clone())
-                    .map_err(|error| AppError::InvalidArguments(format!("invalid approval payload: {error}")))?;
-                serde_json::to_value(self.create_version_internal(input, ApprovalMode::Replay).await?)
-                    .map_err(|error| AppError::internal(format!("failed to serialize replay result: {error}")))
-            }
-            "version.update" => {
-                let payload = serde_json::from_value::<ReferencedUpdatePayload<UpdateVersionInput>>(
-                    request.payload_json.clone(),
-                )
-                .map_err(|error| AppError::InvalidArguments(format!("invalid approval payload: {error}")))?;
+                let input =
+                    serde_json::from_value::<CreateVersionInput>(request.payload_json.clone())
+                        .map_err(|error| {
+                            AppError::InvalidArguments(format!("invalid approval payload: {error}"))
+                        })?;
                 serde_json::to_value(
-                    self.update_version_internal(&payload.reference, payload.input, ApprovalMode::Replay)
+                    self.create_version_internal(input, ApprovalMode::Replay)
                         .await?,
                 )
-                .map_err(|error| AppError::internal(format!("failed to serialize replay result: {error}")))
+                .map_err(|error| {
+                    AppError::internal(format!("failed to serialize replay result: {error}"))
+                })
+            }
+            "version.update" => {
+                let payload =
+                    serde_json::from_value::<ReferencedUpdatePayload<UpdateVersionInput>>(
+                        request.payload_json.clone(),
+                    )
+                    .map_err(|error| {
+                        AppError::InvalidArguments(format!("invalid approval payload: {error}"))
+                    })?;
+                serde_json::to_value(
+                    self.update_version_internal(
+                        &payload.reference,
+                        payload.input,
+                        ApprovalMode::Replay,
+                    )
+                    .await?,
+                )
+                .map_err(|error| {
+                    AppError::internal(format!("failed to serialize replay result: {error}"))
+                })
             }
             "task.create" => {
                 let input = serde_json::from_value::<CreateTaskInput>(request.payload_json.clone())
-                    .map_err(|error| AppError::InvalidArguments(format!("invalid approval payload: {error}")))?;
-                serde_json::to_value(self.create_task_internal(input, ApprovalMode::Replay).await?)
-                    .map_err(|error| AppError::internal(format!("failed to serialize replay result: {error}")))
+                    .map_err(|error| {
+                        AppError::InvalidArguments(format!("invalid approval payload: {error}"))
+                    })?;
+                serde_json::to_value(
+                    self.create_task_internal(input, ApprovalMode::Replay)
+                        .await?,
+                )
+                .map_err(|error| {
+                    AppError::internal(format!("failed to serialize replay result: {error}"))
+                })
             }
             "task.update" => {
                 let payload = serde_json::from_value::<ReferencedUpdatePayload<UpdateTaskInput>>(
                     request.payload_json.clone(),
                 )
-                .map_err(|error| AppError::InvalidArguments(format!("invalid approval payload: {error}")))?;
+                .map_err(|error| {
+                    AppError::InvalidArguments(format!("invalid approval payload: {error}"))
+                })?;
                 serde_json::to_value(
-                    self.update_task_internal(&payload.reference, payload.input, ApprovalMode::Replay)
-                        .await?,
+                    self.update_task_internal(
+                        &payload.reference,
+                        payload.input,
+                        ApprovalMode::Replay,
+                    )
+                    .await?,
                 )
-                .map_err(|error| AppError::internal(format!("failed to serialize replay result: {error}")))
+                .map_err(|error| {
+                    AppError::internal(format!("failed to serialize replay result: {error}"))
+                })
             }
             "note.create" => {
                 let input = serde_json::from_value::<CreateNoteInput>(request.payload_json.clone())
-                    .map_err(|error| AppError::InvalidArguments(format!("invalid approval payload: {error}")))?;
-                serde_json::to_value(self.create_note_internal(input, ApprovalMode::Replay).await?)
-                    .map_err(|error| AppError::internal(format!("failed to serialize replay result: {error}")))
+                    .map_err(|error| {
+                        AppError::InvalidArguments(format!("invalid approval payload: {error}"))
+                    })?;
+                serde_json::to_value(
+                    self.create_note_internal(input, ApprovalMode::Replay)
+                        .await?,
+                )
+                .map_err(|error| {
+                    AppError::internal(format!("failed to serialize replay result: {error}"))
+                })
             }
             "attachment.create" => {
                 let input =
                     serde_json::from_value::<CreateAttachmentInput>(request.payload_json.clone())
                         .map_err(|error| {
-                            AppError::InvalidArguments(format!("invalid approval payload: {error}"))
-                        })?;
+                        AppError::InvalidArguments(format!("invalid approval payload: {error}"))
+                    })?;
                 serde_json::to_value(
                     self.create_attachment_internal(input, ApprovalMode::Replay)
                         .await?,
                 )
-                .map_err(|error| AppError::internal(format!("failed to serialize replay result: {error}")))
+                .map_err(|error| {
+                    AppError::internal(format!("failed to serialize replay result: {error}"))
+                })
             }
             other => Err(AppError::InvalidAction(format!(
                 "unsupported approval replay action: {other}"
@@ -964,7 +1200,8 @@ impl AgentaService {
 }
 
 fn normalize_slug(value: &str) -> String {
-    value.trim()
+    value
+        .trim()
         .to_ascii_lowercase()
         .chars()
         .map(|ch| match ch {
@@ -992,7 +1229,9 @@ fn clean_optional(value: Option<String>) -> Option<String> {
 fn require_non_empty(value: String, field: &str) -> AppResult<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
-        Err(AppError::InvalidArguments(format!("{field} must not be empty")))
+        Err(AppError::InvalidArguments(format!(
+            "{field} must not be empty"
+        )))
     } else {
         Ok(trimmed.to_string())
     }
@@ -1011,6 +1250,24 @@ fn actor_or_default(value: Option<&str>, origin: RequestOrigin) -> String {
         .filter(|value| !value.is_empty())
         .unwrap_or(origin.fallback_actor())
         .to_string()
+}
+
+fn json_string(value: &Value, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(|item| item.to_string())
+}
+
+fn matches_project_filter(
+    request: &ApprovalRequest,
+    project_slug: &str,
+    project_id: Option<&str>,
+) -> bool {
+    request.project_ref.as_deref() == Some(project_slug)
+        || project_id.is_some_and(|project_id| request.project_ref.as_deref() == Some(project_id))
 }
 
 fn parse_uuid(value: &str, field: &str) -> AppResult<Uuid> {

@@ -1,42 +1,104 @@
 import { createRouter, createWebHistory } from "vue-router";
 
-import ApprovalsView from "./views/ApprovalsView.vue";
-import ProjectsView from "./views/ProjectsView.vue";
+import LegacyRouteResolverView from "./views/LegacyRouteResolverView.vue";
+import ProjectWorkspaceApprovalsView from "./views/ProjectWorkspaceApprovalsView.vue";
+import ProjectWorkspaceOverviewView from "./views/ProjectWorkspaceOverviewView.vue";
+import ProjectWorkspaceTasksView from "./views/ProjectWorkspaceTasksView.vue";
+import ProjectWorkspaceVersionsView from "./views/ProjectWorkspaceVersionsView.vue";
+import ProjectWorkspaceView from "./views/ProjectWorkspaceView.vue";
 import RuntimeView from "./views/RuntimeView.vue";
-import TasksView from "./views/TasksView.vue";
+
+const projectRouteMeta = {
+  kickerKey: "routes.projects.kicker",
+  titleKey: "routes.projects.title",
+};
 
 export const router = createRouter({
   history: createWebHistory(),
   routes: [
     {
       path: "/",
-      redirect: "/tasks",
+      redirect: "/projects",
     },
     {
       path: "/projects",
       name: "projects",
-      component: ProjectsView,
-      meta: {
-        titleKey: "routes.projects.title",
-        kickerKey: "routes.projects.kicker",
-      },
+      component: ProjectWorkspaceView,
+      meta: projectRouteMeta,
+    },
+    {
+      path: "/projects/:projectSlug",
+      component: ProjectWorkspaceView,
+      meta: projectRouteMeta,
+      children: [
+        {
+          path: "",
+          redirect: (to) => ({
+            name: "project-overview",
+            params: to.params,
+            query: to.query,
+          }),
+        },
+        {
+          path: "overview",
+          name: "project-overview",
+          component: ProjectWorkspaceOverviewView,
+          meta: {
+            kickerKey: "routes.projects.title",
+            titleKey: "routes.projects.sections.overview",
+            workspaceSection: "overview",
+          },
+        },
+        {
+          path: "versions",
+          name: "project-versions",
+          component: ProjectWorkspaceVersionsView,
+          meta: {
+            kickerKey: "routes.projects.title",
+            titleKey: "routes.projects.sections.versions",
+            workspaceSection: "versions",
+          },
+        },
+        {
+          path: "tasks",
+          name: "project-tasks",
+          component: ProjectWorkspaceTasksView,
+          meta: {
+            kickerKey: "routes.projects.title",
+            titleKey: "routes.projects.sections.tasks",
+            workspaceSection: "tasks",
+          },
+        },
+        {
+          path: "approvals",
+          name: "project-approvals",
+          component: ProjectWorkspaceApprovalsView,
+          meta: {
+            kickerKey: "routes.projects.title",
+            titleKey: "routes.projects.sections.approvals",
+            workspaceSection: "approvals",
+          },
+        },
+      ],
     },
     {
       path: "/tasks",
-      name: "tasks",
-      component: TasksView,
+      name: "legacy-tasks",
+      component: LegacyRouteResolverView,
       meta: {
-        titleKey: "routes.tasks.title",
-        kickerKey: "routes.tasks.kicker",
+        kickerKey: "routes.projects.title",
+        titleKey: "routes.projects.sections.tasks",
+        legacySection: "tasks",
       },
     },
     {
       path: "/approvals",
-      name: "approvals",
-      component: ApprovalsView,
+      name: "legacy-approvals",
+      component: LegacyRouteResolverView,
       meta: {
-        titleKey: "routes.approvals.title",
-        kickerKey: "routes.approvals.kicker",
+        kickerKey: "routes.projects.title",
+        titleKey: "routes.projects.sections.approvals",
+        legacySection: "approvals",
       },
     },
     {

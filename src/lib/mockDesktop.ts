@@ -358,6 +358,9 @@ function createSeedState(): MockState {
       action: "project.create",
       requested_via: "desktop",
       resource_ref: "agenta-console",
+      project_ref: "agenta-console",
+      project_name: "Agenta Console",
+      task_ref: null,
       payload_json: {
         slug: "agenta-console",
         name: "Agenta Console",
@@ -378,6 +381,9 @@ function createSeedState(): MockState {
       action: "attachment.create",
       requested_via: "desktop",
       resource_ref: "task-approval-queue",
+      project_ref: "ops-lab",
+      project_name: "Ops Lab",
+      task_ref: "task-approval-queue",
       payload_json: {
         task: "task-approval-queue",
         path: "D:/preview/screens/approval-queue.png",
@@ -401,6 +407,9 @@ function createSeedState(): MockState {
       action: "task.update",
       requested_via: "mcp",
       resource_ref: "task-shell-polish",
+      project_ref: "agenta-console",
+      project_name: "Agenta Console",
+      task_ref: "task-shell-polish",
       payload_json: {
         task: "task-shell-polish",
         title: "Refine shell navigation",
@@ -774,8 +783,17 @@ function createAttachment(input: JsonMap) {
   return attachment;
 }
 
-function listApprovals(status?: ApprovalStatus) {
-  const nextApprovals = status ? state.approvals.filter((item) => item.status === status) : state.approvals;
+function listApprovals(status?: ApprovalStatus, projectReference?: string) {
+  let nextApprovals = status ? state.approvals.filter((item) => item.status === status) : state.approvals;
+  if (projectReference) {
+    const project =
+      state.projects.find((item) => item.project_id === projectReference || item.slug === projectReference) ?? null;
+    nextApprovals = nextApprovals.filter(
+      (item) =>
+        item.project_ref === projectReference ||
+        (project ? item.project_ref === project.project_id || item.project_ref === project.slug : false),
+    );
+  }
   return sortByDateDesc(nextApprovals);
 }
 
@@ -895,6 +913,10 @@ export const mockDesktopBridge = {
   version(input: JsonMap = {}) {
     const action = typeof input.action === "string" ? input.action : "list";
     switch (action) {
+      case "get":
+        return Promise.resolve(
+          envelope("desktop_version", findVersion(requireString(input.version, "version")), "Loaded preview version."),
+        );
       case "create":
         return Promise.resolve(envelope("desktop_version", createVersion(input), "Created preview version."));
       case "update":
@@ -983,8 +1005,10 @@ export const mockDesktopBridge = {
       default: {
         const status =
           typeof input.status === "string" && input.status.trim() ? (input.status.trim() as ApprovalStatus) : undefined;
+        const project =
+          typeof input.project === "string" && input.project.trim() ? input.project.trim() : undefined;
         return Promise.resolve(
-          envelope("desktop_approval", listApprovals(status), "Loaded preview approval queue."),
+          envelope("desktop_approval", listApprovals(status, project), "Loaded preview approval queue."),
         );
       }
     }

@@ -317,16 +317,10 @@ pub fn load_runtime_config(explicit_config_path: Option<PathBuf>) -> AppResult<R
     let raw_log = raw_mcp.log.unwrap_or_default();
 
     let bind = sanitize_non_empty(
-        &raw_mcp
-            .bind
-            .unwrap_or_else(|| DEFAULT_MCP_BIND.to_string()),
+        &raw_mcp.bind.unwrap_or_else(|| DEFAULT_MCP_BIND.to_string()),
         "mcp.bind",
     )?;
-    let path = normalize_mount_path(
-        &raw_mcp
-            .path
-            .unwrap_or_else(|| DEFAULT_MCP_PATH.to_string()),
-    )?;
+    let path = normalize_mount_path(&raw_mcp.path.unwrap_or_else(|| DEFAULT_MCP_PATH.to_string()))?;
     let log_file_path = raw_log
         .file
         .and_then(|file| file.path)
@@ -496,8 +490,8 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        McpConfig, McpHostKind, McpLaunchOverrides, McpLogConfig, McpLogDestination,
-        McpLogLevel, load_runtime_config, save_mcp_config_defaults,
+        load_runtime_config, save_mcp_config_defaults, McpConfig, McpHostKind, McpLaunchOverrides,
+        McpLogConfig, McpLogDestination, McpLogLevel,
     };
 
     #[test]

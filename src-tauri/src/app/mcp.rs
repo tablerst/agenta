@@ -2,17 +2,15 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use axum::{Router, routing::get};
+use axum::{routing::get, Router};
 use rmcp::transport::streamable_http_server::{
-    StreamableHttpServerConfig,
-    session::local::LocalSessionManager,
-    tower::StreamableHttpService,
+    session::local::LocalSessionManager, tower::StreamableHttpService, StreamableHttpServerConfig,
 };
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tauri::Emitter;
-use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
+use time::OffsetDateTime;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
@@ -128,8 +126,9 @@ impl McpSessionLogger {
             .destinations
             .contains(&McpLogDestination::Stdout)
         {
-            let line = serde_json::to_string(&entry)
-                .map_err(|error| AppError::internal(format!("failed to encode MCP log entry: {error}")))?;
+            let line = serde_json::to_string(&entry).map_err(|error| {
+                AppError::internal(format!("failed to encode MCP log entry: {error}"))
+            })?;
             println!("{line}");
         }
 
@@ -147,8 +146,9 @@ impl McpSessionLogger {
                 .append(true)
                 .open(&self.config.log.file_path)
                 .await?;
-            let line = serde_json::to_string(&entry)
-                .map_err(|error| AppError::internal(format!("failed to encode MCP log entry: {error}")))?;
+            let line = serde_json::to_string(&entry).map_err(|error| {
+                AppError::internal(format!("failed to encode MCP log entry: {error}"))
+            })?;
             file.write_all(line.as_bytes()).await?;
             file.write_all(b"\n").await?;
         }
@@ -161,7 +161,9 @@ impl McpSessionLogger {
         let component = component.into();
         let message = message.into();
         tauri::async_runtime::spawn(async move {
-            let _ = logger.record(McpLogLevel::Info, component, message, fields).await;
+            let _ = logger
+                .record(McpLogLevel::Info, component, message, fields)
+                .await;
         });
     }
 
@@ -217,11 +219,15 @@ pub fn build_mcp_router(
                 ))
             },
             Arc::new(LocalSessionManager::default()),
-            StreamableHttpServerConfig::default().with_sse_keep_alive(Some(Duration::from_secs(20))),
+            StreamableHttpServerConfig::default()
+                .with_sse_keep_alive(Some(Duration::from_secs(20))),
         );
 
     Router::new()
-        .route("/health", get(|| async { axum::Json(json!({ "ok": true })) }))
+        .route(
+            "/health",
+            get(|| async { axum::Json(json!({ "ok": true })) }),
+        )
         .nest_service(mount_path, http_service)
 }
 
@@ -304,10 +310,7 @@ impl McpSupervisor {
     }
 
     pub fn attach_emitter(&self, app_handle: tauri::AppHandle) {
-        *self
-            .emitter
-            .lock()
-            .expect("lock MCP supervisor emitter") = Some(app_handle);
+        *self.emitter.lock().expect("lock MCP supervisor emitter") = Some(app_handle);
         self.emit_status();
     }
 
@@ -319,16 +322,12 @@ impl McpSupervisor {
     }
 
     pub fn replace_default_config(&self, next_config: McpConfig) {
-        *self
-            .default_config
-            .lock()
-            .expect("lock MCP default config") = next_config;
+        *self.default_config.lock().expect("lock MCP default config") = next_config;
         self.emit_status();
     }
 
     pub fn resolve_default_config(&self, overrides: &McpLaunchOverrides) -> McpConfig {
-        self.default_config()
-            .overlay(overrides)
+        self.default_config().overlay(overrides)
     }
 
     pub fn status_snapshot(&self) -> McpRuntimeStatus {
@@ -349,7 +348,10 @@ impl McpSupervisor {
         };
 
         McpLogSnapshot {
-            session_id: inner.session.as_ref().map(|session| session.session_id.clone()),
+            session_id: inner
+                .session
+                .as_ref()
+                .map(|session| session.session_id.clone()),
             entries,
         }
     }
@@ -368,7 +370,9 @@ impl McpSupervisor {
             let mut inner = self.inner.lock().expect("lock MCP supervisor state");
             if matches!(
                 inner.state,
-                McpLifecycleState::Starting | McpLifecycleState::Running | McpLifecycleState::Stopping
+                McpLifecycleState::Starting
+                    | McpLifecycleState::Running
+                    | McpLifecycleState::Stopping
             ) {
                 return Err(AppError::Conflict(
                     "desktop-managed MCP host is already active".to_string(),
@@ -453,7 +457,9 @@ impl McpSupervisor {
             let mut inner = self.inner.lock().expect("lock MCP supervisor state");
             if !matches!(
                 inner.state,
-                McpLifecycleState::Starting | McpLifecycleState::Running | McpLifecycleState::Failed
+                McpLifecycleState::Starting
+                    | McpLifecycleState::Running
+                    | McpLifecycleState::Failed
             ) {
                 return Ok(self.status_snapshot_from_state(&inner));
             }
@@ -574,7 +580,10 @@ impl McpSupervisor {
 
         McpRuntimeStatus {
             state: state.state,
-            session_id: state.session.as_ref().map(|session| session.session_id.clone()),
+            session_id: state
+                .session
+                .as_ref()
+                .map(|session| session.session_id.clone()),
             bind: session_config.bind.clone(),
             actual_bind: state
                 .session

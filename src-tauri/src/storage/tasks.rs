@@ -86,10 +86,14 @@ impl SqliteStore {
             "#,
         );
         if let Some(project_id) = filter.project_id {
-            builder.push(" AND project_id = ").push_bind(project_id.to_string());
+            builder
+                .push(" AND project_id = ")
+                .push_bind(project_id.to_string());
         }
         if let Some(version_id) = filter.version_id {
-            builder.push(" AND version_id = ").push_bind(version_id.to_string());
+            builder
+                .push(" AND version_id = ")
+                .push_bind(version_id.to_string());
         }
         if let Some(status) = filter.status {
             builder.push(" AND status = ").push_bind(status.to_string());

@@ -3,12 +3,12 @@ use std::path::PathBuf;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{ProtocolVersion, ServerCapabilities, ServerInfo};
-use rmcp::{ErrorData, Json, ServerHandler, tool, tool_handler, tool_router};
+use rmcp::{tool, tool_handler, tool_router, ErrorData, Json, ServerHandler};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
+use time::OffsetDateTime;
 
 use crate::app::McpSessionLogger;
 use crate::domain::{
@@ -19,8 +19,8 @@ use crate::interface::response::error_to_rmcp;
 use crate::search::SearchResponse;
 use crate::service::{
     AgentaService, CreateAttachmentInput, CreateNoteInput, CreateProjectInput, CreateTaskInput,
-    CreateVersionInput, RequestOrigin, SearchInput, TaskQuery, UpdateProjectInput,
-    UpdateTaskInput, UpdateVersionInput,
+    CreateVersionInput, RequestOrigin, SearchInput, TaskQuery, UpdateProjectInput, UpdateTaskInput,
+    UpdateVersionInput,
 };
 
 #[derive(Clone)]
@@ -1172,13 +1172,8 @@ impl AgentaMcpServer {
                 attachment: AttachmentRecord::from(attachment),
             })
             .map_err(error_to_rmcp);
-        self.log_structured_tool_result(
-            "attachment_create",
-            action,
-            "Created attachment",
-            &result,
-        )
-        .await;
+        self.log_structured_tool_result("attachment_create", action, "Created attachment", &result)
+            .await;
 
         result.map(Json)
     }
@@ -1242,13 +1237,8 @@ impl AgentaMcpServer {
                     .collect(),
             })
             .map_err(error_to_rmcp);
-        self.log_structured_tool_result(
-            "attachment_list",
-            action,
-            "Listed attachments",
-            &result,
-        )
-        .await;
+        self.log_structured_tool_result("attachment_list", action, "Listed attachments", &result)
+            .await;
 
         result.map(Json)
     }
@@ -1422,8 +1412,9 @@ mod tests {
 
     #[test]
     fn attachment_and_search_schemas_follow_explicit_contract() {
-        let attachment_create = serde_json::to_value(AgentaMcpServer::attachment_create_tool_attr())
-            .expect("tool json");
+        let attachment_create =
+            serde_json::to_value(AgentaMcpServer::attachment_create_tool_attr())
+                .expect("tool json");
         let attachment_schema = serde_json::to_string(&attachment_create["inputSchema"])
             .expect("attachment schema string");
         assert!(attachment_schema.contains("\"screenshot\""));
@@ -1439,8 +1430,7 @@ mod tests {
             "search_query must not expose legacy action multiplexing"
         );
         assert_eq!(
-            search_query["annotations"]["readOnlyHint"],
-            true,
+            search_query["annotations"]["readOnlyHint"], true,
             "search_query should be explicitly marked read-only"
         );
     }

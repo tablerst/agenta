@@ -77,9 +77,17 @@ export const useTasksStore = defineStore("tasks", () => {
     return envelope.result as Attachment;
   }
 
+  function clearTaskDetail() {
+    currentTask.value = null;
+    notes.value = [];
+    attachments.value = [];
+    activities.value = [];
+  }
+
   return {
     activities,
     attachments,
+    clearTaskDetail,
     createAttachment,
     createNote,
     createTask,

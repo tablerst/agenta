@@ -2,12 +2,12 @@ use std::str::FromStr;
 
 use clap::{Args, Parser, Subcommand};
 
-use crate::app::runtime::{AgentaApp, BootstrapOptions, init_tracing};
+use crate::app::runtime::{init_tracing, AgentaApp, BootstrapOptions};
 use crate::error::{AppError, AppResult};
 use crate::interface::response::{error, success, SuccessEnvelope};
 use crate::service::{
-    CreateAttachmentInput, CreateNoteInput, CreateProjectInput, CreateTaskInput, CreateVersionInput,
-    RequestOrigin, SearchInput, TaskQuery, UpdateProjectInput, UpdateTaskInput,
+    CreateAttachmentInput, CreateNoteInput, CreateProjectInput, CreateTaskInput,
+    CreateVersionInput, RequestOrigin, SearchInput, TaskQuery, UpdateProjectInput, UpdateTaskInput,
     UpdateVersionInput,
 };
 
@@ -284,17 +284,16 @@ async fn execute_project(app: AgentaApp, command: ProjectCommand) -> AppResult<S
         ProjectCommand::Create(args) => {
             let project = app
                 .service
-                .create_project_from(RequestOrigin::Cli, CreateProjectInput {
-                    slug: args.slug,
-                    name: args.name,
-                    description: args.description,
-                })
+                .create_project_from(
+                    RequestOrigin::Cli,
+                    CreateProjectInput {
+                        slug: args.slug,
+                        name: args.name,
+                        description: args.description,
+                    },
+                )
                 .await?;
-            success(
-                "project.create",
-                project,
-                "Created project".to_string(),
-            )
+            success("project.create", project, "Created project".to_string())
         }
         ProjectCommand::Get(args) => {
             let project = app.service.get_project(&args.project).await?;
@@ -333,12 +332,15 @@ async fn execute_version(app: AgentaApp, command: VersionCommand) -> AppResult<S
         VersionCommand::Create(args) => {
             let version = app
                 .service
-                .create_version_from(RequestOrigin::Cli, CreateVersionInput {
-                    project: args.project,
-                    name: args.name,
-                    description: args.description,
-                    status: parse_optional_enum(args.status)?,
-                })
+                .create_version_from(
+                    RequestOrigin::Cli,
+                    CreateVersionInput {
+                        project: args.project,
+                        name: args.name,
+                        description: args.description,
+                        status: parse_optional_enum(args.status)?,
+                    },
+                )
                 .await?;
             success("version.create", version, "Created version")
         }
@@ -377,16 +379,19 @@ async fn execute_task(app: AgentaApp, command: TaskCommand) -> AppResult<Success
         TaskCommand::Create(args) => {
             let task = app
                 .service
-                .create_task_from(RequestOrigin::Cli, CreateTaskInput {
-                    project: args.project,
-                    version: args.version,
-                    title: args.title,
-                    summary: args.summary,
-                    description: args.description,
-                    status: parse_optional_enum(args.status)?,
-                    priority: parse_optional_enum(args.priority)?,
-                    created_by: args.created_by,
-                })
+                .create_task_from(
+                    RequestOrigin::Cli,
+                    CreateTaskInput {
+                        project: args.project,
+                        version: args.version,
+                        title: args.title,
+                        summary: args.summary,
+                        description: args.description,
+                        status: parse_optional_enum(args.status)?,
+                        priority: parse_optional_enum(args.priority)?,
+                        created_by: args.created_by,
+                    },
+                )
                 .await?;
             success("task.create", task, "Created task")
         }
@@ -403,7 +408,11 @@ async fn execute_task(app: AgentaApp, command: TaskCommand) -> AppResult<Success
                     status: parse_optional_enum(args.status)?,
                 })
                 .await?;
-            success("task.list", &tasks, format!("Listed {} task(s)", tasks.len()))
+            success(
+                "task.list",
+                &tasks,
+                format!("Listed {} task(s)", tasks.len()),
+            )
         }
         TaskCommand::Update(args) => {
             let task = app
@@ -432,11 +441,14 @@ async fn execute_note(app: AgentaApp, command: NoteCommand) -> AppResult<Success
         NoteCommand::Create(args) => {
             let activity = app
                 .service
-                .create_note_from(RequestOrigin::Cli, CreateNoteInput {
-                    task: args.task,
-                    content: args.content,
-                    created_by: args.created_by,
-                })
+                .create_note_from(
+                    RequestOrigin::Cli,
+                    CreateNoteInput {
+                        task: args.task,
+                        content: args.content,
+                        created_by: args.created_by,
+                    },
+                )
                 .await?;
             success("note.create", activity, "Created note")
         }
@@ -459,13 +471,16 @@ async fn execute_attachment(
         AttachmentCommand::Create(args) => {
             let attachment = app
                 .service
-                .create_attachment_from(RequestOrigin::Cli, CreateAttachmentInput {
-                    task: args.task,
-                    path: args.path,
-                    kind: parse_optional_enum(args.kind)?,
-                    created_by: args.created_by,
-                    summary: args.summary,
-                })
+                .create_attachment_from(
+                    RequestOrigin::Cli,
+                    CreateAttachmentInput {
+                        task: args.task,
+                        path: args.path,
+                        kind: parse_optional_enum(args.kind)?,
+                        created_by: args.created_by,
+                        summary: args.summary,
+                    },
+                )
                 .await?;
             success("attachment.create", attachment, "Created attachment")
         }

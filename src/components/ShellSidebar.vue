@@ -6,8 +6,6 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Search,
-  ShieldCheck,
-  SquareKanban,
   SunMedium,
   X,
 } from "@lucide/vue";
@@ -18,20 +16,25 @@ import { RouterLink, useRoute } from "vue-router";
 import SidebarLocaleSwitcher from "./SidebarLocaleSwitcher.vue";
 import logoUrl from "../assets/logo.svg";
 import { bridgeMode } from "../lib/desktop";
-import { useApprovalsStore } from "../stores/approvals";
+import { buildProjectWorkspacePath, readRouteString } from "../lib/projectWorkspace";
+import { useProjectsStore } from "../stores/projects";
 import { useShellStore } from "../stores/shell";
 
 const shell = useShellStore();
-const approvals = useApprovalsStore();
+const projectsStore = useProjectsStore();
 const route = useRoute();
 const { locale, t } = useI18n({ useScope: "global" });
+
+const currentProjectSlug = computed(() => readRouteString(route.params.projectSlug));
+const projectsTarget = computed(() => {
+  const targetSlug = currentProjectSlug.value ?? projectsStore.projects[0]?.slug;
+  return targetSlug ? buildProjectWorkspacePath(targetSlug, "overview") : "/projects";
+});
 
 const navItems = computed(() => {
   void locale.value;
   return [
-    { key: "projects", label: t("routes.projects.title"), to: "/projects", icon: FolderKanban },
-    { key: "tasks", label: t("routes.tasks.title"), to: "/tasks", icon: SquareKanban },
-    { key: "approvals", label: t("routes.approvals.title"), to: "/approvals", icon: ShieldCheck },
+    { key: "projects", label: t("routes.projects.title"), to: projectsTarget.value, icon: FolderKanban },
     { key: "runtime", label: t("routes.runtime.title"), to: "/runtime", icon: Activity },
   ];
 });
@@ -57,6 +60,13 @@ const toggleIcon = computed(() => {
   return isCondensed.value ? PanelLeftOpen : PanelLeftClose;
 });
 
+function isActive(key: string, to: string) {
+  if (key === "projects") {
+    return route.path.startsWith("/projects");
+  }
+  return route.path === to;
+}
+
 function openSearch() {
   shell.openSearch();
   shell.closeSidebar();
@@ -73,7 +83,7 @@ function navigateAndClose(navigate: () => void) {
     <div class="shell-sidebar-inner">
       <div class="shell-sidebar-header">
         <RouterLink
-          to="/tasks"
+          :to="projectsTarget"
           class="shell-brand spotlight-surface"
           :aria-label="t('app.name')"
           :title="t('app.name')"
@@ -116,26 +126,16 @@ function navigateAndClose(navigate: () => void) {
             :href="href"
             class="nav-item spotlight-surface"
             :class="{
-              'nav-item-active': route.path === item.to,
+              'nav-item-active': isActive(item.key, item.to),
               'nav-item-collapsed': isCondensed,
             }"
-            :aria-current="route.path === item.to ? 'page' : undefined"
+            :aria-current="isActive(item.key, item.to) ? 'page' : undefined"
             :aria-label="item.label"
             :title="item.label"
             @click="navigateAndClose(navigate)"
           >
             <component :is="item.icon" class="nav-item-icon" :size="17" />
             <span v-if="!isCondensed" class="truncate">{{ item.label }}</span>
-            <span
-              v-if="item.key === 'approvals' && !isCondensed && approvals.pendingCount > 0"
-              class="status-pill status-pill-warning ml-auto"
-            >
-              {{ approvals.pendingCount }}
-            </span>
-            <span
-              v-else-if="item.key === 'approvals' && isCondensed && approvals.pendingCount > 0"
-              class="shell-nav-dot"
-            />
           </a>
         </RouterLink>
       </nav>
