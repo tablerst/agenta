@@ -1,6 +1,6 @@
 # Agenta Desktop / CLI / MCP 快速开始
 
-本文档反映第二里程碑基线：Desktop 负责托管 MCP 生命周期与可视化日志，CLI 与 Standalone MCP 仍保持独立入口。
+本文档反映当前正式基线：第二里程碑已完成，当前活跃工作流聚焦文档收口与 Desktop 宿主增强，Desktop 继续负责托管 MCP 生命周期与可视化日志。
 
 ## 1. 命名与入口
 
@@ -37,6 +37,11 @@ mcp:
 
 当未提供 `--config` 且当前目录不存在 `agenta.local.yaml` 时，数据库、附件和 MCP 文件日志默认落到系统应用数据目录。
 
+`mcp.autostart` 的当前口径如下：
+
+- `false`：Desktop 启动后保持 `stopped`，由 Runtime 页面显式启动
+- `true`：Desktop 完成 setup 后自动拉起托管 MCP；若自动拉起失败，应用保持可用，Runtime 进入 `failed`
+
 ## 3. CLI 快速开始
 
 查看帮助：
@@ -71,8 +76,9 @@ CLI 默认输出 JSON。
 
 桌面启动后，Runtime 页面现在是 MCP 控制台，默认行为如下：
 
-- Desktop 启动时 MCP 默认为 `stopped`
-- 由 Runtime 页面显式启动
+- `mcp.autostart=false` 时，Desktop 启动后 MCP 默认为 `stopped`
+- `mcp.autostart=true` 时，Desktop setup 完成后自动拉起托管 MCP
+- 自动拉起失败不会终止 App，本轮仍通过现有日志与 `failed` 状态暴露错误
 - 退出 App 时优雅停止
 - 本阶段不包含 tray、后台常驻、关窗保活或 daemon 化
 

@@ -41,6 +41,7 @@ const logDestinationOptions: McpLogDestination[] = ["ui", "stdout", "file"];
 const form = reactive({
   bind: "",
   path: "/mcp",
+  autostart: false,
   logLevel: "info" as McpRuntimeStatus["log_level"],
   logDestinations: ["ui", "file"] as McpLogDestination[],
   logFilePath: "",
@@ -114,6 +115,7 @@ function hydrateForm(status: McpRuntimeStatus | null) {
   }
   form.bind = status.bind;
   form.path = status.path;
+  form.autostart = status.autostart;
   form.logLevel = status.log_level;
   form.logDestinations = [...status.log_destinations];
   form.logFilePath = status.log_file_path;
@@ -178,6 +180,7 @@ async function startMcp() {
     const payload: McpLaunchOverrides = {
       bind: form.bind,
       path: form.path,
+      autostart: form.autostart,
       log_level: form.logLevel,
       log_destinations: form.logDestinations,
       log_file_path: form.logFilePath,
@@ -231,6 +234,9 @@ onMounted(async () => {
     await desktopBridge.onMcpStatus((payload) => {
       const sessionChanged = payload.session_id !== mcp.value?.session_id;
       mcp.value = payload;
+      if (!busy.value) {
+        hydrateForm(payload);
+      }
       if (sessionChanged && payload.session_id) {
         logs.value = [];
       }
@@ -390,6 +396,13 @@ onUnmounted(() => {
 
             <section class="panel-section">
               <p class="section-label">{{ t("runtime.persistence") }}</p>
+              <label class="runtime-option-row">
+                <input v-model="form.autostart" type="checkbox" />
+                <span>{{ t("runtime.fields.autostart") }}</span>
+              </label>
+              <p class="mt-3 text-sm text-[var(--text-muted)]">
+                {{ t("runtime.autostartHint") }}
+              </p>
               <label class="runtime-option-row">
                 <input v-model="saveAsDefault" :disabled="!canSaveDefaults" type="checkbox" />
                 <span>{{ t("runtime.fields.saveAsDefault") }}</span>

@@ -1,6 +1,6 @@
 # Agenta
 
-Agenta is a local-first task and context service for agent hosts. The current active baseline is the second milestone: the desktop app now carries the MCP host lifecycle and exposes a Runtime console for launch control, structured logs, and failure recovery.
+Agenta is a local-first task and context service for agent hosts. The second-milestone desktop baseline is complete, and the current active execution plan focuses on documentation alignment and Desktop host hardening around `mcp.autostart`.
 
 ## Distribution
 
@@ -15,7 +15,7 @@ Agenta is a local-first task and context service for agent hosts. The current ac
 - Shared Rust core, app runtime, CLI, and MCP server live under `src-tauri`
 - Desktop commands and Runtime console live in the Tauri shell and `src/views/RuntimeView.vue`
 - Runtime configuration is YAML-first and defaults to system application data directories
-- Desktop-managed MCP defaults to manual start from the Runtime console and stops gracefully with the app
+- Desktop-managed MCP honors `mcp.autostart`: manual start remains the default, persisted opt-in auto-start is supported, and the host stops gracefully with the app
 
 ## Commands
 
@@ -47,6 +47,7 @@ When `mcp.log.destinations` is omitted, defaults depend on the host:
 ## Documentation
 
 - Quickstart: [docs/cli-mcp-quickstart.md](/e:/JetBrains/RustRover/agenta/docs/cli-mcp-quickstart.md)
-- Active execution plans: [dev_docs/execution-plans/active](/e:/JetBrains/RustRover/agenta/dev_docs/execution-plans/active)
+- Active execution plan: [dev_docs/execution-plans/active/third-milestone-doc-alignment-and-desktop-host-hardening.md](/e:/JetBrains/RustRover/agenta/dev_docs/execution-plans/active/third-milestone-doc-alignment-and-desktop-host-hardening.md)
+- Archived execution plans: [dev_docs/execution-plans/archive](/e:/JetBrains/RustRover/agenta/dev_docs/execution-plans/archive)
 - Product baseline: [dev_docs/baseline.md](/e:/JetBrains/RustRover/agenta/dev_docs/baseline.md)
 - Architecture notes: [dev_docs/architecture.md](/e:/JetBrains/RustRover/agenta/dev_docs/architecture.md)

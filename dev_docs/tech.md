@@ -212,16 +212,16 @@ CLI 是最稳定的调试与自动化入口。
 
 ### 6.2 MCP
 
-MCP 层保持“工具族 + action”模型。
+MCP 层保持“显式工具名 + 单一意图”模型，不再使用 `action` 多路复用。
 
 示例：
 
-- `project(action=...)`
-- `version(action=...)`
-- `task(action=...)`
-- `note(action=...)`
-- `attachment(action=...)`
-- `search(action=query)`
+- `project_create` / `project_get` / `project_list` / `project_update`
+- `version_create` / `version_get` / `version_list` / `version_update`
+- `task_create` / `task_get` / `task_list` / `task_update`
+- `note_create` / `note_list`
+- `attachment_create` / `attachment_get` / `attachment_list`
+- `search_query`
 
 ### 6.3 MCP transport 策略
 

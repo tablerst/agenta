@@ -123,7 +123,7 @@
 
 1. 在单 crate 或共享 core 上补 MCP 入口
 2. 首先实现 `streamable_http` transport
-3. 落工具族 + action schema
+3. 落显式工具名 schema
 4. 建立统一返回骨架
 
 退出条件：

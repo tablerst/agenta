@@ -656,6 +656,8 @@ const localeOverrides = {
         start: "Start host",
         stop: "Stop host",
       },
+      autostartHint:
+        "When saved as part of the active config, Desktop will start the managed MCP host automatically after app setup.",
       bufferSize: "UI buffer: {count} lines",
       configSource: "Config source",
       destinations: {
@@ -667,6 +669,7 @@ const localeOverrides = {
       endpoint: "Endpoint",
       failedSummary: "The desktop-managed MCP host needs attention.",
       fields: {
+        autostart: "Auto-start on Desktop launch",
         bind: "Bind address",
         logFilePath: "Log file path",
         logLevel: "Log level",
@@ -718,6 +721,7 @@ const localeOverrides = {
         start: "启动主机",
         stop: "停止主机",
       },
+      autostartHint: "保存到当前配置后，Desktop 会在应用完成初始化后自动拉起托管 MCP 主机。",
       bufferSize: "UI 缓冲区：{count} 行",
       configSource: "配置来源",
       destinations: {
@@ -729,6 +733,7 @@ const localeOverrides = {
       endpoint: "端点",
       failedSummary: "桌面托管的 MCP 主机需要处理。",
       fields: {
+        autostart: "Desktop 启动时自动拉起",
         bind: "绑定地址",
         logFilePath: "日志文件路径",
         logLevel: "日志级别",

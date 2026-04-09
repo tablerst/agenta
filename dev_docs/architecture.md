@@ -31,7 +31,9 @@ Agenta 当前继续保持单一 `src-tauri` package，而不是提前拆成 work
 
 第二里程碑内，Desktop 与 MCP 的关系固定如下：
 
-- MCP 默认不自动启动，Runtime 页面显式启动
+- `mcp.autostart=false` 时，Desktop 启动后保持手动启动，由 Runtime 页面显式启动
+- `mcp.autostart=true` 时，Desktop 在 setup 完成并挂接事件发射器后自动拉起托管 MCP
+- 自动拉起失败不会终止 Desktop，本轮仍通过 `failed` 状态、日志快照与增量事件暴露错误
 - App 退出时优雅停止托管 MCP
 - 不做 tray、关窗保活、后台常驻或 daemon 化
 - Runtime 页面通过状态查询、日志快照和 Tauri 增量事件消费 MCP 生命周期
@@ -80,9 +82,15 @@ MCP 相关配置继续走 YAML-first：
 
 以下能力明确留到后续阶段：
 
+- 日志轮转
+- 多 session 历史
 - tray / 常驻后台
 - sidecar / daemon 化
-- 多 session 历史
-- 日志轮转
 - `stdio` 扩展 transport
 - Desktop 独占业务逻辑
+
+后续演进顺序固定为：
+
+- 宿主增强按 `日志轮转 -> 多 session 历史 -> tray / 常驻后台 -> sidecar / daemon 化`
+- `stdio` 作为接入增强，排在宿主稳态增强之后
+- 更细错误码、筛选能力和人类友好输出继续作为独立业务 workstream 推进

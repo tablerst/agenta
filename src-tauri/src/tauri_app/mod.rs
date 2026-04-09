@@ -8,7 +8,7 @@ use tauri::State;
 
 use crate::app::{
     save_mcp_config_defaults, AppRuntime, McpLaunchOverrides, McpLogDestination, McpLogLevel,
-    McpLogSnapshot, McpSupervisor,
+    McpLogSnapshot, McpRuntimeStatus, McpSupervisor,
 };
 use crate::domain::ApprovalStatus;
 use crate::error::AppError;
@@ -44,6 +44,28 @@ impl DesktopAppState {
             runtime,
             mcp_supervisor,
         }
+    }
+
+    async fn autostart_mcp_if_configured(&self) -> Result<Option<McpRuntimeStatus>, AppError> {
+        if !self.mcp_supervisor.default_config().autostart {
+            return Ok(None);
+        }
+
+        let status = self
+            .mcp_supervisor
+            .start(McpLaunchOverrides::default())
+            .await?;
+        Ok(Some(status))
+    }
+
+    fn spawn_mcp_autostart(self: Arc<Self>) {
+        if !self.mcp_supervisor.default_config().autostart {
+            return;
+        }
+
+        tauri::async_runtime::spawn(async move {
+            let _ = self.autostart_mcp_if_configured().await;
+        });
     }
 }
 
@@ -132,6 +154,7 @@ struct DesktopApprovalInput {
 struct DesktopMcpStartInput {
     bind: Option<String>,
     path: Option<String>,
+    autostart: Option<bool>,
     log_level: Option<McpLogLevel>,
     log_destinations: Option<Vec<McpLogDestination>>,
     log_file_path: Option<PathBuf>,
@@ -144,7 +167,7 @@ impl DesktopMcpStartInput {
         McpLaunchOverrides {
             bind: self.bind,
             path: self.path,
-            autostart: None,
+            autostart: self.autostart,
             log_level: self.log_level,
             log_destinations: self.log_destinations,
             log_file_path: self.log_file_path,
@@ -692,6 +715,7 @@ pub fn run(runtime: Arc<AppRuntime>) {
             state_for_setup
                 .mcp_supervisor
                 .attach_emitter(app.handle().clone());
+            state_for_setup.clone().spawn_mcp_autostart();
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -756,5 +780,102 @@ fn search_text(text: Option<String>, query: Option<String>) -> Result<String, Ap
         _ => Err(AppError::InvalidArguments(
             "missing required field: text or query".to_string(),
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    use tempfile::tempdir;
+
+    use super::DesktopAppState;
+    use crate::app::{AppRuntime, BootstrapOptions, McpLifecycleState};
+    use crate::error::AppResult;
+
+    fn write_runtime_config(
+        autostart: bool,
+        bind: &str,
+        path: &str,
+    ) -> AppResult<(tempfile::TempDir, PathBuf)> {
+        let tempdir = tempdir()?;
+        let config_path = tempdir.path().join("agenta.local.yaml");
+        fs::write(
+            &config_path,
+            format!(
+                "paths:\n  data_dir: ./data\nmcp:\n  bind: \"{bind}\"\n  path: \"{path}\"\n  autostart: {autostart}\n  log:\n    destinations: [ui]\n    file:\n      path: ./logs/mcp.jsonl\n    ui:\n      buffer_lines: 32\n"
+            ),
+        )?;
+        Ok((tempdir, config_path))
+    }
+
+    async fn build_desktop_state(
+        autostart: bool,
+        bind: &str,
+        path: &str,
+    ) -> AppResult<(tempfile::TempDir, DesktopAppState)> {
+        let (tempdir, config_path) = write_runtime_config(autostart, bind, path)?;
+        let runtime = AppRuntime::bootstrap(BootstrapOptions {
+            config_path: Some(config_path),
+        })
+        .await?;
+        Ok((tempdir, DesktopAppState::new(Arc::new(runtime))))
+    }
+
+    #[tokio::test]
+    async fn desktop_autostart_disabled_keeps_mcp_stopped() {
+        let (_tempdir, state) = build_desktop_state(false, "127.0.0.1:0", "/mcp")
+            .await
+            .expect("build desktop state");
+
+        let result = state
+            .autostart_mcp_if_configured()
+            .await
+            .expect("skip autostart");
+
+        assert!(result.is_none());
+        assert_eq!(state.mcp_supervisor.status_snapshot().state, McpLifecycleState::Stopped);
+    }
+
+    #[tokio::test]
+    async fn desktop_autostart_enabled_starts_mcp_host() {
+        let (_tempdir, state) = build_desktop_state(true, "127.0.0.1:0", "/mcp")
+            .await
+            .expect("build desktop state");
+
+        let status = state
+            .autostart_mcp_if_configured()
+            .await
+            .expect("start autostart")
+            .expect("autostart status");
+
+        assert_eq!(status.state, McpLifecycleState::Running);
+        assert!(status.actual_bind.is_some());
+
+        state
+            .mcp_supervisor
+            .shutdown()
+            .await
+            .expect("shutdown autostarted MCP host");
+    }
+
+    #[tokio::test]
+    async fn desktop_autostart_failure_marks_runtime_failed_without_crashing() {
+        let (_tempdir, state) = build_desktop_state(true, "127.0.0.1:not-a-port", "/mcp")
+            .await
+            .expect("build desktop state");
+
+        let error = state
+            .autostart_mcp_if_configured()
+            .await
+            .expect_err("autostart should fail");
+
+        assert!(error.to_string().contains("not-a-port"));
+
+        let status = state.mcp_supervisor.status_snapshot();
+        assert_eq!(status.state, McpLifecycleState::Failed);
+        assert!(status.last_error.is_some());
     }
 }
