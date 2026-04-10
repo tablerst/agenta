@@ -62,7 +62,7 @@ impl SqliteStore {
             r#"
             SELECT project_id, slug, name, description, status, default_version_id, created_at, updated_at
             FROM projects
-            ORDER BY created_at DESC
+            ORDER BY created_at DESC, project_id DESC
             "#,
         )
         .fetch_all(&self.pool)
@@ -137,7 +137,7 @@ impl SqliteStore {
                 SELECT version_id, project_id, name, description, status, created_at, updated_at
                 FROM versions
                 WHERE project_id = ?
-                ORDER BY created_at DESC
+                ORDER BY created_at DESC, version_id DESC
                 "#,
             )
             .bind(project_id.to_string())
@@ -148,7 +148,7 @@ impl SqliteStore {
                 r#"
                 SELECT version_id, project_id, name, description, status, created_at, updated_at
                 FROM versions
-                ORDER BY created_at DESC
+                ORDER BY created_at DESC, version_id DESC
                 "#,
             )
             .fetch_all(&self.pool)

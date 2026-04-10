@@ -1,11 +1,13 @@
 use sqlx::{query, QueryBuilder, Row, Sqlite};
 use uuid::Uuid;
 
-use crate::domain::{Task, TaskActivity};
+use time::OffsetDateTime;
+
+use crate::domain::{Task, TaskActivity, TaskActivityKind};
 use crate::error::{AppError, AppResult};
 use crate::search::{ActivitySearchHit, SearchResponse, TaskSearchHit};
 
-use super::mapping::{format_time, map_activity, map_task};
+use super::mapping::{format_time, map_activity, map_task, parse_time};
 use super::{SqliteStore, TaskListFilter};
 
 impl SqliteStore {
@@ -74,6 +76,54 @@ impl SqliteStore {
             })
     }
 
+    pub async fn get_task_with_stats_by_ref(
+        &self,
+        reference: &str,
+    ) -> AppResult<(Task, i64, i64, OffsetDateTime)> {
+        let row = query(
+            r#"
+            SELECT
+                t.task_id, t.project_id, t.version_id, t.title, t.summary, t.description,
+                t.task_search_summary, t.task_context_digest, t.status, t.priority,
+                t.created_by, t.updated_by, t.created_at, t.updated_at, t.closed_at,
+                (
+                    SELECT COUNT(*)
+                    FROM task_activities ta
+                    WHERE ta.task_id = t.task_id AND ta.kind = ?
+                ) AS note_count,
+                (
+                    SELECT COUNT(*)
+                    FROM attachments a
+                    WHERE a.task_id = t.task_id
+                ) AS attachment_count,
+                max(
+                    t.updated_at,
+                    COALESCE(
+                        (
+                            SELECT MAX(ta.created_at)
+                            FROM task_activities ta
+                            WHERE ta.task_id = t.task_id
+                        ),
+                        t.updated_at
+                    )
+                ) AS latest_activity_at
+            FROM tasks t
+            WHERE t.task_id = ?
+            "#,
+        )
+        .bind(TaskActivityKind::Note.to_string())
+        .bind(reference)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.map(map_task_with_stats)
+            .transpose()?
+            .ok_or_else(|| AppError::NotFound {
+                entity: "task".to_string(),
+                reference: reference.to_string(),
+            })
+    }
+
     pub async fn list_tasks(&self, filter: TaskListFilter) -> AppResult<Vec<Task>> {
         let mut builder = QueryBuilder::<Sqlite>::new(
             r#"
@@ -98,10 +148,71 @@ impl SqliteStore {
         if let Some(status) = filter.status {
             builder.push(" AND status = ").push_bind(status.to_string());
         }
-        builder.push(" ORDER BY created_at DESC");
+        builder.push(" ORDER BY created_at DESC, task_id DESC");
 
         let rows = builder.build().fetch_all(&self.pool).await?;
         rows.into_iter().map(map_task).collect()
+    }
+
+    pub async fn list_tasks_with_stats(
+        &self,
+        filter: TaskListFilter,
+    ) -> AppResult<Vec<(Task, i64, i64, OffsetDateTime)>> {
+        let mut builder = QueryBuilder::<Sqlite>::new(
+            r#"
+            SELECT
+                t.task_id, t.project_id, t.version_id, t.title, t.summary, t.description,
+                t.task_search_summary, t.task_context_digest, t.status, t.priority,
+                t.created_by, t.updated_by, t.created_at, t.updated_at, t.closed_at,
+                (
+                    SELECT COUNT(*)
+                    FROM task_activities ta
+                    WHERE ta.task_id = t.task_id AND ta.kind = 
+            "#,
+        );
+        builder.push_bind(TaskActivityKind::Note.to_string());
+        builder.push(
+            r#"
+                ) AS note_count,
+                (
+                    SELECT COUNT(*)
+                    FROM attachments a
+                    WHERE a.task_id = t.task_id
+                ) AS attachment_count,
+                max(
+                    t.updated_at,
+                    COALESCE(
+                        (
+                            SELECT MAX(ta.created_at)
+                            FROM task_activities ta
+                            WHERE ta.task_id = t.task_id
+                        ),
+                        t.updated_at
+                    )
+                ) AS latest_activity_at
+            FROM tasks t
+            WHERE 1 = 1
+            "#,
+        );
+        if let Some(project_id) = filter.project_id {
+            builder
+                .push(" AND t.project_id = ")
+                .push_bind(project_id.to_string());
+        }
+        if let Some(version_id) = filter.version_id {
+            builder
+                .push(" AND t.version_id = ")
+                .push_bind(version_id.to_string());
+        }
+        if let Some(status) = filter.status {
+            builder
+                .push(" AND t.status = ")
+                .push_bind(status.to_string());
+        }
+        builder.push(" ORDER BY t.created_at DESC, t.task_id DESC");
+
+        let rows = builder.build().fetch_all(&self.pool).await?;
+        rows.into_iter().map(map_task_with_stats).collect()
     }
 
     pub async fn update_task(&self, task: &Task) -> AppResult<()> {
@@ -167,7 +278,7 @@ impl SqliteStore {
             SELECT activity_id, task_id, kind, content, activity_search_summary, created_by, created_at, metadata_json
             FROM task_activities
             WHERE task_id = ?
-            ORDER BY created_at DESC
+            ORDER BY created_at DESC, activity_id DESC
             "#,
         )
         .bind(task_id.to_string())
@@ -247,4 +358,14 @@ impl SqliteStore {
             .await?;
         Ok(row.get::<i64, _>("count"))
     }
+}
+
+fn map_task_with_stats(
+    row: sqlx::sqlite::SqliteRow,
+) -> AppResult<(Task, i64, i64, OffsetDateTime)> {
+    let note_count = row.get::<i64, _>("note_count");
+    let attachment_count = row.get::<i64, _>("attachment_count");
+    let latest_activity_at = parse_time(row.get("latest_activity_at"), "latest_activity_at")?;
+    let task = map_task(row)?;
+    Ok((task, note_count, attachment_count, latest_activity_at))
 }

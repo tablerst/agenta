@@ -836,7 +836,10 @@ mod tests {
             .expect("skip autostart");
 
         assert!(result.is_none());
-        assert_eq!(state.mcp_supervisor.status_snapshot().state, McpLifecycleState::Stopped);
+        assert_eq!(
+            state.mcp_supervisor.status_snapshot().state,
+            McpLifecycleState::Stopped
+        );
     }
 
     #[tokio::test]

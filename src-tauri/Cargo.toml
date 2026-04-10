@@ -46,6 +46,7 @@ clap = { version = "4.5", features = ["derive"] }
 directories = "6"
 mime_guess = "2"
 axum = "0.8"
+base64 = "0.22"
 rmcp = { version = "1.3.0", default-features = false, features = ["client", "macros", "server", "tower", "transport-streamable-http-client-reqwest", "transport-streamable-http-server"] }
 schemars = "1.2"
 serde = { version = "1", features = ["derive"] }

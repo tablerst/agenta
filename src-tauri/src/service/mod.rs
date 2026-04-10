@@ -114,6 +114,42 @@ pub struct TaskQuery {
     pub status: Option<TaskStatus>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PageCursor {
+    pub created_at: OffsetDateTime,
+    pub id: Uuid,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct PageRequest {
+    pub limit: Option<usize>,
+    pub cursor: Option<PageCursor>,
+}
+
+#[derive(Clone, Debug)]
+pub struct PageResult<T> {
+    pub items: Vec<T>,
+    pub limit: Option<usize>,
+    pub next_cursor: Option<PageCursor>,
+    pub has_more: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct TaskDetail {
+    pub task: Task,
+    pub note_count: i64,
+    pub attachment_count: i64,
+    pub latest_activity_at: OffsetDateTime,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct TaskContext {
+    pub task: TaskDetail,
+    pub notes: Vec<TaskActivity>,
+    pub attachments: Vec<Attachment>,
+    pub recent_activities: Vec<TaskActivity>,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SearchInput {
     pub text: String,
@@ -220,6 +256,16 @@ impl AgentaService {
         self.store.list_projects().await
     }
 
+    pub async fn list_projects_page(&self, page: PageRequest) -> AppResult<PageResult<Project>> {
+        let projects = self.store.list_projects().await?;
+        Ok(paginate_by_created_at(
+            projects,
+            page,
+            |project| project.created_at,
+            |project| project.project_id,
+        ))
+    }
+
     pub async fn update_project(
         &self,
         reference: &str,
@@ -285,6 +331,20 @@ impl AgentaService {
         self.store.list_versions(project_id).await
     }
 
+    pub async fn list_versions_page(
+        &self,
+        project_ref: Option<&str>,
+        page: PageRequest,
+    ) -> AppResult<PageResult<Version>> {
+        let versions = self.list_versions(project_ref).await?;
+        Ok(paginate_by_created_at(
+            versions,
+            page,
+            |version| version.created_at,
+            |version| version.version_id,
+        ))
+    }
+
     pub async fn update_version(
         &self,
         reference: &str,
@@ -345,23 +405,48 @@ impl AgentaService {
         self.store.get_task_by_ref(reference).await
     }
 
+    pub async fn get_task_detail(&self, reference: &str) -> AppResult<TaskDetail> {
+        let (task, note_count, attachment_count, latest_activity_at) =
+            self.store.get_task_with_stats_by_ref(reference).await?;
+        Ok(TaskDetail {
+            task,
+            note_count,
+            attachment_count,
+            latest_activity_at,
+        })
+    }
+
     pub async fn list_tasks(&self, query: TaskQuery) -> AppResult<Vec<Task>> {
-        let filter = TaskListFilter {
-            project_id: match query.project {
-                Some(reference) => {
-                    Some(self.store.get_project_by_ref(&reference).await?.project_id)
-                }
-                None => None,
-            },
-            version_id: match query.version {
-                Some(reference) => {
-                    Some(self.store.get_version_by_ref(&reference).await?.version_id)
-                }
-                None => None,
-            },
-            status: query.status,
-        };
+        let filter = self.resolve_task_filter(&query).await?;
         self.store.list_tasks(filter).await
+    }
+
+    pub async fn list_task_details_page(
+        &self,
+        query: TaskQuery,
+        page: PageRequest,
+    ) -> AppResult<PageResult<TaskDetail>> {
+        let filter = self.resolve_task_filter(&query).await?;
+        let details = self
+            .store
+            .list_tasks_with_stats(filter)
+            .await?
+            .into_iter()
+            .map(
+                |(task, note_count, attachment_count, latest_activity_at)| TaskDetail {
+                    task,
+                    note_count,
+                    attachment_count,
+                    latest_activity_at,
+                },
+            )
+            .collect();
+        Ok(paginate_by_created_at(
+            details,
+            page,
+            |detail| detail.task.created_at,
+            |detail| detail.task.task_id,
+        ))
     }
 
     pub async fn update_task(&self, reference: &str, input: UpdateTaskInput) -> AppResult<Task> {
@@ -428,12 +513,40 @@ impl AgentaService {
         self.store.list_task_activities(task.task_id).await
     }
 
+    pub async fn list_task_activities_page(
+        &self,
+        task_ref: &str,
+        page: PageRequest,
+    ) -> AppResult<PageResult<TaskActivity>> {
+        let activities = self.list_task_activities(task_ref).await?;
+        Ok(paginate_by_created_at(
+            activities,
+            page,
+            |activity| activity.created_at,
+            |activity| activity.activity_id,
+        ))
+    }
+
     pub async fn list_notes(&self, task_ref: &str) -> AppResult<Vec<TaskActivity>> {
         let activities = self.list_task_activities(task_ref).await?;
         Ok(activities
             .into_iter()
             .filter(|activity| activity.kind == TaskActivityKind::Note)
             .collect())
+    }
+
+    pub async fn list_notes_page(
+        &self,
+        task_ref: &str,
+        page: PageRequest,
+    ) -> AppResult<PageResult<TaskActivity>> {
+        let notes = self.list_notes(task_ref).await?;
+        Ok(paginate_by_created_at(
+            notes,
+            page,
+            |activity| activity.created_at,
+            |activity| activity.activity_id,
+        ))
     }
 
     pub async fn create_attachment(&self, input: CreateAttachmentInput) -> AppResult<Attachment> {
@@ -480,8 +593,48 @@ impl AgentaService {
         self.store.list_attachments(task.task_id).await
     }
 
+    pub async fn list_attachments_page(
+        &self,
+        task_ref: &str,
+        page: PageRequest,
+    ) -> AppResult<PageResult<Attachment>> {
+        let attachments = self.list_attachments(task_ref).await?;
+        Ok(paginate_by_created_at(
+            attachments,
+            page,
+            |attachment| attachment.created_at,
+            |attachment| attachment.attachment_id,
+        ))
+    }
+
     pub async fn get_attachment(&self, reference: &str) -> AppResult<Attachment> {
         self.store.get_attachment_by_ref(reference).await
+    }
+
+    pub async fn get_task_context(
+        &self,
+        task_ref: &str,
+        recent_activity_limit: Option<usize>,
+    ) -> AppResult<TaskContext> {
+        let task = self.get_task_detail(task_ref).await?;
+        let notes = self.list_notes(task_ref).await?;
+        let attachments = self.list_attachments(task_ref).await?;
+        let recent_activities = self
+            .list_task_activities_page(
+                task_ref,
+                PageRequest {
+                    limit: Some(recent_activity_limit.unwrap_or(20).clamp(1, 50)),
+                    cursor: None,
+                },
+            )
+            .await?
+            .items;
+        Ok(TaskContext {
+            task,
+            notes,
+            attachments,
+            recent_activities,
+        })
     }
 
     pub async fn search(&self, input: SearchInput) -> AppResult<SearchResponse> {
@@ -744,6 +897,7 @@ impl AgentaService {
     ) -> AppResult<Task> {
         self.enforce("task.update", mode).await?;
         let mut task = self.store.get_task_by_ref(reference).await?;
+        let previous_status = task.status;
         if let Some(version) = input.version {
             task.version_id = self
                 .resolve_version_for_project(task.project_id, Some(&version))
@@ -777,6 +931,26 @@ impl AgentaService {
         );
         task.task_context_digest = build_task_context_digest(&task);
         self.store.update_task(&task).await?;
+        if previous_status != task.status {
+            let content = format!("Status changed from {previous_status} to {}.", task.status);
+            let activity = TaskActivity {
+                activity_id: Uuid::new_v4(),
+                task_id: task.task_id,
+                kind: TaskActivityKind::StatusChange,
+                content: content.clone(),
+                activity_search_summary: build_activity_search_summary(
+                    TaskActivityKind::StatusChange,
+                    &content,
+                ),
+                created_by: task.updated_by.clone(),
+                created_at: task.updated_at,
+                metadata_json: json!({
+                    "from_status": previous_status,
+                    "to_status": task.status,
+                }),
+            };
+            self.store.insert_activity(&activity).await?;
+        }
         Ok(task)
     }
 
@@ -1197,6 +1371,20 @@ impl AgentaService {
             None => Ok(None),
         }
     }
+
+    async fn resolve_task_filter(&self, query: &TaskQuery) -> AppResult<TaskListFilter> {
+        Ok(TaskListFilter {
+            project_id: match query.project.as_deref() {
+                Some(reference) => Some(self.store.get_project_by_ref(reference).await?.project_id),
+                None => None,
+            },
+            version_id: match query.version.as_deref() {
+                Some(reference) => Some(self.store.get_version_by_ref(reference).await?.version_id),
+                None => None,
+            },
+            status: query.status,
+        })
+    }
 }
 
 fn normalize_slug(value: &str) -> String {
@@ -1241,6 +1429,67 @@ fn closed_at_for_status(status: TaskStatus, now: OffsetDateTime) -> Option<Offse
     match status {
         TaskStatus::Done | TaskStatus::Cancelled => Some(now),
         _ => None,
+    }
+}
+
+fn paginate_by_created_at<T, FCreatedAt, FId>(
+    mut items: Vec<T>,
+    page: PageRequest,
+    created_at: FCreatedAt,
+    id: FId,
+) -> PageResult<T>
+where
+    FCreatedAt: Fn(&T) -> OffsetDateTime,
+    FId: Fn(&T) -> Uuid,
+{
+    items.sort_by(|left, right| {
+        created_at(right)
+            .cmp(&created_at(left))
+            .then_with(|| id(right).cmp(&id(left)))
+    });
+
+    if let Some(cursor) = page.cursor {
+        items.retain(|item| {
+            let item_created_at = created_at(item);
+            let item_id = id(item);
+            item_created_at < cursor.created_at
+                || (item_created_at == cursor.created_at && item_id < cursor.id)
+        });
+    }
+
+    let Some(limit) = page.limit.map(|value| value.clamp(1, 50)) else {
+        return PageResult {
+            items,
+            limit: None,
+            next_cursor: None,
+            has_more: false,
+        };
+    };
+
+    let has_more = items.len() > limit;
+    if has_more {
+        items.truncate(limit + 1);
+    }
+
+    let next_cursor = if has_more {
+        let last_visible = &items[limit - 1];
+        Some(PageCursor {
+            created_at: created_at(last_visible),
+            id: id(last_visible),
+        })
+    } else {
+        None
+    };
+
+    if has_more {
+        items.truncate(limit);
+    }
+
+    PageResult {
+        items,
+        limit: Some(limit),
+        next_cursor,
+        has_more,
     }
 }
 

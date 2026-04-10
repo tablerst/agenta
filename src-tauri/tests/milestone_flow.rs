@@ -239,10 +239,12 @@ async fn mcp_streamable_http_lists_tools_and_calls_project_tool() {
     assert!(tools.iter().any(|tool| tool.name == "version_update"));
     assert!(tools.iter().any(|tool| tool.name == "task_create"));
     assert!(tools.iter().any(|tool| tool.name == "task_get"));
+    assert!(tools.iter().any(|tool| tool.name == "task_context_get"));
     assert!(tools.iter().any(|tool| tool.name == "task_list"));
     assert!(tools.iter().any(|tool| tool.name == "task_update"));
     assert!(tools.iter().any(|tool| tool.name == "note_create"));
     assert!(tools.iter().any(|tool| tool.name == "note_list"));
+    assert!(tools.iter().any(|tool| tool.name == "activity_list"));
     assert!(tools.iter().any(|tool| tool.name == "attachment_create"));
     assert!(tools.iter().any(|tool| tool.name == "attachment_get"));
     assert!(tools.iter().any(|tool| tool.name == "attachment_list"));

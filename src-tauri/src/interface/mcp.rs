@@ -1,14 +1,17 @@
 use std::path::PathBuf;
 
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{ProtocolVersion, ServerCapabilities, ServerInfo};
 use rmcp::{tool, tool_handler, tool_router, ErrorData, Json, ServerHandler};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
+use uuid::Uuid;
 
 use crate::app::McpSessionLogger;
 use crate::domain::{
@@ -19,8 +22,8 @@ use crate::interface::response::error_to_rmcp;
 use crate::search::SearchResponse;
 use crate::service::{
     AgentaService, CreateAttachmentInput, CreateNoteInput, CreateProjectInput, CreateTaskInput,
-    CreateVersionInput, RequestOrigin, SearchInput, TaskQuery, UpdateProjectInput, UpdateTaskInput,
-    UpdateVersionInput,
+    CreateVersionInput, PageCursor, PageRequest, PageResult, RequestOrigin, SearchInput,
+    TaskDetail, TaskQuery, UpdateProjectInput, UpdateTaskInput, UpdateVersionInput,
 };
 
 #[derive(Clone)]
@@ -96,6 +99,26 @@ impl AgentaMcpServer {
     }
 }
 
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+pub struct PageInfo {
+    /// Applied page size when limit-based pagination was requested. Null when the full list was returned.
+    pub limit: Option<usize>,
+    /// Opaque cursor for the next page. Null when the current page exhausted the result set.
+    pub next_cursor: Option<String>,
+    /// Whether additional results are available after this page.
+    pub has_more: bool,
+    /// Stable sort key used to produce the page.
+    pub sort_by: String,
+    /// Stable sort order used to produce the page. Always `desc` for list tools.
+    pub sort_order: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct CursorPayload {
+    created_at: String,
+    id: String,
+}
+
 /// Create a new project.
 #[derive(Debug, Deserialize, JsonSchema, Default)]
 pub struct ProjectCreateToolInput {
@@ -110,16 +133,29 @@ pub struct ProjectCreateToolInput {
 /// Load a single project by ID or slug.
 #[derive(Debug, Deserialize, JsonSchema, Default)]
 pub struct ProjectGetToolInput {
-    /// Project UUID or slug.
-    #[schemars(description = "Project UUID or slug.")]
+    /// Stable project reference. Supported values: project_id UUID or slug.
+    #[schemars(
+        description = "Stable project reference. Supported values: project_id UUID or slug."
+    )]
     pub project: String,
+}
+
+/// List projects in reverse chronological order.
+#[derive(Debug, Deserialize, JsonSchema, Default)]
+pub struct ProjectListToolInput {
+    /// Optional maximum number of projects to return when paginating. Clamped to the server range when provided.
+    pub limit: Option<usize>,
+    /// Opaque cursor returned by a previous `project_list` call. Requires `limit` when provided.
+    pub cursor: Option<String>,
 }
 
 /// Update a project in place.
 #[derive(Debug, Deserialize, JsonSchema, Default)]
 pub struct ProjectUpdateToolInput {
-    /// Project UUID or slug to update.
-    #[schemars(description = "Project UUID or slug to update.")]
+    /// Stable project reference to update. Supported values: project_id UUID or slug.
+    #[schemars(
+        description = "Stable project reference to update. Supported values: project_id UUID or slug."
+    )]
     pub project: String,
     /// Replace the slug used to reference the project.
     pub slug: Option<String>,
@@ -127,9 +163,13 @@ pub struct ProjectUpdateToolInput {
     pub name: Option<String>,
     /// Replace the long-form summary for the project.
     pub description: Option<String>,
-    /// New lifecycle status for the project.
+    /// Project lifecycle status. Allowed values: `active` or `archived`. New projects default to `active`.
+    #[schemars(
+        description = "Project lifecycle status. Allowed values: `active` or `archived`. New projects default to `active`."
+    )]
     pub status: Option<ProjectStatus>,
-    /// Version UUID to mark as the project's default version.
+    /// Stable version_id UUID to mark as the project's default version.
+    #[schemars(description = "Stable version_id UUID to mark as the project's default version.")]
     pub default_version: Option<String>,
 }
 
@@ -166,6 +206,8 @@ pub struct ProjectToolOutput {
 pub struct ProjectListToolOutput {
     /// Projects visible to the MCP caller.
     pub projects: Vec<ProjectRecord>,
+    /// Pagination metadata for the list.
+    pub page: PageInfo,
 }
 
 impl From<Project> for ProjectRecord {
@@ -185,40 +227,60 @@ impl From<Project> for ProjectRecord {
 
 #[derive(Debug, Deserialize, JsonSchema, Default)]
 pub struct VersionCreateToolInput {
-    /// Project UUID or slug that owns the version.
+    /// Stable project reference. Supported values: project_id UUID or slug.
+    #[schemars(
+        description = "Stable project reference. Supported values: project_id UUID or slug."
+    )]
     pub project: String,
     /// Human-readable version name.
     pub name: String,
     /// Optional long-form summary for the version.
     pub description: Option<String>,
-    /// Initial lifecycle status for the version.
+    /// Version lifecycle status. Allowed values: `planning`, `active`, `closed`, `archived`. New versions default to `planning`.
+    #[schemars(
+        description = "Version lifecycle status. Allowed values: `planning`, `active`, `closed`, `archived`. New versions default to `planning`."
+    )]
     pub status: Option<VersionStatus>,
 }
 
-/// Load a single version by UUID or reference.
+/// Load a single version by version_id.
 #[derive(Debug, Deserialize, JsonSchema, Default)]
 pub struct VersionGetToolInput {
-    /// Version UUID or reference.
+    /// Stable version reference. Supported values: version_id UUID only.
+    #[schemars(description = "Stable version reference. Supported values: version_id UUID only.")]
     pub version: String,
 }
 
 /// List versions, optionally filtered to a project.
 #[derive(Debug, Deserialize, JsonSchema, Default)]
 pub struct VersionListToolInput {
-    /// Optional project UUID or slug to filter versions by owning project.
+    /// Optional project filter. Supported values: project_id UUID or slug.
+    #[schemars(
+        description = "Optional project filter. Supported values: project_id UUID or slug."
+    )]
     pub project: Option<String>,
+    /// Optional maximum number of versions to return when paginating. Clamped to the server range when provided.
+    pub limit: Option<usize>,
+    /// Opaque cursor returned by a previous `version_list` call. Requires `limit` when provided.
+    pub cursor: Option<String>,
 }
 
 /// Update an existing version.
 #[derive(Debug, Deserialize, JsonSchema, Default)]
 pub struct VersionUpdateToolInput {
-    /// Version UUID or reference to update.
+    /// Stable version reference to update. Supported values: version_id UUID only.
+    #[schemars(
+        description = "Stable version reference to update. Supported values: version_id UUID only."
+    )]
     pub version: String,
     /// Replace the human-readable version name.
     pub name: Option<String>,
     /// Replace the long-form summary for the version.
     pub description: Option<String>,
-    /// New lifecycle status for the version.
+    /// Version lifecycle status. Allowed values: `planning`, `active`, `closed`, `archived`. New versions default to `planning`.
+    #[schemars(
+        description = "Version lifecycle status. Allowed values: `planning`, `active`, `closed`, `archived`. New versions default to `planning`."
+    )]
     pub status: Option<VersionStatus>,
 }
 
@@ -253,6 +315,8 @@ pub struct VersionToolOutput {
 pub struct VersionListToolOutput {
     /// Versions visible to the MCP caller.
     pub versions: Vec<VersionRecord>,
+    /// Pagination metadata for the list.
+    pub page: PageInfo,
 }
 
 impl From<Version> for VersionRecord {
@@ -272,9 +336,15 @@ impl From<Version> for VersionRecord {
 /// Create a new task.
 #[derive(Debug, Deserialize, JsonSchema, Default)]
 pub struct TaskCreateToolInput {
-    /// Project UUID or slug that owns the task.
+    /// Stable project reference. Supported values: project_id UUID or slug.
+    #[schemars(
+        description = "Stable project reference. Supported values: project_id UUID or slug."
+    )]
     pub project: String,
-    /// Optional version UUID or reference linked to the task.
+    /// Optional linked version reference. Supported values: version_id UUID only.
+    #[schemars(
+        description = "Optional linked version reference. Supported values: version_id UUID only."
+    )]
     pub version: Option<String>,
     /// Task title shown in task lists.
     pub title: String,
@@ -282,38 +352,72 @@ pub struct TaskCreateToolInput {
     pub summary: Option<String>,
     /// Optional long-form description for the task.
     pub description: Option<String>,
-    /// Initial lifecycle status for the task.
+    /// Task lifecycle status. Allowed values: `draft`, `ready`, `in_progress`, `blocked`, `done`, `cancelled`. New tasks default to `ready`. Setting `done` or `cancelled` records `closed_at`.
+    #[schemars(
+        description = "Task lifecycle status. Allowed values: `draft`, `ready`, `in_progress`, `blocked`, `done`, `cancelled`. New tasks default to `ready`. Setting `done` or `cancelled` records `closed_at`."
+    )]
     pub status: Option<TaskStatus>,
-    /// Initial priority for the task.
+    /// Task priority. Allowed values: `low`, `normal`, `high`, `critical`. New tasks default to `normal`.
+    #[schemars(
+        description = "Task priority. Allowed values: `low`, `normal`, `high`, `critical`. New tasks default to `normal`."
+    )]
     pub priority: Option<TaskPriority>,
     /// Actor name to record as the creator. Falls back to the MCP origin actor when omitted.
     pub created_by: Option<String>,
 }
 
-/// Load a single task by UUID or reference.
+/// Load a single task by task_id.
 #[derive(Debug, Deserialize, JsonSchema, Default)]
 pub struct TaskGetToolInput {
-    /// Task UUID or reference.
+    /// Stable task reference. Supported values: task_id UUID only.
+    #[schemars(description = "Stable task reference. Supported values: task_id UUID only.")]
     pub task: String,
+}
+
+/// Load a task plus its notes, attachments, and recent activities.
+#[derive(Debug, Deserialize, JsonSchema, Default)]
+pub struct TaskContextGetToolInput {
+    /// Stable task reference. Supported values: task_id UUID only.
+    #[schemars(description = "Stable task reference. Supported values: task_id UUID only.")]
+    pub task: String,
+    /// Optional maximum number of recent activities to include. Defaults to 20 and is clamped to the server range.
+    pub recent_activity_limit: Option<usize>,
 }
 
 /// List tasks with optional project, version, and status filters.
 #[derive(Debug, Deserialize, JsonSchema, Default)]
 pub struct TaskListToolInput {
-    /// Optional project UUID or slug filter.
+    /// Optional project filter. Supported values: project_id UUID or slug.
+    #[schemars(
+        description = "Optional project filter. Supported values: project_id UUID or slug."
+    )]
     pub project: Option<String>,
-    /// Optional version UUID or reference filter.
+    /// Optional version filter. Supported values: version_id UUID only.
+    #[schemars(description = "Optional version filter. Supported values: version_id UUID only.")]
     pub version: Option<String>,
-    /// Optional lifecycle status filter.
+    /// Optional task lifecycle status filter. Allowed values: `draft`, `ready`, `in_progress`, `blocked`, `done`, `cancelled`.
+    #[schemars(
+        description = "Optional task lifecycle status filter. Allowed values: `draft`, `ready`, `in_progress`, `blocked`, `done`, `cancelled`."
+    )]
     pub status: Option<TaskStatus>,
+    /// Optional maximum number of tasks to return when paginating. Clamped to the server range when provided.
+    pub limit: Option<usize>,
+    /// Opaque cursor returned by a previous `task_list` call. Requires `limit` when provided.
+    pub cursor: Option<String>,
 }
 
 /// Update an existing task.
 #[derive(Debug, Deserialize, JsonSchema, Default)]
 pub struct TaskUpdateToolInput {
-    /// Task UUID or reference to update.
+    /// Stable task reference to update. Supported values: task_id UUID only.
+    #[schemars(
+        description = "Stable task reference to update. Supported values: task_id UUID only."
+    )]
     pub task: String,
-    /// Replace the linked version UUID or reference.
+    /// Replace the linked version reference. Supported values: version_id UUID only.
+    #[schemars(
+        description = "Replace the linked version reference. Supported values: version_id UUID only."
+    )]
     pub version: Option<String>,
     /// Replace the task title.
     pub title: Option<String>,
@@ -321,9 +425,15 @@ pub struct TaskUpdateToolInput {
     pub summary: Option<String>,
     /// Replace the long-form description.
     pub description: Option<String>,
-    /// New lifecycle status for the task.
+    /// Task lifecycle status. Allowed values: `draft`, `ready`, `in_progress`, `blocked`, `done`, `cancelled`. Setting `done` or `cancelled` records `closed_at`. When the value changes, Agenta appends a `status_change` activity.
+    #[schemars(
+        description = "Task lifecycle status. Allowed values: `draft`, `ready`, `in_progress`, `blocked`, `done`, `cancelled`. Setting `done` or `cancelled` records `closed_at`. When the value changes, Agenta appends a `status_change` activity."
+    )]
     pub status: Option<TaskStatus>,
-    /// New priority for the task.
+    /// Task priority. Allowed values: `low`, `normal`, `high`, `critical`. New tasks default to `normal`.
+    #[schemars(
+        description = "Task priority. Allowed values: `low`, `normal`, `high`, `critical`. New tasks default to `normal`."
+    )]
     pub priority: Option<TaskPriority>,
     /// Actor name to record as the updater. Falls back to the MCP origin actor when omitted.
     pub updated_by: Option<String>,
@@ -358,6 +468,12 @@ pub struct TaskRecord {
     pub updated_at: String,
     /// RFC 3339 timestamp for closure when the task is closed.
     pub closed_at: Option<String>,
+    /// Number of append-only note activities recorded for the task.
+    pub note_count: i64,
+    /// Number of attachments currently associated with the task.
+    pub attachment_count: i64,
+    /// RFC 3339 timestamp for the most recent task change or appended activity.
+    pub latest_activity_at: String,
 }
 
 /// Result returned by task mutation and lookup tools.
@@ -372,6 +488,21 @@ pub struct TaskToolOutput {
 pub struct TaskListToolOutput {
     /// Tasks visible to the MCP caller.
     pub tasks: Vec<TaskRecord>,
+    /// Pagination metadata for the list.
+    pub page: PageInfo,
+}
+
+/// Result returned by task_context_get.
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+pub struct TaskContextToolOutput {
+    /// The resolved task record.
+    pub task: TaskRecord,
+    /// Full append-only note list for the task.
+    pub notes: Vec<NoteRecord>,
+    /// Full attachment list for the task.
+    pub attachments: Vec<AttachmentRecord>,
+    /// Recent task activities in reverse chronological order.
+    pub recent_activities: Vec<ActivityRecord>,
 }
 
 impl From<Task> for TaskRecord {
@@ -390,6 +521,38 @@ impl From<Task> for TaskRecord {
             created_at: format_timestamp(task.created_at),
             updated_at: format_timestamp(task.updated_at),
             closed_at: task.closed_at.map(format_timestamp),
+            note_count: 0,
+            attachment_count: 0,
+            latest_activity_at: format_timestamp(task.updated_at),
+        }
+    }
+}
+
+impl From<TaskDetail> for TaskRecord {
+    fn from(detail: TaskDetail) -> Self {
+        let TaskDetail {
+            task,
+            note_count,
+            attachment_count,
+            latest_activity_at,
+        } = detail;
+        Self {
+            task_id: task.task_id.to_string(),
+            project_id: task.project_id.to_string(),
+            version_id: task.version_id.map(|value| value.to_string()),
+            title: task.title,
+            summary: task.summary,
+            description: task.description,
+            status: task.status,
+            priority: task.priority,
+            created_by: task.created_by,
+            updated_by: task.updated_by,
+            created_at: format_timestamp(task.created_at),
+            updated_at: format_timestamp(task.updated_at),
+            closed_at: task.closed_at.map(format_timestamp),
+            note_count,
+            attachment_count,
+            latest_activity_at: format_timestamp(latest_activity_at),
         }
     }
 }
@@ -397,19 +560,37 @@ impl From<Task> for TaskRecord {
 /// Add a note to a task.
 #[derive(Debug, Deserialize, JsonSchema, Default)]
 pub struct NoteCreateToolInput {
-    /// Task UUID or reference that will receive the note.
+    /// Stable task reference. Supported values: task_id UUID only.
+    #[schemars(description = "Stable task reference. Supported values: task_id UUID only.")]
     pub task: String,
-    /// Raw note content to append to the task activity stream.
+    /// Raw note content to append to the audit-friendly task activity stream.
     pub content: String,
     /// Actor name to record as the note author. Falls back to the MCP origin actor when omitted.
     pub created_by: Option<String>,
 }
 
-/// List notes for a task.
+/// List append-only note activities for a task.
 #[derive(Debug, Deserialize, JsonSchema, Default)]
 pub struct NoteListToolInput {
-    /// Task UUID or reference whose notes should be returned.
+    /// Stable task reference. Supported values: task_id UUID only.
+    #[schemars(description = "Stable task reference. Supported values: task_id UUID only.")]
     pub task: String,
+    /// Optional maximum number of notes to return when paginating. Clamped to the server range when provided.
+    pub limit: Option<usize>,
+    /// Opaque cursor returned by a previous `note_list` call. Requires `limit` when provided.
+    pub cursor: Option<String>,
+}
+
+/// List append-only activities for a task.
+#[derive(Debug, Deserialize, JsonSchema, Default)]
+pub struct ActivityListToolInput {
+    /// Stable task reference. Supported values: task_id UUID only.
+    #[schemars(description = "Stable task reference. Supported values: task_id UUID only.")]
+    pub task: String,
+    /// Optional maximum number of activities to return when paginating. Clamped to the server range when provided.
+    pub limit: Option<usize>,
+    /// Opaque cursor returned by a previous `activity_list` call. Requires `limit` when provided.
+    pub cursor: Option<String>,
 }
 
 /// Structured MCP representation of a task note.
@@ -431,6 +612,27 @@ pub struct NoteRecord {
     pub created_at: String,
 }
 
+/// Structured MCP representation of a task activity.
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+pub struct ActivityRecord {
+    /// Stable activity UUID.
+    pub activity_id: String,
+    /// Stable task UUID that owns the activity.
+    pub task_id: String,
+    /// Activity kind.
+    pub kind: TaskActivityKind,
+    /// Human-readable activity content.
+    pub content: String,
+    /// Search-oriented summary derived from the activity content.
+    pub summary: String,
+    /// Recorded actor for the activity.
+    pub created_by: String,
+    /// RFC 3339 timestamp for creation.
+    pub created_at: String,
+    /// Structured metadata for the activity.
+    pub metadata: Value,
+}
+
 /// Result returned by note mutation and listing tools.
 #[derive(Clone, Debug, Serialize, JsonSchema)]
 pub struct NoteToolOutput {
@@ -443,6 +645,17 @@ pub struct NoteToolOutput {
 pub struct NoteListToolOutput {
     /// Notes visible for the selected task.
     pub notes: Vec<NoteRecord>,
+    /// Pagination metadata for the list.
+    pub page: PageInfo,
+}
+
+/// Result returned when listing activities.
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+pub struct ActivityListToolOutput {
+    /// Activities visible for the selected task.
+    pub activities: Vec<ActivityRecord>,
+    /// Pagination metadata for the list.
+    pub page: PageInfo,
 }
 
 impl From<TaskActivity> for NoteRecord {
@@ -459,12 +672,28 @@ impl From<TaskActivity> for NoteRecord {
     }
 }
 
+impl From<TaskActivity> for ActivityRecord {
+    fn from(activity: TaskActivity) -> Self {
+        Self {
+            activity_id: activity.activity_id.to_string(),
+            task_id: activity.task_id.to_string(),
+            kind: activity.kind,
+            content: activity.content,
+            summary: activity.activity_search_summary,
+            created_by: activity.created_by,
+            created_at: format_timestamp(activity.created_at),
+            metadata: activity.metadata_json,
+        }
+    }
+}
+
 /// Add an attachment to a task.
 #[derive(Debug, Deserialize, JsonSchema, Default)]
 pub struct AttachmentCreateToolInput {
-    /// Task UUID or reference that will own the attachment.
+    /// Stable task reference. Supported values: task_id UUID only.
+    #[schemars(description = "Stable task reference. Supported values: task_id UUID only.")]
     pub task: String,
-    /// Source file path on the local machine.
+    /// Absolute or relative local source file path. Agenta copies the file into managed storage and appends an attachment_ref activity.
     pub path: String,
     /// Optional attachment category.
     pub kind: Option<AttachmentKind>,
@@ -474,18 +703,26 @@ pub struct AttachmentCreateToolInput {
     pub summary: Option<String>,
 }
 
-/// Load a single attachment by UUID or reference.
+/// Load a single attachment by attachment_id.
 #[derive(Debug, Deserialize, JsonSchema, Default)]
 pub struct AttachmentGetToolInput {
-    /// Attachment UUID or reference.
+    /// Stable attachment reference. Supported values: attachment_id UUID only.
+    #[schemars(
+        description = "Stable attachment reference. Supported values: attachment_id UUID only."
+    )]
     pub attachment_id: String,
 }
 
 /// List attachments for a task.
 #[derive(Debug, Deserialize, JsonSchema, Default)]
 pub struct AttachmentListToolInput {
-    /// Task UUID or reference whose attachments should be returned.
+    /// Stable task reference. Supported values: task_id UUID only.
+    #[schemars(description = "Stable task reference. Supported values: task_id UUID only.")]
     pub task: String,
+    /// Optional maximum number of attachments to return when paginating. Clamped to the server range when provided.
+    pub limit: Option<usize>,
+    /// Opaque cursor returned by a previous `attachment_list` call. Requires `limit` when provided.
+    pub cursor: Option<String>,
 }
 
 /// Structured MCP representation of an attachment.
@@ -529,6 +766,8 @@ pub struct AttachmentToolOutput {
 pub struct AttachmentListToolOutput {
     /// Attachments visible for the selected task.
     pub attachments: Vec<AttachmentRecord>,
+    /// Pagination metadata for the list.
+    pub page: PageInfo,
 }
 
 impl From<Attachment> for AttachmentRecord {
@@ -553,9 +792,9 @@ impl From<Attachment> for AttachmentRecord {
 /// Run a local full-text search across tasks and related activities.
 #[derive(Debug, Deserialize, JsonSchema, Default)]
 pub struct SearchQueryToolInput {
-    /// Search text to run against the local task index.
+    /// Search text to run against the local task FTS index. Agenta indexes task `title`, `task_search_summary`, and activity `activity_search_summary`.
     pub query: String,
-    /// Optional maximum number of matches to return. Clamped to the server range.
+    /// Optional maximum number of matches to return per result bucket. Defaults to 10 and is clamped to the server range.
     pub limit: Option<usize>,
 }
 
@@ -587,6 +826,36 @@ pub struct SearchActivityHitRecord {
     pub summary: String,
 }
 
+/// Structured MCP representation of indexed field coverage.
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+pub struct SearchIndexedFieldsRecord {
+    /// Indexed task fields.
+    pub tasks: Vec<String>,
+    /// Indexed activity fields.
+    pub activities: Vec<String>,
+}
+
+/// Search behavior metadata returned alongside results.
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+pub struct SearchMetaRecord {
+    /// Indexed field groups consulted by the search query.
+    pub indexed_fields: SearchIndexedFieldsRecord,
+    /// Sort used for the task result bucket.
+    pub task_sort: String,
+    /// Sort used for the activity result bucket.
+    pub activity_sort: String,
+    /// Whether the requested limit is applied independently to the task and activity buckets.
+    pub limit_applies_per_bucket: bool,
+    /// Applied limit for the task result bucket.
+    pub task_limit_applied: usize,
+    /// Applied limit for the activity result bucket.
+    pub activity_limit_applied: usize,
+    /// Default limit used when the caller omits limit.
+    pub default_limit: usize,
+    /// Maximum supported limit.
+    pub max_limit: usize,
+}
+
 /// Result returned by local search queries.
 #[derive(Clone, Debug, Serialize, JsonSchema)]
 pub struct SearchQueryToolOutput {
@@ -596,10 +865,12 @@ pub struct SearchQueryToolOutput {
     pub tasks: Vec<SearchTaskHitRecord>,
     /// Activity matches.
     pub activities: Vec<SearchActivityHitRecord>,
+    /// Search behavior metadata describing index scope and sorting.
+    pub meta: SearchMetaRecord,
 }
 
-impl From<SearchResponse> for SearchQueryToolOutput {
-    fn from(response: SearchResponse) -> Self {
+impl SearchQueryToolOutput {
+    fn from_response(response: SearchResponse, applied_limit: usize) -> Self {
         Self {
             query: response.query,
             tasks: response
@@ -623,6 +894,19 @@ impl From<SearchResponse> for SearchQueryToolOutput {
                     summary: activity.summary,
                 })
                 .collect(),
+            meta: SearchMetaRecord {
+                indexed_fields: SearchIndexedFieldsRecord {
+                    tasks: vec!["title".to_string(), "task_search_summary".to_string()],
+                    activities: vec!["activity_search_summary".to_string()],
+                },
+                task_sort: "bm25(tasks_fts) asc".to_string(),
+                activity_sort: "bm25(task_activities_fts) asc".to_string(),
+                limit_applies_per_bucket: true,
+                task_limit_applied: applied_limit,
+                activity_limit_applied: applied_limit,
+                default_limit: 10,
+                max_limit: 50,
+            },
         }
     }
 }
@@ -675,7 +959,7 @@ impl AgentaMcpServer {
 
     #[tool(
         name = "project_get",
-        description = "Load a project by UUID or slug.",
+        description = "Load a project by project_id UUID or slug.",
         annotations(
             title = "Project Get",
             read_only_hint = true,
@@ -706,7 +990,7 @@ impl AgentaMcpServer {
 
     #[tool(
         name = "project_list",
-        description = "List all projects visible to the MCP caller.",
+        description = "List projects visible to the MCP caller in reverse chronological order. When limit is provided, results are paginated by created_at DESC then project_id DESC.",
         annotations(
             title = "Project List",
             read_only_hint = true,
@@ -715,15 +999,24 @@ impl AgentaMcpServer {
             open_world_hint = false
         )
     )]
-    pub async fn project_list(&self) -> Result<Json<ProjectListToolOutput>, ErrorData> {
+    pub async fn project_list(
+        &self,
+        Parameters(params): Parameters<ProjectListToolInput>,
+    ) -> Result<Json<ProjectListToolOutput>, ErrorData> {
         let action = "list";
         self.log_tool_call("project_list", action).await;
+        let page_request = page_request(params.limit, params.cursor)?;
         let result = self
             .service
-            .list_projects()
+            .list_projects_page(page_request)
             .await
             .map(|projects| ProjectListToolOutput {
-                projects: projects.into_iter().map(ProjectRecord::from).collect(),
+                page: page_info(&projects, "created_at,project_id"),
+                projects: projects
+                    .items
+                    .into_iter()
+                    .map(ProjectRecord::from)
+                    .collect(),
             })
             .map_err(error_to_rmcp);
         self.log_structured_tool_result("project_list", action, "Listed projects", &result)
@@ -734,7 +1027,7 @@ impl AgentaMcpServer {
 
     #[tool(
         name = "project_update",
-        description = "Update an existing project by UUID or slug.",
+        description = "Update an existing project by project_id UUID or slug.",
         annotations(
             title = "Project Update",
             read_only_hint = false,
@@ -815,7 +1108,7 @@ impl AgentaMcpServer {
 
     #[tool(
         name = "version_get",
-        description = "Load a version by UUID or reference.",
+        description = "Load a version by version_id UUID.",
         annotations(
             title = "Version Get",
             read_only_hint = true,
@@ -846,7 +1139,7 @@ impl AgentaMcpServer {
 
     #[tool(
         name = "version_list",
-        description = "List versions, optionally filtered to a project.",
+        description = "List versions, optionally filtered to a project, in reverse chronological order. When limit is provided, results are paginated by created_at DESC then version_id DESC.",
         annotations(
             title = "Version List",
             read_only_hint = true,
@@ -862,12 +1155,18 @@ impl AgentaMcpServer {
         let action = "list";
         self.log_tool_call("version_list", action).await;
         let project = optional_trimmed(params.project);
+        let page_request = page_request(params.limit, params.cursor)?;
         let result = self
             .service
-            .list_versions(project.as_deref())
+            .list_versions_page(project.as_deref(), page_request)
             .await
             .map(|versions| VersionListToolOutput {
-                versions: versions.into_iter().map(VersionRecord::from).collect(),
+                page: page_info(&versions, "created_at,version_id"),
+                versions: versions
+                    .items
+                    .into_iter()
+                    .map(VersionRecord::from)
+                    .collect(),
             })
             .map_err(error_to_rmcp);
         self.log_structured_tool_result("version_list", action, "Listed versions", &result)
@@ -878,7 +1177,7 @@ impl AgentaMcpServer {
 
     #[tool(
         name = "version_update",
-        description = "Update an existing version by UUID or reference.",
+        description = "Update an existing version by version_id UUID.",
         annotations(
             title = "Version Update",
             read_only_hint = false,
@@ -918,7 +1217,7 @@ impl AgentaMcpServer {
 
     #[tool(
         name = "task_create",
-        description = "Create a new task within a project.",
+        description = "Create a new task within a project. Tasks remain mutable, while notes, attachments, and activities form the append-only audit trail around them.",
         annotations(
             title = "Task Create",
             read_only_hint = false,
@@ -933,26 +1232,34 @@ impl AgentaMcpServer {
     ) -> Result<Json<TaskToolOutput>, ErrorData> {
         let action = "create";
         self.log_tool_call("task_create", action).await;
-        let result = self
-            .service
-            .create_task_from(
-                RequestOrigin::Mcp,
-                CreateTaskInput {
-                    project: required_text(params.project, "project")?,
-                    version: optional_trimmed(params.version),
-                    title: required_text(params.title, "title")?,
-                    summary: optional_trimmed(params.summary),
-                    description: optional_trimmed(params.description),
-                    status: params.status,
-                    priority: params.priority,
-                    created_by: optional_trimmed(params.created_by),
-                },
-            )
-            .await
-            .map(|task| TaskToolOutput {
-                task: TaskRecord::from(task),
+        let result: Result<TaskToolOutput, ErrorData> = async {
+            let task = self
+                .service
+                .create_task_from(
+                    RequestOrigin::Mcp,
+                    CreateTaskInput {
+                        project: required_text(params.project, "project")?,
+                        version: optional_trimmed(params.version),
+                        title: required_text(params.title, "title")?,
+                        summary: optional_trimmed(params.summary),
+                        description: optional_trimmed(params.description),
+                        status: params.status,
+                        priority: params.priority,
+                        created_by: optional_trimmed(params.created_by),
+                    },
+                )
+                .await
+                .map_err(error_to_rmcp)?;
+            let detail = self
+                .service
+                .get_task_detail(&task.task_id.to_string())
+                .await
+                .map_err(error_to_rmcp)?;
+            Ok(TaskToolOutput {
+                task: TaskRecord::from(detail),
             })
-            .map_err(error_to_rmcp);
+        }
+        .await;
         self.log_structured_tool_result("task_create", action, "Created task", &result)
             .await;
 
@@ -961,7 +1268,7 @@ impl AgentaMcpServer {
 
     #[tool(
         name = "task_get",
-        description = "Load a task by UUID or reference.",
+        description = "Load a task by task_id UUID and include lightweight summary fields such as note_count, attachment_count, and latest_activity_at.",
         annotations(
             title = "Task Get",
             read_only_hint = true,
@@ -978,7 +1285,7 @@ impl AgentaMcpServer {
         self.log_tool_call("task_get", action).await;
         let result = self
             .service
-            .get_task(&required_text(params.task, "task")?)
+            .get_task_detail(&required_text(params.task, "task")?)
             .await
             .map(|task| TaskToolOutput {
                 task: TaskRecord::from(task),
@@ -991,8 +1298,53 @@ impl AgentaMcpServer {
     }
 
     #[tool(
+        name = "task_context_get",
+        description = "Load a task plus its full notes, full attachments, and recent activities so an agent can restore working context in one read.",
+        annotations(
+            title = "Task Context Get",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    pub async fn task_context_get(
+        &self,
+        Parameters(params): Parameters<TaskContextGetToolInput>,
+    ) -> Result<Json<TaskContextToolOutput>, ErrorData> {
+        let action = "get_context";
+        self.log_tool_call("task_context_get", action).await;
+        let result = self
+            .service
+            .get_task_context(
+                &required_text(params.task, "task")?,
+                params.recent_activity_limit,
+            )
+            .await
+            .map(|context| TaskContextToolOutput {
+                task: TaskRecord::from(context.task),
+                notes: context.notes.into_iter().map(NoteRecord::from).collect(),
+                attachments: context
+                    .attachments
+                    .into_iter()
+                    .map(AttachmentRecord::from)
+                    .collect(),
+                recent_activities: context
+                    .recent_activities
+                    .into_iter()
+                    .map(ActivityRecord::from)
+                    .collect(),
+            })
+            .map_err(error_to_rmcp);
+        self.log_structured_tool_result("task_context_get", action, "Loaded task context", &result)
+            .await;
+
+        result.map(Json)
+    }
+
+    #[tool(
         name = "task_list",
-        description = "List tasks with optional project, version, and status filters.",
+        description = "List tasks with optional project, version, and status filters. When limit is provided, results are paginated by created_at DESC then task_id DESC.",
         annotations(
             title = "Task List",
             read_only_hint = true,
@@ -1007,16 +1359,21 @@ impl AgentaMcpServer {
     ) -> Result<Json<TaskListToolOutput>, ErrorData> {
         let action = "list";
         self.log_tool_call("task_list", action).await;
+        let page_request = page_request(params.limit, params.cursor)?;
         let result = self
             .service
-            .list_tasks(TaskQuery {
-                project: optional_trimmed(params.project),
-                version: optional_trimmed(params.version),
-                status: params.status,
-            })
+            .list_task_details_page(
+                TaskQuery {
+                    project: optional_trimmed(params.project),
+                    version: optional_trimmed(params.version),
+                    status: params.status,
+                },
+                page_request,
+            )
             .await
             .map(|tasks| TaskListToolOutput {
-                tasks: tasks.into_iter().map(TaskRecord::from).collect(),
+                page: page_info(&tasks, "created_at,task_id"),
+                tasks: tasks.items.into_iter().map(TaskRecord::from).collect(),
             })
             .map_err(error_to_rmcp);
         self.log_structured_tool_result("task_list", action, "Listed tasks", &result)
@@ -1027,7 +1384,7 @@ impl AgentaMcpServer {
 
     #[tool(
         name = "task_update",
-        description = "Update an existing task by UUID or reference.",
+        description = "Update an existing task by task_id UUID. Status changes append a status_change activity to the task's audit trail.",
         annotations(
             title = "Task Update",
             read_only_hint = false,
@@ -1043,26 +1400,34 @@ impl AgentaMcpServer {
         let action = "update";
         self.log_tool_call("task_update", action).await;
         let reference = required_text(params.task, "task")?;
-        let result = self
-            .service
-            .update_task_from(
-                RequestOrigin::Mcp,
-                &reference,
-                UpdateTaskInput {
-                    version: optional_trimmed(params.version),
-                    title: optional_trimmed(params.title),
-                    summary: optional_trimmed(params.summary),
-                    description: optional_trimmed(params.description),
-                    status: params.status,
-                    priority: params.priority,
-                    updated_by: optional_trimmed(params.updated_by),
-                },
-            )
-            .await
-            .map(|task| TaskToolOutput {
-                task: TaskRecord::from(task),
+        let result: Result<TaskToolOutput, ErrorData> = async {
+            let task = self
+                .service
+                .update_task_from(
+                    RequestOrigin::Mcp,
+                    &reference,
+                    UpdateTaskInput {
+                        version: optional_trimmed(params.version),
+                        title: optional_trimmed(params.title),
+                        summary: optional_trimmed(params.summary),
+                        description: optional_trimmed(params.description),
+                        status: params.status,
+                        priority: params.priority,
+                        updated_by: optional_trimmed(params.updated_by),
+                    },
+                )
+                .await
+                .map_err(error_to_rmcp)?;
+            let detail = self
+                .service
+                .get_task_detail(&task.task_id.to_string())
+                .await
+                .map_err(error_to_rmcp)?;
+            Ok(TaskToolOutput {
+                task: TaskRecord::from(detail),
             })
-            .map_err(error_to_rmcp);
+        }
+        .await;
         self.log_structured_tool_result("task_update", action, "Updated task", &result)
             .await;
 
@@ -1071,7 +1436,7 @@ impl AgentaMcpServer {
 
     #[tool(
         name = "note_create",
-        description = "Add a note to a task.",
+        description = "Append a note to a task. Notes are append-only, audit-friendly activity records.",
         annotations(
             title = "Note Create",
             read_only_hint = false,
@@ -1109,7 +1474,7 @@ impl AgentaMcpServer {
 
     #[tool(
         name = "note_list",
-        description = "List notes for a task.",
+        description = "List append-only note activities for a task in reverse chronological order. When limit is provided, results are paginated by created_at DESC then activity_id DESC.",
         annotations(
             title = "Note List",
             read_only_hint = true,
@@ -1124,12 +1489,14 @@ impl AgentaMcpServer {
     ) -> Result<Json<NoteListToolOutput>, ErrorData> {
         let action = "list";
         self.log_tool_call("note_list", action).await;
+        let page_request = page_request(params.limit, params.cursor)?;
         let result = self
             .service
-            .list_notes(&required_text(params.task, "task")?)
+            .list_notes_page(&required_text(params.task, "task")?, page_request)
             .await
             .map(|notes| NoteListToolOutput {
-                notes: notes.into_iter().map(NoteRecord::from).collect(),
+                page: page_info(&notes, "created_at,activity_id"),
+                notes: notes.items.into_iter().map(NoteRecord::from).collect(),
             })
             .map_err(error_to_rmcp);
         self.log_structured_tool_result("note_list", action, "Listed notes", &result)
@@ -1139,8 +1506,45 @@ impl AgentaMcpServer {
     }
 
     #[tool(
+        name = "activity_list",
+        description = "List append-only task activities in reverse chronological order, including notes, attachment references, and status changes. When limit is provided, results are paginated by created_at DESC then activity_id DESC.",
+        annotations(
+            title = "Activity List",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    pub async fn activity_list(
+        &self,
+        Parameters(params): Parameters<ActivityListToolInput>,
+    ) -> Result<Json<ActivityListToolOutput>, ErrorData> {
+        let action = "list";
+        self.log_tool_call("activity_list", action).await;
+        let page_request = page_request(params.limit, params.cursor)?;
+        let result = self
+            .service
+            .list_task_activities_page(&required_text(params.task, "task")?, page_request)
+            .await
+            .map(|activities| ActivityListToolOutput {
+                page: page_info(&activities, "created_at,activity_id"),
+                activities: activities
+                    .items
+                    .into_iter()
+                    .map(ActivityRecord::from)
+                    .collect(),
+            })
+            .map_err(error_to_rmcp);
+        self.log_structured_tool_result("activity_list", action, "Listed activities", &result)
+            .await;
+
+        result.map(Json)
+    }
+
+    #[tool(
         name = "attachment_create",
-        description = "Add an attachment to a task from a local file path.",
+        description = "Add an attachment to a task from a local file path. Agenta copies the file into managed storage and appends an attachment_ref activity.",
         annotations(
             title = "Attachment Create",
             read_only_hint = false,
@@ -1180,7 +1584,7 @@ impl AgentaMcpServer {
 
     #[tool(
         name = "attachment_get",
-        description = "Load an attachment by UUID or reference.",
+        description = "Load an attachment by attachment_id UUID.",
         annotations(
             title = "Attachment Get",
             read_only_hint = true,
@@ -1211,7 +1615,7 @@ impl AgentaMcpServer {
 
     #[tool(
         name = "attachment_list",
-        description = "List attachments for a task.",
+        description = "List attachments for a task in reverse chronological order. When limit is provided, results are paginated by created_at DESC then attachment_id DESC.",
         annotations(
             title = "Attachment List",
             read_only_hint = true,
@@ -1226,12 +1630,15 @@ impl AgentaMcpServer {
     ) -> Result<Json<AttachmentListToolOutput>, ErrorData> {
         let action = "list";
         self.log_tool_call("attachment_list", action).await;
+        let page_request = page_request(params.limit, params.cursor)?;
         let result = self
             .service
-            .list_attachments(&required_text(params.task, "task")?)
+            .list_attachments_page(&required_text(params.task, "task")?, page_request)
             .await
             .map(|attachments| AttachmentListToolOutput {
+                page: page_info(&attachments, "created_at,attachment_id"),
                 attachments: attachments
+                    .items
                     .into_iter()
                     .map(AttachmentRecord::from)
                     .collect(),
@@ -1245,7 +1652,7 @@ impl AgentaMcpServer {
 
     #[tool(
         name = "search_query",
-        description = "Search local tasks and task activities using the built-in full-text index.",
+        description = "Search the local FTS index over task titles, task_search_summary, and activity_search_summary. Returns separate task and activity buckets sorted independently by bm25 ascending; limit applies per bucket.",
         annotations(
             title = "Search Query",
             read_only_hint = true,
@@ -1260,6 +1667,7 @@ impl AgentaMcpServer {
     ) -> Result<Json<SearchQueryToolOutput>, ErrorData> {
         let action = "query";
         self.log_tool_call("search_query", action).await;
+        let applied_limit = params.limit.unwrap_or(10).clamp(1, 50);
         let result = self
             .service
             .search(SearchInput {
@@ -1267,7 +1675,7 @@ impl AgentaMcpServer {
                 limit: params.limit,
             })
             .await
-            .map(SearchQueryToolOutput::from)
+            .map(|response| SearchQueryToolOutput::from_response(response, applied_limit))
             .map_err(error_to_rmcp);
         self.log_structured_tool_result("search_query", action, "Completed search", &result)
             .await;
@@ -1312,6 +1720,54 @@ fn optional_trimmed(value: Option<String>) -> Option<String> {
     })
 }
 
+fn page_request(limit: Option<usize>, cursor: Option<String>) -> Result<PageRequest, ErrorData> {
+    if cursor.is_some() && limit.is_none() {
+        return Err(ErrorData::invalid_params(
+            "cursor requires limit to be provided".to_string(),
+            None,
+        ));
+    }
+
+    Ok(PageRequest {
+        limit,
+        cursor: cursor.map(decode_cursor).transpose()?,
+    })
+}
+
+fn page_info<T>(page: &PageResult<T>, sort_by: &str) -> PageInfo {
+    PageInfo {
+        limit: page.limit,
+        next_cursor: page.next_cursor.as_ref().map(encode_cursor),
+        has_more: page.has_more,
+        sort_by: sort_by.to_string(),
+        sort_order: "desc".to_string(),
+    }
+}
+
+fn decode_cursor(cursor: String) -> Result<PageCursor, ErrorData> {
+    let bytes = URL_SAFE_NO_PAD.decode(cursor.as_bytes()).map_err(|error| {
+        ErrorData::invalid_params(format!("invalid cursor encoding: {error}"), None)
+    })?;
+    let payload: CursorPayload = serde_json::from_slice(&bytes).map_err(|error| {
+        ErrorData::invalid_params(format!("invalid cursor payload: {error}"), None)
+    })?;
+    let created_at = OffsetDateTime::parse(&payload.created_at, &Rfc3339).map_err(|error| {
+        ErrorData::invalid_params(format!("invalid cursor timestamp: {error}"), None)
+    })?;
+    let id = Uuid::parse_str(&payload.id)
+        .map_err(|error| ErrorData::invalid_params(format!("invalid cursor id: {error}"), None))?;
+    Ok(PageCursor { created_at, id })
+}
+
+fn encode_cursor(cursor: &PageCursor) -> String {
+    let payload = CursorPayload {
+        created_at: format_timestamp(cursor.created_at),
+        id: cursor.id.to_string(),
+    };
+    let bytes = serde_json::to_vec(&payload).expect("cursor payload json");
+    URL_SAFE_NO_PAD.encode(bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::AgentaMcpServer;
@@ -1339,10 +1795,12 @@ mod tests {
             AgentaMcpServer::version_update_tool_attr(),
             AgentaMcpServer::task_create_tool_attr(),
             AgentaMcpServer::task_get_tool_attr(),
+            AgentaMcpServer::task_context_get_tool_attr(),
             AgentaMcpServer::task_list_tool_attr(),
             AgentaMcpServer::task_update_tool_attr(),
             AgentaMcpServer::note_create_tool_attr(),
             AgentaMcpServer::note_list_tool_attr(),
+            AgentaMcpServer::activity_list_tool_attr(),
             AgentaMcpServer::attachment_create_tool_attr(),
             AgentaMcpServer::attachment_get_tool_attr(),
             AgentaMcpServer::attachment_list_tool_attr(),
@@ -1381,6 +1839,7 @@ mod tests {
 
         assert!(input_schema.contains("\"active\""));
         assert!(input_schema.contains("\"archived\""));
+        assert!(input_schema.contains("default to `active`"));
     }
 
     #[test]
@@ -1408,6 +1867,8 @@ mod tests {
         assert!(task_schema.contains("\"normal\""));
         assert!(task_schema.contains("\"high\""));
         assert!(task_schema.contains("\"critical\""));
+        assert!(task_schema.contains("default to `ready`"));
+        assert!(task_schema.contains("default to `normal`"));
     }
 
     #[test]
@@ -1433,5 +1894,54 @@ mod tests {
             search_query["annotations"]["readOnlyHint"], true,
             "search_query should be explicitly marked read-only"
         );
+        let search_output =
+            serde_json::to_string(&search_query["outputSchema"]).expect("search output schema");
+        assert!(search_output.contains("\"meta\""));
+    }
+
+    #[test]
+    fn list_and_context_tools_expose_page_and_summary_fields() {
+        let project_list =
+            serde_json::to_value(AgentaMcpServer::project_list_tool_attr()).expect("tool json");
+        let task_list =
+            serde_json::to_value(AgentaMcpServer::task_list_tool_attr()).expect("tool json");
+        let task_get =
+            serde_json::to_value(AgentaMcpServer::task_get_tool_attr()).expect("tool json");
+        let activity_list =
+            serde_json::to_value(AgentaMcpServer::activity_list_tool_attr()).expect("tool json");
+        let task_context_get =
+            serde_json::to_value(AgentaMcpServer::task_context_get_tool_attr()).expect("tool json");
+
+        let project_list_input =
+            serde_json::to_string(&project_list["inputSchema"]).expect("project list input");
+        let project_list_output =
+            serde_json::to_string(&project_list["outputSchema"]).expect("project list output");
+        assert!(project_list_input.contains("\"limit\""));
+        assert!(project_list_input.contains("\"cursor\""));
+        assert!(project_list_output.contains("\"page\""));
+
+        let task_list_input =
+            serde_json::to_string(&task_list["inputSchema"]).expect("task list input");
+        let task_list_output =
+            serde_json::to_string(&task_list["outputSchema"]).expect("task list output");
+        let task_get_output =
+            serde_json::to_string(&task_get["outputSchema"]).expect("task get output");
+        assert!(task_list_input.contains("\"limit\""));
+        assert!(task_list_input.contains("\"cursor\""));
+        assert!(task_list_output.contains("\"page\""));
+        assert!(task_get_output.contains("\"note_count\""));
+        assert!(task_get_output.contains("\"attachment_count\""));
+        assert!(task_get_output.contains("\"latest_activity_at\""));
+
+        let activity_list_output =
+            serde_json::to_string(&activity_list["outputSchema"]).expect("activity list output");
+        assert!(activity_list_output.contains("\"metadata\""));
+        assert!(activity_list_output.contains("\"page\""));
+
+        let task_context_output =
+            serde_json::to_string(&task_context_get["outputSchema"]).expect("task context output");
+        assert!(task_context_output.contains("\"notes\""));
+        assert!(task_context_output.contains("\"attachments\""));
+        assert!(task_context_output.contains("\"recent_activities\""));
     }
 }

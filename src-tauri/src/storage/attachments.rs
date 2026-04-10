@@ -46,7 +46,7 @@ impl SqliteStore {
                 storage_path, sha256, size_bytes, summary, created_by, created_at
             FROM attachments
             WHERE task_id = ?
-            ORDER BY created_at DESC
+            ORDER BY created_at DESC, attachment_id DESC
             "#,
         )
         .bind(task_id.to_string())

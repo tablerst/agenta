@@ -305,10 +305,12 @@ async fn mcp_streamable_http_tool_call_returns_structured_content(
     assert!(tools.iter().any(|tool| tool["name"] == "version_update"));
     assert!(tools.iter().any(|tool| tool["name"] == "task_create"));
     assert!(tools.iter().any(|tool| tool["name"] == "task_get"));
+    assert!(tools.iter().any(|tool| tool["name"] == "task_context_get"));
     assert!(tools.iter().any(|tool| tool["name"] == "task_list"));
     assert!(tools.iter().any(|tool| tool["name"] == "task_update"));
     assert!(tools.iter().any(|tool| tool["name"] == "note_create"));
     assert!(tools.iter().any(|tool| tool["name"] == "note_list"));
+    assert!(tools.iter().any(|tool| tool["name"] == "activity_list"));
     assert!(tools.iter().any(|tool| tool["name"] == "attachment_create"));
     assert!(tools.iter().any(|tool| tool["name"] == "attachment_get"));
     assert!(tools.iter().any(|tool| tool["name"] == "attachment_list"));
@@ -360,6 +362,26 @@ async fn mcp_streamable_http_tool_call_returns_structured_content(
     assert!(task_input_schema.contains("\"normal\""));
     assert!(task_input_schema.contains("\"high\""));
     assert!(task_input_schema.contains("\"critical\""));
+    assert!(task_input_schema.contains("default to `ready`"));
+    assert!(task_input_schema.contains("default to `normal`"));
+
+    let task_get_tool = tools
+        .iter()
+        .find(|tool| tool["name"] == "task_get")
+        .ok_or("missing task_get tool")?;
+    let task_get_output_schema = serde_json::to_string(&task_get_tool["outputSchema"])?;
+    assert!(task_get_output_schema.contains("\"note_count\""));
+    assert!(task_get_output_schema.contains("\"attachment_count\""));
+    assert!(task_get_output_schema.contains("\"latest_activity_at\""));
+
+    let task_context_get_tool = tools
+        .iter()
+        .find(|tool| tool["name"] == "task_context_get")
+        .ok_or("missing task_context_get tool")?;
+    let task_context_output_schema = serde_json::to_string(&task_context_get_tool["outputSchema"])?;
+    assert!(task_context_output_schema.contains("\"notes\""));
+    assert!(task_context_output_schema.contains("\"attachments\""));
+    assert!(task_context_output_schema.contains("\"recent_activities\""));
 
     let attachment_create_tool = tools
         .iter()
@@ -375,6 +397,18 @@ async fn mcp_streamable_http_tool_call_returns_structured_content(
         .find(|tool| tool["name"] == "search_query")
         .ok_or("missing search_query tool")?;
     assert!(search_query_tool["inputSchema"]["properties"]["action"].is_null());
+    let search_output_schema = serde_json::to_string(&search_query_tool["outputSchema"])?;
+    assert!(search_output_schema.contains("\"meta\""));
+
+    let project_list_tool = tools
+        .iter()
+        .find(|tool| tool["name"] == "project_list")
+        .ok_or("missing project_list tool")?;
+    let project_list_input_schema = serde_json::to_string(&project_list_tool["inputSchema"])?;
+    let project_list_output_schema = serde_json::to_string(&project_list_tool["outputSchema"])?;
+    assert!(project_list_input_schema.contains("\"limit\""));
+    assert!(project_list_input_schema.contains("\"cursor\""));
+    assert!(project_list_output_schema.contains("\"page\""));
 
     let tool_response = service
         .handle(
@@ -492,10 +526,12 @@ async fn standalone_agenta_mcp_binary_exposes_explicit_tools_and_runs_smoke_flow
         "version_update",
         "task_create",
         "task_get",
+        "task_context_get",
         "task_list",
         "task_update",
         "note_create",
         "note_list",
+        "activity_list",
         "attachment_create",
         "attachment_get",
         "attachment_list",
@@ -533,6 +569,32 @@ async fn standalone_agenta_mcp_binary_exposes_explicit_tools_and_runs_smoke_flow
     .await?;
     assert_eq!(
         project_payload["result"]["structuredContent"]["project"]["slug"],
+        "binary-mcp-demo"
+    );
+    let project_id = project_payload["result"]["structuredContent"]["project"]["project_id"]
+        .as_str()
+        .ok_or("project_create missing project_id")?
+        .to_string();
+
+    let project_get_payload = post_jsonrpc(
+        &client,
+        &url,
+        Some(&session_id),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 31,
+            "method": "tools/call",
+            "params": {
+                "name": "project_get",
+                "arguments": {
+                    "project": project_id.clone()
+                }
+            }
+        }),
+    )
+    .await?;
+    assert_eq!(
+        project_get_payload["result"]["structuredContent"]["project"]["slug"],
         "binary-mcp-demo"
     );
 
@@ -600,7 +662,7 @@ async fn standalone_agenta_mcp_binary_exposes_explicit_tools_and_runs_smoke_flow
             "params": {
                 "name": "note_create",
                 "arguments": {
-                    "task": task_id,
+                    "task": task_id.clone(),
                     "content": "Binary search marker"
                 }
             }
@@ -639,6 +701,157 @@ async fn standalone_agenta_mcp_binary_exposes_explicit_tools_and_runs_smoke_flow
         "artifact"
     );
 
+    let task_update_payload = post_jsonrpc(
+        &client,
+        &url,
+        Some(&session_id),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 71,
+            "method": "tools/call",
+            "params": {
+                "name": "task_update",
+                "arguments": {
+                    "task": task_id.clone(),
+                    "status": "blocked"
+                }
+            }
+        }),
+    )
+    .await?;
+    assert_eq!(
+        task_update_payload["result"]["structuredContent"]["task"]["status"],
+        "blocked"
+    );
+    assert_eq!(
+        task_update_payload["result"]["structuredContent"]["task"]["note_count"],
+        1
+    );
+    assert_eq!(
+        task_update_payload["result"]["structuredContent"]["task"]["attachment_count"],
+        1
+    );
+
+    let activity_payload = post_jsonrpc(
+        &client,
+        &url,
+        Some(&session_id),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 72,
+            "method": "tools/call",
+            "params": {
+                "name": "activity_list",
+                "arguments": {
+                    "task": task_id.clone(),
+                    "limit": 2
+                }
+            }
+        }),
+    )
+    .await?;
+    let activities = activity_payload["result"]["structuredContent"]["activities"]
+        .as_array()
+        .ok_or("activity_list missing activities")?;
+    assert_eq!(activities.len(), 2);
+    assert_eq!(activities[0]["kind"], "status_change");
+    assert_eq!(activities[1]["kind"], "attachment_ref");
+    assert_eq!(
+        activity_payload["result"]["structuredContent"]["page"]["has_more"],
+        true
+    );
+    let next_cursor = activity_payload["result"]["structuredContent"]["page"]["next_cursor"]
+        .as_str()
+        .ok_or("activity_list missing next_cursor")?
+        .to_string();
+
+    let activity_page_2 = post_jsonrpc(
+        &client,
+        &url,
+        Some(&session_id),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 73,
+            "method": "tools/call",
+            "params": {
+                "name": "activity_list",
+                "arguments": {
+                    "task": task_id.clone(),
+                    "limit": 2,
+                    "cursor": next_cursor.clone()
+                }
+            }
+        }),
+    )
+    .await?;
+    let more_activities = activity_page_2["result"]["structuredContent"]["activities"]
+        .as_array()
+        .ok_or("activity_list page 2 missing activities")?;
+    assert_eq!(more_activities.len(), 1);
+    assert_eq!(more_activities[0]["kind"], "note");
+
+    let task_get_payload = post_jsonrpc(
+        &client,
+        &url,
+        Some(&session_id),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 74,
+            "method": "tools/call",
+            "params": {
+                "name": "task_get",
+                "arguments": {
+                    "task": task_id.clone()
+                }
+            }
+        }),
+    )
+    .await?;
+    assert_eq!(
+        task_get_payload["result"]["structuredContent"]["task"]["note_count"],
+        1
+    );
+    assert!(task_get_payload["result"]["structuredContent"]["task"]["notes"].is_null());
+
+    let task_context_payload = post_jsonrpc(
+        &client,
+        &url,
+        Some(&session_id),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 75,
+            "method": "tools/call",
+            "params": {
+                "name": "task_context_get",
+                "arguments": {
+                    "task": task_id.clone(),
+                    "recent_activity_limit": 2
+                }
+            }
+        }),
+    )
+    .await?;
+    assert_eq!(
+        task_context_payload["result"]["structuredContent"]["notes"]
+            .as_array()
+            .ok_or("task_context_get missing notes")?
+            .len(),
+        1
+    );
+    assert_eq!(
+        task_context_payload["result"]["structuredContent"]["attachments"]
+            .as_array()
+            .ok_or("task_context_get missing attachments")?
+            .len(),
+        1
+    );
+    let recent_activities = task_context_payload["result"]["structuredContent"]
+        ["recent_activities"]
+        .as_array()
+        .ok_or("task_context_get missing recent_activities")?;
+    assert_eq!(recent_activities.len(), 2);
+    assert_eq!(recent_activities[0]["kind"], "status_change");
+
     let search_payload = post_jsonrpc(
         &client,
         &url,
@@ -650,8 +863,8 @@ async fn standalone_agenta_mcp_binary_exposes_explicit_tools_and_runs_smoke_flow
             "params": {
                 "name": "search_query",
                 "arguments": {
-                    "query": "Binary search marker",
-                    "limit": 5
+                    "query": "Binary",
+                    "limit": 1
                 }
             }
         }),
@@ -661,6 +874,26 @@ async fn standalone_agenta_mcp_binary_exposes_explicit_tools_and_runs_smoke_flow
         .as_array()
         .ok_or("search_query missing activities")?;
     assert!(!activities.is_empty(), "expected search activity hits");
+    let tasks = search_payload["result"]["structuredContent"]["tasks"]
+        .as_array()
+        .ok_or("search_query missing tasks")?;
+    assert!(!tasks.is_empty(), "expected search task hits");
+    assert_eq!(
+        search_payload["result"]["structuredContent"]["meta"]["limit_applies_per_bucket"],
+        true
+    );
+    assert_eq!(
+        search_payload["result"]["structuredContent"]["meta"]["task_limit_applied"],
+        1
+    );
+    assert_eq!(
+        search_payload["result"]["structuredContent"]["meta"]["activity_limit_applied"],
+        1
+    );
+    assert_eq!(
+        search_payload["result"]["structuredContent"]["meta"]["task_sort"],
+        "bm25(tasks_fts) asc"
+    );
 
     child.kill()?;
     Ok(())
