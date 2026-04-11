@@ -14,6 +14,7 @@ const DEFAULT_MCP_BIND: &str = "127.0.0.1:8787";
 const DEFAULT_MCP_PATH: &str = "/mcp";
 const DEFAULT_MCP_LOG_FILE: &str = "logs/mcp.jsonl";
 const DEFAULT_MCP_UI_BUFFER_LINES: usize = 1000;
+const LOCAL_CONFIG_FILE: &str = "agenta.local.yaml";
 
 #[derive(Clone, Debug)]
 pub struct AppPaths {
@@ -390,12 +391,28 @@ fn discover_config_path(explicit_config_path: Option<PathBuf>) -> AppResult<Opti
     }
 
     let current_dir = env::current_dir().map_err(AppError::from)?;
-    let local = current_dir.join("agenta.local.yaml");
-    if local.exists() {
-        return Ok(Some(local));
+    for candidate in local_config_candidates(&current_dir) {
+        if candidate.exists() {
+            return Ok(Some(candidate));
+        }
     }
 
     Ok(None)
+}
+
+fn local_config_candidates(current_dir: &Path) -> Vec<PathBuf> {
+    let mut candidates = vec![current_dir.join(LOCAL_CONFIG_FILE)];
+
+    // `bun run tauri dev` commonly launches the desktop binary from `src-tauri/`,
+    // while the repo-local runtime config lives at the workspace root.
+    if let Some(parent) = current_dir.parent() {
+        let parent_candidate = parent.join(LOCAL_CONFIG_FILE);
+        if parent_candidate != candidates[0] {
+            candidates.push(parent_candidate);
+        }
+    }
+
+    candidates
 }
 
 fn load_raw_config(path: &Path) -> AppResult<RawConfig> {
@@ -486,6 +503,7 @@ fn expand_env_vars(content: &str) -> AppResult<String> {
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
+    use std::sync::{Mutex, OnceLock};
 
     use tempfile::tempdir;
 
@@ -493,6 +511,11 @@ mod tests {
         load_runtime_config, save_mcp_config_defaults, McpConfig, McpHostKind, McpLaunchOverrides,
         McpLogConfig, McpLogDestination, McpLogLevel,
     };
+
+    fn environment_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     #[test]
     fn resolves_relative_paths_from_config_directory() {
@@ -522,6 +545,40 @@ mod tests {
 
         let config = load_runtime_config(Some(config_path)).expect("load config");
         assert_eq!(config.paths.data_dir, tempdir.path().join("expanded"));
+    }
+
+    #[test]
+    fn discovers_repo_local_config_from_src_tauri_workdir() {
+        let _guard = environment_lock().lock().expect("lock test environment");
+        let tempdir = tempdir().expect("tempdir");
+        let repo_root = tempdir.path();
+        let src_tauri_dir = repo_root.join("src-tauri");
+        std::fs::create_dir_all(&src_tauri_dir).expect("create src-tauri directory");
+
+        let config_path = repo_root.join("agenta.local.yaml");
+        std::fs::write(
+            &config_path,
+            "paths:\n  data_dir: ./local-data\nmcp:\n  autostart: true\n",
+        )
+        .expect("write config");
+
+        let original_dir = std::env::current_dir().expect("read current dir");
+        let original_config = std::env::var_os("AGENTA_CONFIG");
+        std::env::remove_var("AGENTA_CONFIG");
+        std::env::set_current_dir(&src_tauri_dir).expect("switch current dir");
+
+        let result = load_runtime_config(None);
+
+        std::env::set_current_dir(original_dir).expect("restore current dir");
+        match original_config {
+            Some(value) => std::env::set_var("AGENTA_CONFIG", value),
+            None => std::env::remove_var("AGENTA_CONFIG"),
+        }
+
+        let config = result.expect("load config from parent workspace");
+        assert_eq!(config.paths.loaded_config_path, Some(config_path));
+        assert!(config.mcp.autostart);
+        assert_eq!(config.paths.data_dir, repo_root.join("local-data"));
     }
 
     #[test]

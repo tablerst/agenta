@@ -61,6 +61,11 @@ const endpointLabel = computed(() => {
 const canSaveDefaults = computed(() => Boolean(runtime.value?.loaded_config_path));
 const visibleLogs = computed(() => [...logs.value].reverse());
 const statusClass = computed(() => statusPillClass(mcp.value?.state ?? "stopped"));
+const canOpenLogDirectory = computed(
+  () =>
+    Boolean(mcp.value?.log_file_path) &&
+    (mcp.value?.log_destinations ?? []).includes("file"),
+);
 
 function statusPillClass(state: McpRuntimeStatus["state"]) {
   switch (state) {
@@ -132,12 +137,6 @@ function formatFields(fields: Record<string, unknown>) {
     return "";
   }
   return JSON.stringify(fields, null, 2);
-}
-
-function resolveParentPath(path: string) {
-  const normalized = path.replace(/\\/g, "/");
-  const lastSlash = normalized.lastIndexOf("/");
-  return lastSlash > 0 ? path.slice(0, lastSlash) : path;
 }
 
 function toggleDestination(destination: McpLogDestination) {
@@ -220,16 +219,21 @@ async function loadDesktopStatus() {
 }
 
 async function openLogDirectory() {
+  if (!canOpenLogDirectory.value) {
+    return;
+  }
   const logFilePath = mcp.value?.log_file_path;
   if (!logFilePath) {
     return;
   }
-  await desktopBridge.openPath(resolveParentPath(logFilePath));
+  try {
+    await desktopBridge.revealItemInDir(logFilePath);
+  } catch (error) {
+    shell.pushNotice("error", formatDesktopError(error, t));
+  }
 }
 
 onMounted(async () => {
-  await loadRuntime();
-
   unlisteners.push(
     await desktopBridge.onMcpStatus((payload) => {
       const sessionChanged = payload.session_id !== mcp.value?.session_id;
@@ -247,6 +251,8 @@ onMounted(async () => {
       appendLog(payload);
     }),
   );
+
+  await loadRuntime();
 });
 
 onUnmounted(() => {
@@ -447,7 +453,11 @@ onUnmounted(() => {
                 <RotateCcw :size="14" />
                 {{ t("runtime.actions.refreshLogs") }}
               </button>
-              <button class="secondary-action spotlight-surface" :disabled="busy" @click="openLogDirectory">
+              <button
+                class="secondary-action spotlight-surface"
+                :disabled="busy || !canOpenLogDirectory"
+                @click="openLogDirectory"
+              >
                 <FileText :size="14" />
                 {{ t("runtime.actions.openLogDirectory") }}
               </button>

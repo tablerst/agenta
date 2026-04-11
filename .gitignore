@@ -33,3 +33,4 @@ target/rust-analyzer/*
 # Keep runtime database files out of Git, but track schema migrations.
 !src-tauri/migrations/
 !src-tauri/migrations/*.sql
+/local-data

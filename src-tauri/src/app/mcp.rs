@@ -499,6 +499,7 @@ impl McpSupervisor {
                 {
                     let mut inner = self.inner.lock().expect("lock MCP supervisor state");
                     inner.state = McpLifecycleState::Stopped;
+                    inner.session = None;
                     inner.host = None;
                     inner.last_error = None;
                 }

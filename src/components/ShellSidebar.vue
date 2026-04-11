@@ -15,7 +15,7 @@ import { RouterLink, useRoute } from "vue-router";
 
 import SidebarLocaleSwitcher from "./SidebarLocaleSwitcher.vue";
 import logoUrl from "../assets/logo.svg";
-import { bridgeMode } from "../lib/desktop";
+import { resolveBridgeMode } from "../lib/desktop";
 import { buildProjectWorkspacePath, readRouteString } from "../lib/projectWorkspace";
 import { useProjectsStore } from "../stores/projects";
 import { useShellStore } from "../stores/shell";
@@ -39,7 +39,7 @@ const navItems = computed(() => {
   ];
 });
 
-const usingPreviewData = bridgeMode === "preview";
+const usingPreviewData = computed(() => resolveBridgeMode() === "preview");
 const isCondensed = computed(() => shell.sidebarCondensed);
 const toggleLabel = computed(() => {
   if (shell.isCompactViewport) {

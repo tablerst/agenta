@@ -1,6 +1,6 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { openPath } from "@tauri-apps/plugin-opener";
+import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 
 import type {
   AppBridgeError,
@@ -23,10 +23,12 @@ import { mockDesktopBridge } from "./mockDesktop";
 export type BridgeMode = "desktop" | "preview";
 
 function hasTauriRuntime() {
-  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+  return typeof window !== "undefined" && isTauri();
 }
 
-export const bridgeMode: BridgeMode = hasTauriRuntime() ? "desktop" : "preview";
+export function resolveBridgeMode(): BridgeMode {
+  return hasTauriRuntime() ? "desktop" : "preview";
+}
 
 export class DesktopBridgeError extends Error implements AppBridgeError {
   code: string;
@@ -62,6 +64,14 @@ async function callPreview<TResult>(
 }
 
 function normalizeError(error: unknown): DesktopBridgeError {
+  if (error instanceof Error) {
+    return new DesktopBridgeError({
+      code: "desktop_bridge_error",
+      message: error.message,
+      details: error,
+    });
+  }
+
   if (typeof error === "string") {
     try {
       const parsed = JSON.parse(error) as { error?: AppBridgeError };
@@ -82,6 +92,16 @@ function normalizeError(error: unknown): DesktopBridgeError {
     return new DesktopBridgeError(payload);
   }
 
+  if (typeof error === "object" && error && "message" in error) {
+    const payload = error as { message?: unknown; code?: unknown; details?: unknown };
+    return new DesktopBridgeError({
+      code: typeof payload.code === "string" ? payload.code : "desktop_bridge_error",
+      message:
+        typeof payload.message === "string" ? payload.message : "Unknown desktop bridge error",
+      details: "details" in payload ? payload.details : error,
+    });
+  }
+
   return new DesktopBridgeError({
     code: "desktop_bridge_error",
     message: "Unknown desktop bridge error",
@@ -93,7 +113,7 @@ async function subscribeDesktopEvent<TPayload>(
   event: string,
   listener: (payload: TPayload) => void,
 ): Promise<UnlistenFn> {
-  if (bridgeMode !== "desktop") {
+  if (resolveBridgeMode() !== "desktop") {
     return async () => undefined;
   }
 
@@ -103,29 +123,31 @@ async function subscribeDesktopEvent<TPayload>(
 }
 
 export const desktopBridge = {
-  mode: bridgeMode,
+  get mode() {
+    return resolveBridgeMode();
+  },
   status() {
-    return bridgeMode === "desktop"
+    return resolveBridgeMode() === "desktop"
       ? callDesktop<RuntimeStatus>("desktop_status")
       : callPreview(() => mockDesktopBridge.status());
   },
   mcpStatus() {
-    return bridgeMode === "desktop"
+    return resolveBridgeMode() === "desktop"
       ? callDesktop<McpRuntimeStatus>("desktop_mcp_status")
       : callPreview(() => mockDesktopBridge.mcpStatus());
   },
   mcpStart(input: McpLaunchOverrides) {
-    return bridgeMode === "desktop"
+    return resolveBridgeMode() === "desktop"
       ? callDesktop<McpRuntimeStatus>("desktop_mcp_start", input as Record<string, unknown>)
       : callPreview(() => mockDesktopBridge.mcpStart(input));
   },
   mcpStop() {
-    return bridgeMode === "desktop"
+    return resolveBridgeMode() === "desktop"
       ? callDesktop<McpRuntimeStatus>("desktop_mcp_stop")
       : callPreview(() => mockDesktopBridge.mcpStop());
   },
   mcpLogsSnapshot(limit?: number) {
-    return bridgeMode === "desktop"
+    return resolveBridgeMode() === "desktop"
       ? callDesktop<McpLogSnapshot>(
           "desktop_mcp_logs_snapshot",
           { limit: typeof limit === "number" ? limit : null },
@@ -139,48 +161,55 @@ export const desktopBridge = {
     return subscribeDesktopEvent<McpLogEntry>("desktop://mcp-log", listener);
   },
   project(input: Record<string, unknown>) {
-    return bridgeMode === "desktop"
+    return resolveBridgeMode() === "desktop"
       ? callDesktop<Project | Project[]>("desktop_project", input)
       : callPreview<Project | Project[]>(() => mockDesktopBridge.project(input));
   },
   version(input: Record<string, unknown>) {
-    return bridgeMode === "desktop"
+    return resolveBridgeMode() === "desktop"
       ? callDesktop<Version | Version[]>("desktop_version", input)
       : callPreview<Version | Version[]>(() => mockDesktopBridge.version(input));
   },
   task(input: Record<string, unknown>) {
-    return bridgeMode === "desktop"
+    return resolveBridgeMode() === "desktop"
       ? callDesktop<Task | Task[] | TaskActivity[]>("desktop_task", input)
       : callPreview<Task | Task[] | TaskActivity[]>(() => mockDesktopBridge.task(input));
   },
   note(input: Record<string, unknown>) {
-    return bridgeMode === "desktop"
+    return resolveBridgeMode() === "desktop"
       ? callDesktop<TaskActivity | TaskActivity[]>("desktop_note", input)
       : callPreview<TaskActivity | TaskActivity[]>(() => mockDesktopBridge.note(input));
   },
   attachment(input: Record<string, unknown>) {
-    return bridgeMode === "desktop"
+    return resolveBridgeMode() === "desktop"
       ? callDesktop<Attachment | Attachment[]>("desktop_attachment", input)
       : callPreview<Attachment | Attachment[]>(() => mockDesktopBridge.attachment(input));
   },
   search(input: Record<string, unknown>) {
-    return bridgeMode === "desktop"
+    return resolveBridgeMode() === "desktop"
       ? callDesktop<SearchResponse>("desktop_search", input)
       : callPreview<SearchResponse>(() => mockDesktopBridge.search(input));
   },
   approval(input: Record<string, unknown>) {
-    return bridgeMode === "desktop"
+    return resolveBridgeMode() === "desktop"
       ? callDesktop<ApprovalRequest | ApprovalRequest[]>("desktop_approval", input)
       : callPreview<ApprovalRequest | ApprovalRequest[]>(() => mockDesktopBridge.approval(input));
   },
   async openPath(path: string) {
-    if (bridgeMode === "desktop") {
+    if (resolveBridgeMode() === "desktop") {
       await openPath(path);
       return;
     }
     await mockDesktopBridge.openPath(path);
   },
+  async revealItemInDir(path: string) {
+    if (resolveBridgeMode() === "desktop") {
+      await revealItemInDir(path);
+      return;
+    }
+    await mockDesktopBridge.openPath(path);
+  },
   async revealAttachment(path: string) {
-    await this.openPath(path);
+    await this.revealItemInDir(path);
   },
 };

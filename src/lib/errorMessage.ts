@@ -82,7 +82,7 @@ export function formatDesktopError(error: unknown, t: Translate): string {
       return t("notices.errors.conflict");
 
     case "desktop_bridge_error":
-      return t("notices.errors.desktopBridgeError");
+      return error.message || t("notices.errors.desktopBridgeError");
 
     case "invalid_action":
       return t("notices.errors.invalidAction");
