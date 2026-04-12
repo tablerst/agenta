@@ -1,6 +1,6 @@
 # Agenta Docs Index
 
-当前正式文档以第二里程碑基线为底座，当前 active workstream 聚焦文档收口与 Desktop 宿主增强，重点围绕 `mcp.autostart` 和正式文档口径一致性推进。
+当前正式文档以已归档的前三阶段为基线，当前 active workstream 聚焦测试状态收敛与回归保护，重点围绕默认验证命令稳定性与核心主线回归基线推进。
 
 ## 正式文档
 
@@ -12,7 +12,8 @@
 
 ## 执行计划
 
-- [execution-plans/active/third-milestone-doc-alignment-and-desktop-host-hardening.md](/e:/JetBrains/RustRover/agenta/dev_docs/execution-plans/active/third-milestone-doc-alignment-and-desktop-host-hardening.md)：第三阶段 active 施工单
+- [execution-plans/active/fourth-milestone-test-baseline-and-regression-hardening.md](/e:/JetBrains/RustRover/agenta/dev_docs/execution-plans/active/fourth-milestone-test-baseline-and-regression-hardening.md)：第四阶段 active 施工单
+- [execution-plans/archive/third-milestone-doc-alignment-and-desktop-host-hardening.md](/e:/JetBrains/RustRover/agenta/dev_docs/execution-plans/archive/third-milestone-doc-alignment-and-desktop-host-hardening.md)：第三阶段归档
 - [execution-plans/archive/first-milestone-core-cli-mcp.md](/e:/JetBrains/RustRover/agenta/dev_docs/execution-plans/archive/first-milestone-core-cli-mcp.md)：第一里程碑归档
 - [execution-plans/archive/second-milestone-desktop-mcp-console.md](/e:/JetBrains/RustRover/agenta/dev_docs/execution-plans/archive/second-milestone-desktop-mcp-console.md)：第二里程碑归档
 - [execution-plans/archive/mcp-tool-contract-min-compat-refactor.md](/e:/JetBrains/RustRover/agenta/dev_docs/execution-plans/archive/mcp-tool-contract-min-compat-refactor.md)：MCP Tool Contract 重构归档

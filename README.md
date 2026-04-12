@@ -1,6 +1,6 @@
 # Agenta
 
-Agenta is a local-first task and context service for agent hosts. The second-milestone desktop baseline is complete, and the current active execution plan focuses on documentation alignment and Desktop host hardening around `mcp.autostart`.
+Agenta is a local-first task and context service for agent hosts. The desktop baseline and `mcp.autostart` host hardening are complete, and the current active execution plan focuses on test-state convergence and regression hardening.
 
 ## Distribution
 
@@ -47,7 +47,7 @@ When `mcp.log.destinations` is omitted, defaults depend on the host:
 ## Documentation
 
 - Quickstart: [docs/cli-mcp-quickstart.md](/e:/JetBrains/RustRover/agenta/docs/cli-mcp-quickstart.md)
-- Active execution plan: [dev_docs/execution-plans/active/third-milestone-doc-alignment-and-desktop-host-hardening.md](/e:/JetBrains/RustRover/agenta/dev_docs/execution-plans/active/third-milestone-doc-alignment-and-desktop-host-hardening.md)
+- Active execution plan: [dev_docs/execution-plans/active/fourth-milestone-test-baseline-and-regression-hardening.md](/e:/JetBrains/RustRover/agenta/dev_docs/execution-plans/active/fourth-milestone-test-baseline-and-regression-hardening.md)
 - Archived execution plans: [dev_docs/execution-plans/archive](/e:/JetBrains/RustRover/agenta/dev_docs/execution-plans/archive)
 - Product baseline: [dev_docs/baseline.md](/e:/JetBrains/RustRover/agenta/dev_docs/baseline.md)
 - Architecture notes: [dev_docs/architecture.md](/e:/JetBrains/RustRover/agenta/dev_docs/architecture.md)

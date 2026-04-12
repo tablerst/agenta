@@ -216,6 +216,16 @@ html[data-theme="dark"] {
     @apply flex-col items-center;
   }
 
+  .app-shell-sidebar-collapsed .shell-sidebar {
+    border-right-color: transparent;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .app-shell-sidebar-collapsed .shell-sidebar-inner {
+    @apply items-center px-3;
+  }
+
   .app-shell-sidebar-collapsed .shell-brand {
     @apply flex-none justify-center p-0;
   }
@@ -784,11 +794,14 @@ html[data-theme="dark"] {
     inset: 0 auto 0 0;
     width: min(86vw, 340px);
     transform: translateX(-104%);
-    box-shadow: 0 26px 56px rgba(0, 0, 0, 0.26);
+    box-shadow: none;
+    pointer-events: none;
   }
 
   .app-shell-sidebar-open .shell-sidebar {
     transform: translateX(0);
+    box-shadow: 0 26px 56px rgba(0, 0, 0, 0.26);
+    pointer-events: auto;
   }
 
   .shell-sidebar-inner {

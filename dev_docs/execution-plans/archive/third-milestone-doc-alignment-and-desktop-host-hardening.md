@@ -71,10 +71,11 @@
 | [x] | 在 Desktop setup 后补完托管 MCP 自动拉起 | `mcp.autostart=true` 时会自动尝试启动 |
 | [x] | 保持自动拉起失败时 App 可继续运行 | Runtime 仍通过 `failed` 与日志暴露错误 |
 | [x] | 补充 Rust 自动测试覆盖 `autostart` 三条主路径 | 覆盖关闭、成功启动、启动失败 |
-| [ ] | 完成 Desktop 手动验收记录 | 待实际验证 UI 启动、自启动与失败恢复场景 |
+| [x] | 完成 Desktop 手动验收记录 | 已由用户完成手动验收，UI 启动、自启动与失败恢复场景可行，当前阶段满足归档条件 |
 
 ## 当前结论
 
 - 当前正式文档已与代码实现重新对齐，`active` 与 `archive` 的角色边界明确
 - `mcp.autostart` 已从“仅存在于配置模型中的字段”升级为 Desktop 真正消费的正式能力
+- 用户已完成 Desktop 手动验收，当前阶段满足归档条件
 - 当前阶段仍不引入 tray、常驻后台、daemon、`stdio` 或新的 MCP 业务能力面
