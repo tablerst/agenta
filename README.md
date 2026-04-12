@@ -1,6 +1,6 @@
 # Agenta
 
-Agenta is a local-first task and context service for agent hosts. The desktop baseline and `mcp.autostart` host hardening are complete, and the current active execution plan focuses on test-state convergence and regression hardening.
+Agenta is a local-first task and context service for agent hosts. The local desktop baseline, host hardening, and regression gate are complete, and the current active execution plan focuses on the foundations required for remote replica sync.
 
 ## Distribution
 
@@ -27,6 +27,14 @@ Agenta is a local-first task and context service for agent hosts. The desktop ba
 - `cargo run --manifest-path src-tauri/Cargo.toml --bin agenta-cli -- --help`
 - `cargo run --manifest-path src-tauri/Cargo.toml --bin agenta-mcp -- --help`
 
+## Verification Baseline
+
+Use this minimum regression gate for normal code changes:
+
+- `bun run build`
+- `cargo check --manifest-path src-tauri/Cargo.toml`
+- `cargo test --manifest-path src-tauri/Cargo.toml`
+
 ## Runtime Configuration
 
 Use `agenta.example.yaml` as the committed template. The MCP section now supports:
@@ -47,7 +55,7 @@ When `mcp.log.destinations` is omitted, defaults depend on the host:
 ## Documentation
 
 - Quickstart: [docs/cli-mcp-quickstart.md](/e:/JetBrains/RustRover/agenta/docs/cli-mcp-quickstart.md)
-- Active execution plan: [dev_docs/execution-plans/active/fourth-milestone-test-baseline-and-regression-hardening.md](/e:/JetBrains/RustRover/agenta/dev_docs/execution-plans/active/fourth-milestone-test-baseline-and-regression-hardening.md)
+- Active execution plan: [dev_docs/execution-plans/active/fifth-milestone-remote-replica-sync-foundation.md](/e:/JetBrains/RustRover/agenta/dev_docs/execution-plans/active/fifth-milestone-remote-replica-sync-foundation.md)
 - Archived execution plans: [dev_docs/execution-plans/archive](/e:/JetBrains/RustRover/agenta/dev_docs/execution-plans/archive)
 - Product baseline: [dev_docs/baseline.md](/e:/JetBrains/RustRover/agenta/dev_docs/baseline.md)
 - Architecture notes: [dev_docs/architecture.md](/e:/JetBrains/RustRover/agenta/dev_docs/architecture.md)

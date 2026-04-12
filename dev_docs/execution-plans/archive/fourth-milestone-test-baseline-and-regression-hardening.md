@@ -66,14 +66,15 @@
 | [x] | 复现并记录 `cargo test` 异常退出的根因 | 根因已收敛为 core `app/mcp.rs` 直接依赖 Tauri 事件发射与 runtime，导致默认 `lib` 测试目标在 Windows 拉入 Desktop GUI 依赖并异常退出 |
 | [x] | 盘点现有 Rust 测试覆盖面与命令入口 | 已确认模块内测试、`approval_flow`、`milestone_flow`、`app_integration` 的分层与入口 |
 | [x] | 恢复默认 `cargo test --manifest-path src-tauri/Cargo.toml` 稳定通过 | 已通过将 `McpSupervisor` 去 Tauri 化并恢复默认 `cargo test` 绿灯 |
-| [ ] | 明确并固化最小验证矩阵 | 至少包含 `bun run build`、`cargo check`、`cargo test` |
+| [x] | 明确并固化最小验证矩阵 | README 已补充默认验证矩阵：`bun run build`、`cargo check`、`cargo test` |
 | [x] | 补强配置与 MCP Runtime 主线回归测试 | `app::mcp` 已补齐 `autostart` 三条主路径，配置相关回归测试继续保持 |
-| [ ] | 补强项目工作区核心业务回归测试 | 覆盖项目、版本、任务、审批、附件主流程 |
-| [ ] | 同步 README 与文档中的测试/验证口径 | 保持后续阶段引用一致 |
+| [x] | 补强项目工作区核心业务回归测试 | 已新增 `workspace_regression`，覆盖项目默认版本、版本更新、任务更新、detail/context、分页与附件落盘 |
+| [x] | 同步 README 与文档中的测试/验证口径 | README 已补充 `Verification Baseline` 并与当前命令状态对齐 |
 
 ## 当前结论
 
 - 第三阶段已完成并归档，当前 active workstream 切换为测试状态收敛与回归保护
-- 当前仓库已有一定测试基础，默认 `cargo test --manifest-path src-tauri/Cargo.toml`、`cargo check --manifest-path src-tauri/Cargo.toml` 已恢复稳定
-- `McpSupervisor` 已从 Tauri 壳事件发射中解耦，core/runtime 测试边界更清晰，后续可以继续补强业务主线回归覆盖
+- 当前仓库的默认验证矩阵已经收敛为 `bun run build`、`cargo check --manifest-path src-tauri/Cargo.toml`、`cargo test --manifest-path src-tauri/Cargo.toml`
+- `McpSupervisor` 已从 Tauri 壳事件发射中解耦，core/runtime 测试边界更清晰，工作区主流程回归测试也已补齐到项目、版本、任务、审批、附件主链路
+- 第四阶段所有计划项已完成，当前阶段满足归档条件
 - 第四阶段完成后，仓库才能更稳妥地进入远程数据副本同步等更高风险改动阶段

@@ -1,6 +1,6 @@
 # Agenta Docs Index
 
-当前正式文档以已归档的前三阶段为基线，当前 active workstream 聚焦测试状态收敛与回归保护，重点围绕默认验证命令稳定性与核心主线回归基线推进。
+当前正式文档以前四阶段归档结果为基线，当前 active workstream 聚焦远程数据副本同步前置基础设施，重点围绕同步配置、sync metadata、outbox、checkpoint 与事务边界推进。
 
 ## 正式文档
 
@@ -12,7 +12,8 @@
 
 ## 执行计划
 
-- [execution-plans/active/fourth-milestone-test-baseline-and-regression-hardening.md](/e:/JetBrains/RustRover/agenta/dev_docs/execution-plans/active/fourth-milestone-test-baseline-and-regression-hardening.md)：第四阶段 active 施工单
+- [execution-plans/active/fifth-milestone-remote-replica-sync-foundation.md](/e:/JetBrains/RustRover/agenta/dev_docs/execution-plans/active/fifth-milestone-remote-replica-sync-foundation.md)：第五阶段 active 施工单
+- [execution-plans/archive/fourth-milestone-test-baseline-and-regression-hardening.md](/e:/JetBrains/RustRover/agenta/dev_docs/execution-plans/archive/fourth-milestone-test-baseline-and-regression-hardening.md)：第四阶段归档
 - [execution-plans/archive/third-milestone-doc-alignment-and-desktop-host-hardening.md](/e:/JetBrains/RustRover/agenta/dev_docs/execution-plans/archive/third-milestone-doc-alignment-and-desktop-host-hardening.md)：第三阶段归档
 - [execution-plans/archive/first-milestone-core-cli-mcp.md](/e:/JetBrains/RustRover/agenta/dev_docs/execution-plans/archive/first-milestone-core-cli-mcp.md)：第一里程碑归档
 - [execution-plans/archive/second-milestone-desktop-mcp-console.md](/e:/JetBrains/RustRover/agenta/dev_docs/execution-plans/archive/second-milestone-desktop-mcp-console.md)：第二里程碑归档
