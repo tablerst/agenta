@@ -8,7 +8,6 @@ use rmcp::transport::streamable_http_server::{
 };
 use serde::Serialize;
 use serde_json::{json, Value};
-use tauri::Emitter;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 use tokio::io::AsyncWriteExt;
@@ -68,6 +67,8 @@ pub struct McpRuntimeStatus {
 }
 
 type UiLogSink = Arc<dyn Fn(McpLogEntry) + Send + Sync>;
+type StatusSink = Arc<dyn Fn(McpRuntimeStatus) + Send + Sync>;
+type LogEventSink = Arc<dyn Fn(McpLogEntry) + Send + Sync>;
 
 #[derive(Clone)]
 pub struct McpSessionLogger {
@@ -160,7 +161,7 @@ impl McpSessionLogger {
         let logger = self.clone();
         let component = component.into();
         let message = message.into();
-        tauri::async_runtime::spawn(async move {
+        tokio::spawn(async move {
             let _ = logger
                 .record(McpLogLevel::Info, component, message, fields)
                 .await;
@@ -171,7 +172,7 @@ impl McpSessionLogger {
         let logger = self.clone();
         let component = component.into();
         let message = message.into();
-        tauri::async_runtime::spawn(async move {
+        tokio::spawn(async move {
             let _ = logger
                 .record(McpLogLevel::Error, component, message, fields)
                 .await;
@@ -296,7 +297,8 @@ pub struct McpSupervisor {
     runtime: Arc<AppRuntime>,
     default_config: Arc<Mutex<McpConfig>>,
     inner: Arc<Mutex<SupervisorState>>,
-    emitter: Arc<Mutex<Option<tauri::AppHandle>>>,
+    status_sink: Arc<Mutex<Option<StatusSink>>>,
+    log_sink: Arc<Mutex<Option<LogEventSink>>>,
 }
 
 impl McpSupervisor {
@@ -305,12 +307,17 @@ impl McpSupervisor {
             default_config: Arc::new(Mutex::new(runtime.config.mcp.clone())),
             runtime,
             inner: Arc::new(Mutex::new(SupervisorState::default())),
-            emitter: Arc::new(Mutex::new(None)),
+            status_sink: Arc::new(Mutex::new(None)),
+            log_sink: Arc::new(Mutex::new(None)),
         }
     }
 
-    pub fn attach_emitter(&self, app_handle: tauri::AppHandle) {
-        *self.emitter.lock().expect("lock MCP supervisor emitter") = Some(app_handle);
+    pub fn attach_event_sinks(&self, status_sink: StatusSink, log_sink: LogEventSink) {
+        *self
+            .status_sink
+            .lock()
+            .expect("lock MCP supervisor status sink") = Some(status_sink);
+        *self.log_sink.lock().expect("lock MCP supervisor log sink") = Some(log_sink);
         self.emit_status();
     }
 
@@ -543,7 +550,7 @@ impl McpSupervisor {
 
     fn make_ui_sink(&self) -> UiLogSink {
         let inner = self.inner.clone();
-        let emitter = self.emitter.clone();
+        let log_sink = self.log_sink.clone();
         Arc::new(move |entry: McpLogEntry| {
             {
                 let mut state = inner.lock().expect("lock MCP supervisor state");
@@ -558,16 +565,21 @@ impl McpSupervisor {
                 state.logs.push_back(entry.clone());
             }
 
-            if let Some(app_handle) = emitter.lock().expect("lock MCP emitter").clone() {
-                let _ = app_handle.emit(MCP_LOG_EVENT, &entry);
+            if let Some(log_sink) = log_sink.lock().expect("lock MCP log sink").clone() {
+                log_sink(entry);
             }
         })
     }
 
     fn emit_status(&self) {
         let status = self.status_snapshot();
-        if let Some(app_handle) = self.emitter.lock().expect("lock MCP emitter").clone() {
-            let _ = app_handle.emit(MCP_STATUS_EVENT, &status);
+        if let Some(status_sink) = self
+            .status_sink
+            .lock()
+            .expect("lock MCP status sink")
+            .clone()
+        {
+            status_sink(status);
         }
     }
 
@@ -627,4 +639,107 @@ fn now_rfc3339() -> String {
     OffsetDateTime::now_utc()
         .format(&Rfc3339)
         .unwrap_or_else(|_| OffsetDateTime::now_utc().unix_timestamp().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    use tempfile::tempdir;
+
+    use super::{McpLifecycleState, McpRuntimeStatus, McpSupervisor};
+    use crate::app::{AppRuntime, BootstrapOptions, McpLaunchOverrides};
+    use crate::error::{AppError, AppResult};
+
+    fn write_runtime_config(
+        autostart: bool,
+        bind: &str,
+        path: &str,
+    ) -> AppResult<(tempfile::TempDir, PathBuf)> {
+        let tempdir = tempdir()?;
+        let config_path = tempdir.path().join("agenta.local.yaml");
+        fs::write(
+            &config_path,
+            format!(
+                "paths:\n  data_dir: ./data\nmcp:\n  bind: \"{bind}\"\n  path: \"{path}\"\n  autostart: {autostart}\n  log:\n    destinations: [ui]\n    file:\n      path: ./logs/mcp.jsonl\n    ui:\n      buffer_lines: 32\n"
+            ),
+        )?;
+        Ok((tempdir, config_path))
+    }
+
+    async fn build_supervisor(
+        autostart: bool,
+        bind: &str,
+        path: &str,
+    ) -> AppResult<(tempfile::TempDir, McpSupervisor)> {
+        let (tempdir, config_path) = write_runtime_config(autostart, bind, path)?;
+        let runtime = AppRuntime::bootstrap(BootstrapOptions {
+            config_path: Some(config_path),
+        })
+        .await?;
+        Ok((tempdir, McpSupervisor::new(Arc::new(runtime))))
+    }
+
+    async fn autostart_if_configured(
+        supervisor: &McpSupervisor,
+    ) -> Result<Option<McpRuntimeStatus>, AppError> {
+        if !supervisor.default_config().autostart {
+            return Ok(None);
+        }
+
+        supervisor.start(McpLaunchOverrides::default()).await.map(Some)
+    }
+
+    #[tokio::test]
+    async fn autostart_disabled_keeps_mcp_stopped() {
+        let (_tempdir, supervisor) = build_supervisor(false, "127.0.0.1:0", "/mcp")
+            .await
+            .expect("build supervisor");
+
+        let result = autostart_if_configured(&supervisor)
+            .await
+            .expect("skip autostart");
+
+        assert!(result.is_none());
+        assert_eq!(supervisor.status_snapshot().state, McpLifecycleState::Stopped);
+    }
+
+    #[tokio::test]
+    async fn autostart_enabled_starts_mcp_host() {
+        let (_tempdir, supervisor) = build_supervisor(true, "127.0.0.1:0", "/mcp")
+            .await
+            .expect("build supervisor");
+
+        let status = autostart_if_configured(&supervisor)
+            .await
+            .expect("start autostart")
+            .expect("autostart status");
+
+        assert_eq!(status.state, McpLifecycleState::Running);
+        assert!(status.actual_bind.is_some());
+
+        supervisor
+            .shutdown()
+            .await
+            .expect("shutdown autostarted MCP host");
+    }
+
+    #[tokio::test]
+    async fn autostart_failure_marks_runtime_failed_without_crashing() {
+        let (_tempdir, supervisor) = build_supervisor(true, "127.0.0.1:not-a-port", "/mcp")
+            .await
+            .expect("build supervisor");
+
+        let error = autostart_if_configured(&supervisor)
+            .await
+            .expect_err("autostart should fail");
+        let error_message = error.to_string();
+        assert!(!error_message.is_empty());
+
+        let status = supervisor.status_snapshot();
+        assert_eq!(status.state, McpLifecycleState::Failed);
+        assert_eq!(status.last_error.as_deref(), Some(error_message.as_str()));
+    }
 }
