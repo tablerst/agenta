@@ -37,6 +37,8 @@ enum TopLevelCommand {
     Attachment(AttachmentCommand),
     #[command(subcommand)]
     Search(SearchCommand),
+    #[command(subcommand)]
+    Sync(SyncCommand),
 }
 
 #[derive(Debug, Subcommand)]
@@ -79,6 +81,18 @@ enum AttachmentCommand {
 #[derive(Debug, Subcommand)]
 enum SearchCommand {
     Query(SearchQueryArgs),
+}
+
+#[derive(Debug, Subcommand)]
+enum SyncCommand {
+    Status,
+    #[command(subcommand)]
+    Outbox(SyncOutboxCommand),
+}
+
+#[derive(Debug, Subcommand)]
+enum SyncOutboxCommand {
+    List(SyncOutboxListArgs),
 }
 
 #[derive(Debug, Args)]
@@ -243,6 +257,12 @@ struct SearchQueryArgs {
     limit: Option<usize>,
 }
 
+#[derive(Debug, Args)]
+struct SyncOutboxListArgs {
+    #[arg(long)]
+    limit: Option<usize>,
+}
+
 pub async fn run() -> i32 {
     init_tracing();
     let cli = Cli::parse();
@@ -276,6 +296,7 @@ async fn execute(app: AgentaApp, command: TopLevelCommand) -> AppResult<SuccessE
         TopLevelCommand::Note(command) => execute_note(app, command).await,
         TopLevelCommand::Attachment(command) => execute_attachment(app, command).await,
         TopLevelCommand::Search(command) => execute_search(app, command).await,
+        TopLevelCommand::Sync(command) => execute_sync(app, command).await,
     }
 }
 
@@ -511,6 +532,25 @@ async fn execute_search(app: AgentaApp, command: SearchCommand) -> AppResult<Suc
                 .await?;
             success("search.query", result, "Completed search")
         }
+    }
+}
+
+async fn execute_sync(app: AgentaApp, command: SyncCommand) -> AppResult<SuccessEnvelope> {
+    match command {
+        SyncCommand::Status => {
+            let result = app.service.sync_status().await?;
+            success("sync.status", result, "Loaded sync status")
+        }
+        SyncCommand::Outbox(command) => match command {
+            SyncOutboxCommand::List(args) => {
+                let result = app.service.list_sync_outbox(args.limit).await?;
+                success(
+                    "sync.outbox.list",
+                    &result,
+                    format!("Listed {} sync outbox item(s)", result.len()),
+                )
+            }
+        },
     }
 }
 

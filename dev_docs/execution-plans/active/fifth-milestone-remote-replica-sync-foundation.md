@@ -76,17 +76,18 @@
 | 状态 | 事项 | 备注 |
 | --- | --- | --- |
 | [x] | 新建第五阶段 active 计划并切换为唯一 active 施工单 | 本文件 |
-| [ ] | 设计并落地 `sync` 配置模型 | 覆盖 remote、认证注入口、方向策略、checkpoint 等最小字段 |
-| [ ] | 更新 `agenta.example.yaml` 与配置文档口径 | 保持 YAML-first 约定一致 |
-| [ ] | 为 sync metadata / outbox / checkpoint / tombstone 新增 migration | 避免后续远程同步实现时再重构表结构 |
-| [ ] | 新增同步基础存储接口 | 统一查询 pending mutation、checkpoint 与 ack 状态 |
-| [ ] | 将关键业务写路径重构为事务边界 | 至少覆盖项目、版本、任务、备注、附件、审批 replay |
-| [ ] | 在写路径中记录统一 mutation envelope | 保证 CLI / MCP / Desktop / replay 语义一致 |
-| [ ] | 补齐同步基础设施回归测试 | 覆盖事务回滚、outbox 记录、checkpoint 更新、失败恢复 |
-| [ ] | 同步 README、示例配置与 dev docs 口径 | 与当前 active workstream 保持一致 |
+| [x] | 设计并落地 `sync` 配置模型 | 已新增 `sync.enabled / mode / remote.id / remote.endpoint / remote.auth.bearer_token` |
+| [x] | 更新 `agenta.example.yaml` 与配置文档口径 | README、`agenta.example.yaml`、`dev_docs/README.md` 已同步 |
+| [x] | 为 sync metadata / outbox / checkpoint / tombstone 新增 migration | 已新增 `0002_sync_foundation.sql` |
+| [x] | 新增同步基础存储接口 | 已补齐 outbox / checkpoint / entity 读取与 checkpoint upsert |
+| [x] | 将关键业务写路径重构为事务边界 | 已覆盖项目、版本、任务、备注、附件与审批 replay 触发路径 |
+| [x] | 在写路径中记录统一 mutation envelope | `sync_outbox.payload_json` 固定记录写入后完整对象快照 |
+| [x] | 补齐同步基础设施回归测试 | 已新增 `sync_foundation`，覆盖迁移、CLI 诊断、outbox、回滚与附件清理 |
+| [x] | 同步 README、示例配置与 dev docs 口径 | 已与当前 active workstream 对齐 |
 
 ## 当前结论
 
 - 前四阶段已经把本地单机能力、宿主闭环与测试基线收口完成
 - 第五阶段应先建设远程数据副本同步前置基础设施，而不是直接跳到完整同步产品能力实现
+- 第五阶段的 sync foundation 已经落地：配置、migration、事务写路径、CLI 诊断与回归测试均已接通
 - 只有当前置基础设施稳定后，后续远程副本同步、冲突处理与更高阶宿主能力扩展才不会反复回改底层模型

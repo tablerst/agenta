@@ -30,7 +30,7 @@ impl AgentaApp {
         )
         .await?;
         let policy = PolicyEngine::new(config.policy.clone());
-        let service = AgentaService::new(store, policy);
+        let service = AgentaService::new(store, policy, config.sync.clone());
 
         Ok(Self { config, service })
     }

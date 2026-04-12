@@ -2,6 +2,7 @@ mod approvals;
 mod attachments;
 mod mapping;
 mod projects;
+mod sync;
 mod tasks;
 
 use std::path::{Path, PathBuf};

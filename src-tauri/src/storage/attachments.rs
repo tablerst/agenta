@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use sha2::{Digest, Sha256};
-use sqlx::query;
+use sqlx::{query, Sqlite, Transaction};
 use tokio::fs;
 use uuid::Uuid;
 
@@ -34,6 +34,36 @@ impl SqliteStore {
         .bind(&attachment.created_by)
         .bind(format_time(attachment.created_at)?)
         .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn insert_attachment_tx(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        attachment: &Attachment,
+    ) -> AppResult<()> {
+        query(
+            r#"
+            INSERT INTO attachments (
+                attachment_id, task_id, kind, mime, original_filename, original_path,
+                storage_path, sha256, size_bytes, summary, created_by, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(attachment.attachment_id.to_string())
+        .bind(attachment.task_id.to_string())
+        .bind(attachment.kind.to_string())
+        .bind(&attachment.mime)
+        .bind(&attachment.original_filename)
+        .bind(&attachment.original_path)
+        .bind(&attachment.storage_path)
+        .bind(&attachment.sha256)
+        .bind(attachment.size_bytes)
+        .bind(&attachment.summary)
+        .bind(&attachment.created_by)
+        .bind(format_time(attachment.created_at)?)
+        .execute(&mut **tx)
         .await?;
         Ok(())
     }

@@ -23,6 +23,8 @@ Agenta is a local-first task and context service for agent hosts. The local desk
 - `bun run build`
 - `cargo check --manifest-path src-tauri/Cargo.toml`
 - `cargo test --manifest-path src-tauri/Cargo.toml`
+- `cargo run --manifest-path src-tauri/Cargo.toml --bin agenta -- sync status`
+- `cargo run --manifest-path src-tauri/Cargo.toml --bin agenta -- sync outbox list --limit 20`
 - `cargo run --manifest-path src-tauri/Cargo.toml --bin agenta -- --help`
 - `cargo run --manifest-path src-tauri/Cargo.toml --bin agenta-cli -- --help`
 - `cargo run --manifest-path src-tauri/Cargo.toml --bin agenta-mcp -- --help`
@@ -47,10 +49,24 @@ Use `agenta.example.yaml` as the committed template. The MCP section now support
 - `mcp.log.file.path`
 - `mcp.log.ui.buffer_lines`
 
+The sync foundation section now supports:
+
+- `sync.enabled`
+- `sync.mode`
+- `sync.remote.id`
+- `sync.remote.endpoint`
+- `sync.remote.auth.bearer_token`
+
 When `mcp.log.destinations` is omitted, defaults depend on the host:
 
 - Desktop-managed MCP: `ui + file`
 - Standalone `agenta-mcp`: `stdout`
+
+Current sync defaults stay intentionally conservative:
+
+- Only one global remote is modeled
+- Sync foundation records local mutation/outbox state but does not perform network push/pull yet
+- Diagnostics are CLI-only in this stage
 
 ## Documentation
 

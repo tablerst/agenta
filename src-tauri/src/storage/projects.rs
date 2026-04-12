@@ -1,4 +1,4 @@
-use sqlx::query;
+use sqlx::{query, Sqlite, Transaction};
 use uuid::Uuid;
 
 use crate::domain::{Project, Version};
@@ -36,6 +36,38 @@ impl SqliteStore {
         Ok(())
     }
 
+    pub async fn insert_project_tx(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        project: &Project,
+    ) -> AppResult<()> {
+        query(
+            r#"
+            INSERT INTO projects (
+                project_id,
+                slug,
+                name,
+                description,
+                status,
+                default_version_id,
+                created_at,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(project.project_id.to_string())
+        .bind(&project.slug)
+        .bind(&project.name)
+        .bind(&project.description)
+        .bind(project.status.to_string())
+        .bind(project.default_version_id.map(|value| value.to_string()))
+        .bind(format_time(project.created_at)?)
+        .bind(format_time(project.updated_at)?)
+        .execute(&mut **tx)
+        .await?;
+        Ok(())
+    }
+
     pub async fn get_project_by_ref(&self, reference: &str) -> AppResult<Project> {
         let row = query(
             r#"
@@ -47,6 +79,31 @@ impl SqliteStore {
         .bind(reference)
         .bind(reference)
         .fetch_optional(&self.pool)
+        .await?;
+
+        row.map(map_project)
+            .transpose()?
+            .ok_or_else(|| AppError::NotFound {
+                entity: "project".to_string(),
+                reference: reference.to_string(),
+            })
+    }
+
+    pub async fn get_project_by_ref_tx(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        reference: &str,
+    ) -> AppResult<Project> {
+        let row = query(
+            r#"
+            SELECT project_id, slug, name, description, status, default_version_id, created_at, updated_at
+            FROM projects
+            WHERE project_id = ? OR slug = ?
+            "#,
+        )
+        .bind(reference)
+        .bind(reference)
+        .fetch_optional(&mut **tx)
         .await?;
 
         row.map(map_project)
@@ -91,6 +148,30 @@ impl SqliteStore {
         Ok(())
     }
 
+    pub async fn update_project_tx(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        project: &Project,
+    ) -> AppResult<()> {
+        query(
+            r#"
+            UPDATE projects
+            SET slug = ?, name = ?, description = ?, status = ?, default_version_id = ?, updated_at = ?
+            WHERE project_id = ?
+            "#,
+        )
+        .bind(&project.slug)
+        .bind(&project.name)
+        .bind(&project.description)
+        .bind(project.status.to_string())
+        .bind(project.default_version_id.map(|value| value.to_string()))
+        .bind(format_time(project.updated_at)?)
+        .bind(project.project_id.to_string())
+        .execute(&mut **tx)
+        .await?;
+        Ok(())
+    }
+
     pub async fn insert_version(&self, version: &Version) -> AppResult<()> {
         query(
             r#"
@@ -110,6 +191,29 @@ impl SqliteStore {
         Ok(())
     }
 
+    pub async fn insert_version_tx(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        version: &Version,
+    ) -> AppResult<()> {
+        query(
+            r#"
+            INSERT INTO versions (version_id, project_id, name, description, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(version.version_id.to_string())
+        .bind(version.project_id.to_string())
+        .bind(&version.name)
+        .bind(&version.description)
+        .bind(version.status.to_string())
+        .bind(format_time(version.created_at)?)
+        .bind(format_time(version.updated_at)?)
+        .execute(&mut **tx)
+        .await?;
+        Ok(())
+    }
+
     pub async fn get_version_by_ref(&self, reference: &str) -> AppResult<Version> {
         let row = query(
             r#"
@@ -120,6 +224,30 @@ impl SqliteStore {
         )
         .bind(reference)
         .fetch_optional(&self.pool)
+        .await?;
+
+        row.map(map_version)
+            .transpose()?
+            .ok_or_else(|| AppError::NotFound {
+                entity: "version".to_string(),
+                reference: reference.to_string(),
+            })
+    }
+
+    pub async fn get_version_by_ref_tx(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        reference: &str,
+    ) -> AppResult<Version> {
+        let row = query(
+            r#"
+            SELECT version_id, project_id, name, description, status, created_at, updated_at
+            FROM versions
+            WHERE version_id = ?
+            "#,
+        )
+        .bind(reference)
+        .fetch_optional(&mut **tx)
         .await?;
 
         row.map(map_version)
@@ -176,6 +304,28 @@ impl SqliteStore {
         Ok(())
     }
 
+    pub async fn update_version_tx(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        version: &Version,
+    ) -> AppResult<()> {
+        query(
+            r#"
+            UPDATE versions
+            SET name = ?, description = ?, status = ?, updated_at = ?
+            WHERE version_id = ?
+            "#,
+        )
+        .bind(&version.name)
+        .bind(&version.description)
+        .bind(version.status.to_string())
+        .bind(format_time(version.updated_at)?)
+        .bind(version.version_id.to_string())
+        .execute(&mut **tx)
+        .await?;
+        Ok(())
+    }
+
     pub async fn set_project_default_version(
         &self,
         project_id: Uuid,
@@ -193,6 +343,28 @@ impl SqliteStore {
         .bind(format_time(updated_at)?)
         .bind(project_id.to_string())
         .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn set_project_default_version_tx(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        project_id: Uuid,
+        version_id: Option<Uuid>,
+        updated_at: time::OffsetDateTime,
+    ) -> AppResult<()> {
+        query(
+            r#"
+            UPDATE projects
+            SET default_version_id = ?, updated_at = ?
+            WHERE project_id = ?
+            "#,
+        )
+        .bind(version_id.map(|value| value.to_string()))
+        .bind(format_time(updated_at)?)
+        .bind(project_id.to_string())
+        .execute(&mut **tx)
         .await?;
         Ok(())
     }

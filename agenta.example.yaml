@@ -17,6 +17,15 @@ mcp:
     ui:
       buffer_lines: 1000
 
+sync:
+  enabled: false
+  mode: manual_bidirectional
+  remote:
+    id: primary
+    endpoint: https://example.invalid/sync
+    auth:
+      bearer_token: ${AGENTA_SYNC_BEARER_TOKEN}
+
 policy:
   default: auto
   actions:

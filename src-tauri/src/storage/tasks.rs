@@ -1,4 +1,4 @@
-use sqlx::{query, QueryBuilder, Row, Sqlite};
+use sqlx::{query, QueryBuilder, Row, Sqlite, Transaction};
 use uuid::Uuid;
 
 use time::OffsetDateTime;
@@ -53,6 +53,52 @@ impl SqliteStore {
         Ok(())
     }
 
+    pub async fn insert_task_tx(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        task: &Task,
+    ) -> AppResult<()> {
+        query(
+            r#"
+            INSERT INTO tasks (
+                task_id,
+                project_id,
+                version_id,
+                title,
+                summary,
+                description,
+                task_search_summary,
+                task_context_digest,
+                status,
+                priority,
+                created_by,
+                updated_by,
+                created_at,
+                updated_at,
+                closed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(task.task_id.to_string())
+        .bind(task.project_id.to_string())
+        .bind(task.version_id.map(|value| value.to_string()))
+        .bind(&task.title)
+        .bind(&task.summary)
+        .bind(&task.description)
+        .bind(&task.task_search_summary)
+        .bind(&task.task_context_digest)
+        .bind(task.status.to_string())
+        .bind(task.priority.to_string())
+        .bind(&task.created_by)
+        .bind(&task.updated_by)
+        .bind(format_time(task.created_at)?)
+        .bind(format_time(task.updated_at)?)
+        .bind(task.closed_at.map(format_time).transpose()?)
+        .execute(&mut **tx)
+        .await?;
+        Ok(())
+    }
+
     pub async fn get_task_by_ref(&self, reference: &str) -> AppResult<Task> {
         let row = query(
             r#"
@@ -66,6 +112,33 @@ impl SqliteStore {
         )
         .bind(reference)
         .fetch_optional(&self.pool)
+        .await?;
+
+        row.map(map_task)
+            .transpose()?
+            .ok_or_else(|| AppError::NotFound {
+                entity: "task".to_string(),
+                reference: reference.to_string(),
+            })
+    }
+
+    pub async fn get_task_by_ref_tx(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        reference: &str,
+    ) -> AppResult<Task> {
+        let row = query(
+            r#"
+            SELECT
+                task_id, project_id, version_id, title, summary, description,
+                task_search_summary, task_context_digest, status, priority,
+                created_by, updated_by, created_at, updated_at, closed_at
+            FROM tasks
+            WHERE task_id = ?
+            "#,
+        )
+        .bind(reference)
+        .fetch_optional(&mut **tx)
         .await?;
 
         row.map(map_task)
@@ -251,6 +324,46 @@ impl SqliteStore {
         Ok(())
     }
 
+    pub async fn update_task_tx(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        task: &Task,
+    ) -> AppResult<()> {
+        query(
+            r#"
+            UPDATE tasks
+            SET
+                version_id = ?,
+                title = ?,
+                summary = ?,
+                description = ?,
+                task_search_summary = ?,
+                task_context_digest = ?,
+                status = ?,
+                priority = ?,
+                updated_by = ?,
+                updated_at = ?,
+                closed_at = ?
+            WHERE task_id = ?
+            "#,
+        )
+        .bind(task.version_id.map(|value| value.to_string()))
+        .bind(&task.title)
+        .bind(&task.summary)
+        .bind(&task.description)
+        .bind(&task.task_search_summary)
+        .bind(&task.task_context_digest)
+        .bind(task.status.to_string())
+        .bind(task.priority.to_string())
+        .bind(&task.updated_by)
+        .bind(format_time(task.updated_at)?)
+        .bind(task.closed_at.map(format_time).transpose()?)
+        .bind(task.task_id.to_string())
+        .execute(&mut **tx)
+        .await?;
+        Ok(())
+    }
+
     pub async fn insert_activity(&self, activity: &TaskActivity) -> AppResult<()> {
         query(
             r#"
@@ -268,6 +381,38 @@ impl SqliteStore {
         .bind(format_time(activity.created_at)?)
         .bind(activity.metadata_json.to_string())
         .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn insert_activity_tx(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        activity: &TaskActivity,
+    ) -> AppResult<()> {
+        query(
+            r#"
+            INSERT INTO task_activities (
+                activity_id,
+                task_id,
+                kind,
+                content,
+                activity_search_summary,
+                created_by,
+                created_at,
+                metadata_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(activity.activity_id.to_string())
+        .bind(activity.task_id.to_string())
+        .bind(activity.kind.to_string())
+        .bind(&activity.content)
+        .bind(&activity.activity_search_summary)
+        .bind(&activity.created_by)
+        .bind(format_time(activity.created_at)?)
+        .bind(activity.metadata_json.to_string())
+        .execute(&mut **tx)
         .await?;
         Ok(())
     }

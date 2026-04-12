@@ -5,7 +5,8 @@ pub mod runtime;
 pub use config::{
     load_runtime_config, save_mcp_config_defaults, AppPaths, McpConfig, McpHostKind,
     McpLaunchOverrides, McpLogConfig, McpLogDestination, McpLogLevel, ResolvedMcpLogConfig,
-    ResolvedMcpSessionConfig, RuntimeConfig,
+    ResolvedMcpSessionConfig, RuntimeConfig, SyncConfig, SyncRemoteAuthConfig,
+    SyncRemoteConfig,
 };
 pub use mcp::{
     build_mcp_router, start_mcp_host, McpLifecycleState, McpLogEntry, McpLogSnapshot,

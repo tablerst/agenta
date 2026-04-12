@@ -6,6 +6,7 @@ use std::str::FromStr;
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
+use crate::domain::SyncMode;
 use crate::error::{AppError, AppResult};
 use crate::policy::{PolicyConfig, RawPolicyConfig};
 
@@ -142,10 +143,30 @@ pub struct ResolvedMcpSessionConfig {
 }
 
 #[derive(Clone, Debug)]
+pub struct SyncRemoteAuthConfig {
+    pub bearer_token: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct SyncRemoteConfig {
+    pub id: String,
+    pub endpoint: String,
+    pub auth: SyncRemoteAuthConfig,
+}
+
+#[derive(Clone, Debug)]
+pub struct SyncConfig {
+    pub enabled: bool,
+    pub mode: SyncMode,
+    pub remote: Option<SyncRemoteConfig>,
+}
+
+#[derive(Clone, Debug)]
 pub struct RuntimeConfig {
     pub paths: AppPaths,
     pub policy: PolicyConfig,
     pub mcp: McpConfig,
+    pub sync: SyncConfig,
 }
 
 impl McpConfig {
@@ -242,6 +263,7 @@ struct RawConfig {
     paths: Option<RawPaths>,
     policy: Option<RawPolicyConfig>,
     mcp: Option<RawMcpConfig>,
+    sync: Option<RawSyncConfig>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -277,6 +299,25 @@ struct RawMcpLogUiConfig {
     buffer_lines: Option<usize>,
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+struct RawSyncConfig {
+    enabled: Option<bool>,
+    mode: Option<SyncMode>,
+    remote: Option<RawSyncRemoteConfig>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+struct RawSyncRemoteConfig {
+    id: Option<String>,
+    endpoint: Option<String>,
+    auth: Option<RawSyncRemoteAuthConfig>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+struct RawSyncRemoteAuthConfig {
+    bearer_token: Option<String>,
+}
+
 pub fn load_runtime_config(explicit_config_path: Option<PathBuf>) -> AppResult<RuntimeConfig> {
     let project_dirs = ProjectDirs::from("com", "choriko", "agenta").ok_or_else(|| {
         AppError::Config("failed to determine system application data directory".to_string())
@@ -299,34 +340,80 @@ pub fn load_runtime_config(explicit_config_path: Option<PathBuf>) -> AppResult<R
         .paths
         .as_ref()
         .and_then(|paths| paths.data_dir.as_ref())
-        .map(|path| resolve_path(path, &config_base_dir))
+        .map(|path| expand_path_vars(path).map(|path| resolve_path(&path, &config_base_dir)))
+        .transpose()?
         .unwrap_or(default_data_dir);
     let database_path = raw_config
         .paths
         .as_ref()
         .and_then(|paths| paths.database_path.as_ref())
-        .map(|path| resolve_path(path, &config_base_dir))
+        .map(|path| expand_path_vars(path).map(|path| resolve_path(&path, &config_base_dir)))
+        .transpose()?
         .unwrap_or_else(|| data_dir.join(DEFAULT_DB_FILE));
     let attachments_dir = raw_config
         .paths
         .as_ref()
         .and_then(|paths| paths.attachments_dir.as_ref())
-        .map(|path| resolve_path(path, &config_base_dir))
+        .map(|path| expand_path_vars(path).map(|path| resolve_path(&path, &config_base_dir)))
+        .transpose()?
         .unwrap_or_else(|| data_dir.join("attachments"));
 
     let raw_mcp = raw_config.mcp.unwrap_or_default();
     let raw_log = raw_mcp.log.unwrap_or_default();
 
     let bind = sanitize_non_empty(
-        &raw_mcp.bind.unwrap_or_else(|| DEFAULT_MCP_BIND.to_string()),
+        &expand_env_vars(raw_mcp.bind.as_deref().unwrap_or(DEFAULT_MCP_BIND))?,
         "mcp.bind",
     )?;
-    let path = normalize_mount_path(&raw_mcp.path.unwrap_or_else(|| DEFAULT_MCP_PATH.to_string()))?;
+    let path = normalize_mount_path(&expand_env_vars(
+        raw_mcp.path.as_deref().unwrap_or(DEFAULT_MCP_PATH),
+    )?)?;
     let log_file_path = raw_log
         .file
         .and_then(|file| file.path)
-        .map(|path| resolve_path(&path, &config_base_dir))
+        .map(|path| expand_path_vars(&path).map(|path| resolve_path(&path, &config_base_dir)))
+        .transpose()?
         .unwrap_or_else(|| data_dir.join(DEFAULT_MCP_LOG_FILE));
+
+    let raw_sync = raw_config.sync.unwrap_or_default();
+    let sync_enabled = raw_sync.enabled.unwrap_or(false);
+    let sync_mode = raw_sync.mode.unwrap_or_default();
+    let sync = if sync_enabled {
+        let raw_remote = raw_sync
+            .remote
+            .ok_or_else(|| AppError::Config("sync.remote.id must not be empty".to_string()))?;
+        let raw_auth = raw_remote.auth.unwrap_or_default();
+        let remote_id = sanitize_non_empty(
+            &expand_env_vars(raw_remote.id.as_deref().unwrap_or_default())?,
+            "sync.remote.id",
+        )?;
+        let remote_endpoint = sanitize_non_empty(
+            &expand_env_vars(raw_remote.endpoint.as_deref().unwrap_or_default())?,
+            "sync.remote.endpoint",
+        )?;
+        let bearer_token = sanitize_non_empty(
+            &expand_env_vars(raw_auth.bearer_token.as_deref().unwrap_or_default())?,
+            "sync.remote.auth.bearer_token",
+        )?;
+
+        SyncConfig {
+            enabled: true,
+            mode: sync_mode,
+            remote: Some(SyncRemoteConfig {
+                id: remote_id,
+                endpoint: remote_endpoint,
+                auth: SyncRemoteAuthConfig {
+                    bearer_token: Some(bearer_token),
+                },
+            }),
+        }
+    } else {
+        SyncConfig {
+            enabled: false,
+            mode: sync_mode,
+            remote: None,
+        }
+    };
 
     Ok(RuntimeConfig {
         paths: AppPaths {
@@ -351,6 +438,7 @@ pub fn load_runtime_config(explicit_config_path: Option<PathBuf>) -> AppResult<R
                     .unwrap_or(DEFAULT_MCP_UI_BUFFER_LINES),
             },
         },
+        sync,
     })
 }
 
@@ -417,8 +505,7 @@ fn local_config_candidates(current_dir: &Path) -> Vec<PathBuf> {
 
 fn load_raw_config(path: &Path) -> AppResult<RawConfig> {
     let content = fs::read_to_string(path).map_err(AppError::from)?;
-    let expanded = expand_env_vars(&content)?;
-    Ok(serde_yaml::from_str::<RawConfig>(&expanded)?)
+    Ok(serde_yaml::from_str::<RawConfig>(&content)?)
 }
 
 fn resolve_path(path: &Path, base_dir: &Path) -> PathBuf {
@@ -433,6 +520,10 @@ fn path_for_yaml(path: &Path, base_dir: &Path) -> PathBuf {
     path.strip_prefix(base_dir)
         .map(Path::to_path_buf)
         .unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn expand_path_vars(path: &Path) -> AppResult<PathBuf> {
+    Ok(PathBuf::from(expand_env_vars(&path.to_string_lossy())?))
 }
 
 fn sanitize_non_empty(value: &str, field: &str) -> AppResult<String> {
@@ -511,6 +602,7 @@ mod tests {
         load_runtime_config, save_mcp_config_defaults, McpConfig, McpHostKind, McpLaunchOverrides,
         McpLogConfig, McpLogDestination, McpLogLevel,
     };
+    use crate::domain::SyncMode;
 
     fn environment_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -659,5 +751,91 @@ mod tests {
             loaded.mcp.log.file_path,
             tempdir.path().join("logs").join("desktop-mcp.jsonl")
         );
+    }
+
+    #[test]
+    fn sync_defaults_to_disabled_when_omitted() {
+        let tempdir = tempdir().expect("tempdir");
+        let config_path = tempdir.path().join("agenta.local.yaml");
+        std::fs::write(&config_path, "paths:\n  data_dir: ./data\n").expect("write config");
+
+        let config = load_runtime_config(Some(config_path)).expect("load config");
+        assert!(!config.sync.enabled);
+        assert_eq!(config.sync.mode, SyncMode::ManualBidirectional);
+        assert!(config.sync.remote.is_none());
+    }
+
+    #[test]
+    fn disabled_sync_ignores_unexpanded_token_placeholder() {
+        let tempdir = tempdir().expect("tempdir");
+        let config_path = tempdir.path().join("agenta.local.yaml");
+        std::fs::write(
+            &config_path,
+            "sync:\n  enabled: false\n  mode: manual_bidirectional\n  remote:\n    id: primary\n    endpoint: https://example.invalid/sync\n    auth:\n      bearer_token: ${AGENTA_SYNC_BEARER_TOKEN}\n",
+        )
+        .expect("write config");
+
+        let config = load_runtime_config(Some(config_path)).expect("load config");
+        assert!(!config.sync.enabled);
+        assert!(config.sync.remote.is_none());
+    }
+
+    #[test]
+    fn sync_enabled_expands_bearer_token_environment_variable() {
+        let _guard = environment_lock().lock().expect("lock test environment");
+        let tempdir = tempdir().expect("tempdir");
+        let config_path = tempdir.path().join("agenta.local.yaml");
+        std::env::set_var("AGENTA_SYNC_BEARER_TOKEN", "secret-token");
+        std::fs::write(
+            &config_path,
+            "sync:\n  enabled: true\n  mode: manual_bidirectional\n  remote:\n    id: primary\n    endpoint: https://example.invalid/sync\n    auth:\n      bearer_token: ${AGENTA_SYNC_BEARER_TOKEN}\n",
+        )
+        .expect("write config");
+
+        let config = load_runtime_config(Some(config_path)).expect("load config");
+        let remote = config.sync.remote.expect("sync remote");
+        assert!(config.sync.enabled);
+        assert_eq!(config.sync.mode, SyncMode::ManualBidirectional);
+        assert_eq!(remote.id, "primary");
+        assert_eq!(remote.endpoint, "https://example.invalid/sync");
+        assert_eq!(remote.auth.bearer_token.as_deref(), Some("secret-token"));
+
+        std::env::remove_var("AGENTA_SYNC_BEARER_TOKEN");
+    }
+
+    #[test]
+    fn sync_enabled_requires_remote_id() {
+        let _guard = environment_lock().lock().expect("lock test environment");
+        let tempdir = tempdir().expect("tempdir");
+        let config_path = tempdir.path().join("agenta.local.yaml");
+        std::env::set_var("AGENTA_SYNC_BEARER_TOKEN", "secret-token");
+        std::fs::write(
+            &config_path,
+            "sync:\n  enabled: true\n  mode: manual_bidirectional\n  remote:\n    endpoint: https://example.invalid/sync\n    auth:\n      bearer_token: ${AGENTA_SYNC_BEARER_TOKEN}\n",
+        )
+        .expect("write config");
+
+        let error = load_runtime_config(Some(config_path)).expect_err("missing remote id");
+        assert!(error.to_string().contains("sync.remote.id must not be empty"));
+        std::env::remove_var("AGENTA_SYNC_BEARER_TOKEN");
+    }
+
+    #[test]
+    fn sync_enabled_requires_remote_endpoint() {
+        let _guard = environment_lock().lock().expect("lock test environment");
+        let tempdir = tempdir().expect("tempdir");
+        let config_path = tempdir.path().join("agenta.local.yaml");
+        std::env::set_var("AGENTA_SYNC_BEARER_TOKEN", "secret-token");
+        std::fs::write(
+            &config_path,
+            "sync:\n  enabled: true\n  mode: manual_bidirectional\n  remote:\n    id: primary\n    auth:\n      bearer_token: ${AGENTA_SYNC_BEARER_TOKEN}\n",
+        )
+        .expect("write config");
+
+        let error = load_runtime_config(Some(config_path)).expect_err("missing remote endpoint");
+        assert!(error
+            .to_string()
+            .contains("sync.remote.endpoint must not be empty"));
+        std::env::remove_var("AGENTA_SYNC_BEARER_TOKEN");
     }
 }

@@ -2,13 +2,16 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sqlx::{Sqlite, Transaction};
 use time::OffsetDateTime;
+use tokio::fs;
 use uuid::Uuid;
 
+use crate::app::SyncConfig;
 use crate::domain::{
     ApprovalRequest, ApprovalRequestedVia, ApprovalStatus, Attachment, AttachmentKind, Project,
-    ProjectStatus, Task, TaskActivity, TaskActivityKind, TaskPriority, TaskStatus, Version,
-    VersionStatus,
+    ProjectStatus, SyncCheckpointKind, SyncEntityKind, SyncOperation, SyncOutboxStatus, SyncMode,
+    Task, TaskActivity, TaskActivityKind, TaskPriority, TaskStatus, Version, VersionStatus,
 };
 use crate::error::{AppError, AppResult};
 use crate::policy::{PolicyEngine, WriteDecision};
@@ -22,6 +25,7 @@ use crate::storage::{SqliteStore, TaskListFilter};
 pub struct AgentaService {
     store: SqliteStore,
     policy: PolicyEngine,
+    sync: SyncConfig,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -35,6 +39,36 @@ pub enum RequestOrigin {
 pub struct ServiceOverview {
     pub project_count: i64,
     pub task_count: i64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct SyncCheckpointStatus {
+    pub pull: Option<String>,
+    pub push_ack: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct SyncStatusSummary {
+    pub enabled: bool,
+    pub mode: SyncMode,
+    pub remote_id: Option<String>,
+    pub remote_endpoint: Option<String>,
+    pub pending_outbox_count: i64,
+    pub oldest_pending_at: Option<OffsetDateTime>,
+    pub checkpoints: SyncCheckpointStatus,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct SyncOutboxListItem {
+    pub mutation_id: Uuid,
+    pub entity_kind: SyncEntityKind,
+    pub local_id: Uuid,
+    pub operation: SyncOperation,
+    pub local_version: i64,
+    pub status: SyncOutboxStatus,
+    pub created_at: OffsetDateTime,
+    pub attempt_count: i64,
+    pub last_error: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -211,8 +245,8 @@ impl RequestOrigin {
 }
 
 impl AgentaService {
-    pub fn new(store: SqliteStore, policy: PolicyEngine) -> Self {
-        Self { store, policy }
+    pub fn new(store: SqliteStore, policy: PolicyEngine, sync: SyncConfig) -> Self {
+        Self { store, policy, sync }
     }
 
     pub async fn service_overview(&self) -> AppResult<ServiceOverview> {
@@ -220,6 +254,66 @@ impl AgentaService {
             project_count: self.store.project_count().await?,
             task_count: self.store.task_count().await?,
         })
+    }
+
+    pub async fn sync_status(&self) -> AppResult<SyncStatusSummary> {
+        let Some(remote) = self.sync_remote() else {
+            return Ok(SyncStatusSummary {
+                enabled: self.sync.enabled,
+                mode: self.sync.mode,
+                remote_id: None,
+                remote_endpoint: None,
+                pending_outbox_count: 0,
+                oldest_pending_at: None,
+                checkpoints: SyncCheckpointStatus {
+                    pull: None,
+                    push_ack: None,
+                },
+            });
+        };
+
+        let pull_checkpoint = self
+            .store
+            .get_sync_checkpoint(&remote.id, SyncCheckpointKind::Pull)
+            .await?;
+        let push_ack_checkpoint = self
+            .store
+            .get_sync_checkpoint(&remote.id, SyncCheckpointKind::PushAck)
+            .await?;
+
+        Ok(SyncStatusSummary {
+            enabled: self.sync.enabled,
+            mode: self.sync.mode,
+            remote_id: Some(remote.id.clone()),
+            remote_endpoint: Some(remote.endpoint.clone()),
+            pending_outbox_count: self.store.pending_sync_outbox_count(&remote.id).await?,
+            oldest_pending_at: self.store.oldest_pending_sync_outbox_at(&remote.id).await?,
+            checkpoints: SyncCheckpointStatus {
+                pull: pull_checkpoint.map(|checkpoint| checkpoint.checkpoint_value),
+                push_ack: push_ack_checkpoint.map(|checkpoint| checkpoint.checkpoint_value),
+            },
+        })
+    }
+
+    pub async fn list_sync_outbox(
+        &self,
+        limit: Option<usize>,
+    ) -> AppResult<Vec<SyncOutboxListItem>> {
+        let entries = self.store.list_sync_outbox(limit).await?;
+        Ok(entries
+            .into_iter()
+            .map(|entry| SyncOutboxListItem {
+                mutation_id: entry.mutation_id,
+                entity_kind: entry.entity_kind,
+                local_id: entry.local_id,
+                operation: entry.operation,
+                local_version: entry.local_version,
+                status: entry.status,
+                created_at: entry.created_at,
+                attempt_count: entry.attempt_count,
+                last_error: entry.last_error,
+            })
+            .collect())
     }
 
     pub async fn create_project(&self, input: CreateProjectInput) -> AppResult<Project> {
@@ -760,7 +854,18 @@ impl AgentaService {
             created_at: now,
             updated_at: now,
         };
-        self.store.insert_project(&project).await?;
+        let mut tx = self.store.pool.begin().await?;
+        self.store.insert_project_tx(&mut tx, &project).await?;
+        self.enqueue_sync_mutation_tx(
+            &mut tx,
+            SyncEntityKind::Project,
+            project.project_id,
+            SyncOperation::Create,
+            &project,
+            project.updated_at,
+        )
+        .await?;
+        tx.commit().await?;
         Ok(project)
     }
 
@@ -771,7 +876,8 @@ impl AgentaService {
         mode: ApprovalMode,
     ) -> AppResult<Project> {
         self.enforce("project.update", mode).await?;
-        let mut project = self.store.get_project_by_ref(reference).await?;
+        let mut tx = self.store.pool.begin().await?;
+        let mut project = self.store.get_project_by_ref_tx(&mut tx, reference).await?;
         if let Some(slug) = input.slug {
             project.slug = normalize_slug(&slug);
         }
@@ -785,7 +891,7 @@ impl AgentaService {
             project.status = status;
         }
         if let Some(default_version) = input.default_version {
-            let version = self.store.get_version_by_ref(&default_version).await?;
+            let version = self.store.get_version_by_ref_tx(&mut tx, &default_version).await?;
             if version.project_id != project.project_id {
                 return Err(AppError::Conflict(
                     "default version must belong to the target project".to_string(),
@@ -794,7 +900,17 @@ impl AgentaService {
             project.default_version_id = Some(version.version_id);
         }
         project.updated_at = OffsetDateTime::now_utc();
-        self.store.update_project(&project).await?;
+        self.store.update_project_tx(&mut tx, &project).await?;
+        self.enqueue_sync_mutation_tx(
+            &mut tx,
+            SyncEntityKind::Project,
+            project.project_id,
+            SyncOperation::Update,
+            &project,
+            project.updated_at,
+        )
+        .await?;
+        tx.commit().await?;
         Ok(project)
     }
 
@@ -804,7 +920,8 @@ impl AgentaService {
         mode: ApprovalMode,
     ) -> AppResult<Version> {
         self.enforce("version.create", mode).await?;
-        let project = self.store.get_project_by_ref(&input.project).await?;
+        let mut tx = self.store.pool.begin().await?;
+        let mut project = self.store.get_project_by_ref_tx(&mut tx, &input.project).await?;
         let now = OffsetDateTime::now_utc();
         let version = Version {
             version_id: Uuid::new_v4(),
@@ -815,12 +932,38 @@ impl AgentaService {
             created_at: now,
             updated_at: now,
         };
-        self.store.insert_version(&version).await?;
+        self.store.insert_version_tx(&mut tx, &version).await?;
+        self.enqueue_sync_mutation_tx(
+            &mut tx,
+            SyncEntityKind::Version,
+            version.version_id,
+            SyncOperation::Create,
+            &version,
+            version.updated_at,
+        )
+        .await?;
         if project.default_version_id.is_none() {
+            project.default_version_id = Some(version.version_id);
+            project.updated_at = now;
             self.store
-                .set_project_default_version(project.project_id, Some(version.version_id), now)
+                .set_project_default_version_tx(
+                    &mut tx,
+                    project.project_id,
+                    Some(version.version_id),
+                    now,
+                )
                 .await?;
+            self.enqueue_sync_mutation_tx(
+                &mut tx,
+                SyncEntityKind::Project,
+                project.project_id,
+                SyncOperation::Update,
+                &project,
+                project.updated_at,
+            )
+            .await?;
         }
+        tx.commit().await?;
         Ok(version)
     }
 
@@ -831,7 +974,8 @@ impl AgentaService {
         mode: ApprovalMode,
     ) -> AppResult<Version> {
         self.enforce("version.update", mode).await?;
-        let mut version = self.store.get_version_by_ref(reference).await?;
+        let mut tx = self.store.pool.begin().await?;
+        let mut version = self.store.get_version_by_ref_tx(&mut tx, reference).await?;
         if let Some(name) = input.name {
             version.name = require_non_empty(name, "version name")?;
         }
@@ -842,7 +986,17 @@ impl AgentaService {
             version.status = status;
         }
         version.updated_at = OffsetDateTime::now_utc();
-        self.store.update_version(&version).await?;
+        self.store.update_version_tx(&mut tx, &version).await?;
+        self.enqueue_sync_mutation_tx(
+            &mut tx,
+            SyncEntityKind::Version,
+            version.version_id,
+            SyncOperation::Update,
+            &version,
+            version.updated_at,
+        )
+        .await?;
+        tx.commit().await?;
         Ok(version)
     }
 
@@ -852,9 +1006,10 @@ impl AgentaService {
         mode: ApprovalMode,
     ) -> AppResult<Task> {
         self.enforce("task.create", mode).await?;
-        let project = self.store.get_project_by_ref(&input.project).await?;
+        let mut tx = self.store.pool.begin().await?;
+        let project = self.store.get_project_by_ref_tx(&mut tx, &input.project).await?;
         let version_id = self
-            .resolve_version_for_project(project.project_id, input.version.as_deref())
+            .resolve_version_for_project_tx(&mut tx, project.project_id, input.version.as_deref())
             .await?;
         let now = OffsetDateTime::now_utc();
         let created_by = input
@@ -885,7 +1040,17 @@ impl AgentaService {
             task.description.as_deref(),
         );
         task.task_context_digest = build_task_context_digest(&task);
-        self.store.insert_task(&task).await?;
+        self.store.insert_task_tx(&mut tx, &task).await?;
+        self.enqueue_sync_mutation_tx(
+            &mut tx,
+            SyncEntityKind::Task,
+            task.task_id,
+            SyncOperation::Create,
+            &task,
+            task.updated_at,
+        )
+        .await?;
+        tx.commit().await?;
         Ok(task)
     }
 
@@ -896,11 +1061,12 @@ impl AgentaService {
         mode: ApprovalMode,
     ) -> AppResult<Task> {
         self.enforce("task.update", mode).await?;
-        let mut task = self.store.get_task_by_ref(reference).await?;
+        let mut tx = self.store.pool.begin().await?;
+        let mut task = self.store.get_task_by_ref_tx(&mut tx, reference).await?;
         let previous_status = task.status;
         if let Some(version) = input.version {
             task.version_id = self
-                .resolve_version_for_project(task.project_id, Some(&version))
+                .resolve_version_for_project_tx(&mut tx, task.project_id, Some(&version))
                 .await?;
         }
         if let Some(title) = input.title {
@@ -930,7 +1096,7 @@ impl AgentaService {
             task.description.as_deref(),
         );
         task.task_context_digest = build_task_context_digest(&task);
-        self.store.update_task(&task).await?;
+        self.store.update_task_tx(&mut tx, &task).await?;
         if previous_status != task.status {
             let content = format!("Status changed from {previous_status} to {}.", task.status);
             let activity = TaskActivity {
@@ -949,8 +1115,18 @@ impl AgentaService {
                     "to_status": task.status,
                 }),
             };
-            self.store.insert_activity(&activity).await?;
+            self.store.insert_activity_tx(&mut tx, &activity).await?;
         }
+        self.enqueue_sync_mutation_tx(
+            &mut tx,
+            SyncEntityKind::Task,
+            task.task_id,
+            SyncOperation::Update,
+            &task,
+            task.updated_at,
+        )
+        .await?;
+        tx.commit().await?;
         Ok(task)
     }
 
@@ -960,7 +1136,8 @@ impl AgentaService {
         mode: ApprovalMode,
     ) -> AppResult<TaskActivity> {
         self.enforce("note.create", mode).await?;
-        let task = self.store.get_task_by_ref(&input.task).await?;
+        let mut tx = self.store.pool.begin().await?;
+        let task = self.store.get_task_by_ref_tx(&mut tx, &input.task).await?;
         let now = OffsetDateTime::now_utc();
         let content = require_non_empty(input.content, "note content")?;
         let activity = TaskActivity {
@@ -979,7 +1156,17 @@ impl AgentaService {
             created_at: now,
             metadata_json: json!({}),
         };
-        self.store.insert_activity(&activity).await?;
+        self.store.insert_activity_tx(&mut tx, &activity).await?;
+        self.enqueue_sync_mutation_tx(
+            &mut tx,
+            SyncEntityKind::Note,
+            activity.activity_id,
+            SyncOperation::Create,
+            &activity,
+            activity.created_at,
+        )
+        .await?;
+        tx.commit().await?;
         Ok(activity)
     }
 
@@ -1018,7 +1205,6 @@ impl AgentaService {
             created_by: created_by.clone(),
             created_at: now,
         };
-        self.store.insert_attachment(&attachment).await?;
         let activity = TaskActivity {
             activity_id: Uuid::new_v4(),
             task_id: task.task_id,
@@ -1035,7 +1221,31 @@ impl AgentaService {
                 "storage_path": attachment.storage_path,
             }),
         };
-        self.store.insert_activity(&activity).await?;
+        let mut tx = self.store.pool.begin().await?;
+        let result = async {
+            let _ = self.store.get_task_by_ref_tx(&mut tx, &input.task).await?;
+            self.store.insert_attachment_tx(&mut tx, &attachment).await?;
+            self.store.insert_activity_tx(&mut tx, &activity).await?;
+            self.enqueue_sync_mutation_tx(
+                &mut tx,
+                SyncEntityKind::Attachment,
+                attachment.attachment_id,
+                SyncOperation::Create,
+                &attachment,
+                attachment.created_at,
+            )
+            .await?;
+            tx.commit().await?;
+            Ok::<(), AppError>(())
+        }
+        .await;
+
+        if let Err(error) = result {
+            let cleanup_path = self.store.attachments_dir.join(&stored.storage_path);
+            let _ = fs::remove_file(cleanup_path).await;
+            return Err(error);
+        }
+
         Ok(attachment)
     }
 
@@ -1353,14 +1563,47 @@ impl AgentaService {
         }
     }
 
-    async fn resolve_version_for_project(
+    fn sync_remote(&self) -> Option<&crate::app::SyncRemoteConfig> {
+        self.sync.remote.as_ref().filter(|_| self.sync.enabled)
+    }
+
+    async fn enqueue_sync_mutation_tx<T: Serialize>(
         &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        entity_kind: SyncEntityKind,
+        local_id: Uuid,
+        operation: SyncOperation,
+        payload: &T,
+        updated_at: OffsetDateTime,
+    ) -> AppResult<()> {
+        let Some(remote) = self.sync_remote() else {
+            return Ok(());
+        };
+        let payload_json = serde_json::to_value(payload)
+            .map_err(|error| AppError::internal(format!("failed to serialize sync payload: {error}")))?;
+        self.store
+            .record_sync_mutation_tx(
+                tx,
+                &remote.id,
+                entity_kind,
+                local_id,
+                operation,
+                &payload_json,
+                updated_at,
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn resolve_version_for_project_tx(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
         project_id: Uuid,
         version_ref: Option<&str>,
     ) -> AppResult<Option<Uuid>> {
         match version_ref {
             Some(reference) => {
-                let version = self.store.get_version_by_ref(reference).await?;
+                let version = self.store.get_version_by_ref_tx(tx, reference).await?;
                 if version.project_id != project_id {
                     return Err(AppError::Conflict(
                         "version must belong to the selected project".to_string(),

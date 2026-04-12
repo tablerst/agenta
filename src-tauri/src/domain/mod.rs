@@ -96,6 +96,34 @@ string_enum!(ApprovalRequestedVia {
     Desktop => "desktop",
 });
 
+string_enum!(SyncMode {
+    ManualBidirectional => "manual_bidirectional",
+});
+
+string_enum!(SyncEntityKind {
+    Project => "project",
+    Version => "version",
+    Task => "task",
+    Note => "note",
+    Attachment => "attachment",
+});
+
+string_enum!(SyncOperation {
+    Create => "create",
+    Update => "update",
+});
+
+string_enum!(SyncOutboxStatus {
+    Pending => "pending",
+    Acked => "acked",
+    Failed => "failed",
+});
+
+string_enum!(SyncCheckpointKind {
+    Pull => "pull",
+    PushAck => "push_ack",
+});
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Project {
     pub project_id: Uuid,
@@ -187,6 +215,54 @@ pub struct ApprovalRequest {
     pub status: ApprovalStatus,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SyncEntityState {
+    pub entity_kind: SyncEntityKind,
+    pub local_id: Uuid,
+    pub remote_id: String,
+    pub remote_entity_id: Option<String>,
+    pub local_version: i64,
+    pub dirty: bool,
+    pub last_synced_at: Option<OffsetDateTime>,
+    pub last_enqueued_mutation_id: Option<Uuid>,
+    pub updated_at: OffsetDateTime,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SyncOutboxEntry {
+    pub mutation_id: Uuid,
+    pub remote_id: String,
+    pub entity_kind: SyncEntityKind,
+    pub local_id: Uuid,
+    pub operation: SyncOperation,
+    pub local_version: i64,
+    pub payload_json: serde_json::Value,
+    pub status: SyncOutboxStatus,
+    pub attempt_count: i64,
+    pub last_attempt_at: Option<OffsetDateTime>,
+    pub acked_at: Option<OffsetDateTime>,
+    pub last_error: Option<String>,
+    pub created_at: OffsetDateTime,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SyncCheckpoint {
+    pub remote_id: String,
+    pub checkpoint_kind: SyncCheckpointKind,
+    pub checkpoint_value: String,
+    pub updated_at: OffsetDateTime,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SyncTombstone {
+    pub entity_kind: SyncEntityKind,
+    pub local_id: Uuid,
+    pub remote_id: String,
+    pub remote_entity_id: Option<String>,
+    pub deleted_at: OffsetDateTime,
+    pub purge_after: OffsetDateTime,
+}
+
 impl Default for ProjectStatus {
     fn default() -> Self {
         Self::Active
@@ -218,6 +294,18 @@ impl Default for AttachmentKind {
 }
 
 impl Default for ApprovalStatus {
+    fn default() -> Self {
+        Self::Pending
+    }
+}
+
+impl Default for SyncMode {
+    fn default() -> Self {
+        Self::ManualBidirectional
+    }
+}
+
+impl Default for SyncOutboxStatus {
     fn default() -> Self {
         Self::Pending
     }

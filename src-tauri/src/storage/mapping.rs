@@ -6,7 +6,10 @@ use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use crate::domain::{ApprovalRequest, Attachment, Project, Task, TaskActivity, Version};
+use crate::domain::{
+    ApprovalRequest, Attachment, Project, SyncCheckpoint, SyncEntityState, SyncTombstone,
+    SyncOutboxEntry, Task, TaskActivity, Version,
+};
 use crate::error::{AppError, AppResult};
 
 pub(crate) fn map_project(row: SqliteRow) -> AppResult<Project> {
@@ -124,6 +127,70 @@ pub(crate) fn map_approval_request(row: SqliteRow) -> AppResult<ApprovalRequest>
             .map(|value| parse_json(value, "error_json"))
             .transpose()?,
         status: parse_enum(row.get("status"), "status")?,
+    })
+}
+
+pub(crate) fn map_sync_entity(row: SqliteRow) -> AppResult<SyncEntityState> {
+    Ok(SyncEntityState {
+        entity_kind: parse_enum(row.get("entity_kind"), "entity_kind")?,
+        local_id: parse_uuid(row.get("local_id"), "local_id")?,
+        remote_id: row.get("remote_id"),
+        remote_entity_id: row.get("remote_entity_id"),
+        local_version: row.get("local_version"),
+        dirty: row.get::<i64, _>("dirty") != 0,
+        last_synced_at: row
+            .get::<Option<String>, _>("last_synced_at")
+            .map(|value| parse_time(value, "last_synced_at"))
+            .transpose()?,
+        last_enqueued_mutation_id: row
+            .get::<Option<String>, _>("last_enqueued_mutation_id")
+            .map(|value| parse_uuid(value, "last_enqueued_mutation_id"))
+            .transpose()?,
+        updated_at: parse_time(row.get("updated_at"), "updated_at")?,
+    })
+}
+
+pub(crate) fn map_sync_outbox_entry(row: SqliteRow) -> AppResult<SyncOutboxEntry> {
+    Ok(SyncOutboxEntry {
+        mutation_id: parse_uuid(row.get("mutation_id"), "mutation_id")?,
+        remote_id: row.get("remote_id"),
+        entity_kind: parse_enum(row.get("entity_kind"), "entity_kind")?,
+        local_id: parse_uuid(row.get("local_id"), "local_id")?,
+        operation: parse_enum(row.get("operation"), "operation")?,
+        local_version: row.get("local_version"),
+        payload_json: parse_json(row.get("payload_json"), "payload_json")?,
+        status: parse_enum(row.get("status"), "status")?,
+        attempt_count: row.get("attempt_count"),
+        last_attempt_at: row
+            .get::<Option<String>, _>("last_attempt_at")
+            .map(|value| parse_time(value, "last_attempt_at"))
+            .transpose()?,
+        acked_at: row
+            .get::<Option<String>, _>("acked_at")
+            .map(|value| parse_time(value, "acked_at"))
+            .transpose()?,
+        last_error: row.get("last_error"),
+        created_at: parse_time(row.get("created_at"), "created_at")?,
+    })
+}
+
+pub(crate) fn map_sync_checkpoint(row: SqliteRow) -> AppResult<SyncCheckpoint> {
+    Ok(SyncCheckpoint {
+        remote_id: row.get("remote_id"),
+        checkpoint_kind: parse_enum(row.get("checkpoint_kind"), "checkpoint_kind")?,
+        checkpoint_value: row.get("checkpoint_value"),
+        updated_at: parse_time(row.get("updated_at"), "updated_at")?,
+    })
+}
+
+pub(crate) fn map_sync_tombstone(row: SqliteRow) -> AppResult<SyncTombstone> {
+    Ok(SyncTombstone {
+        entity_kind: parse_enum(row.get("entity_kind"), "entity_kind")?,
+        local_id: parse_uuid(row.get("local_id"), "local_id")?,
+        remote_id: row.get("remote_id"),
+        remote_entity_id: row.get("remote_entity_id"),
+        deleted_at: parse_time(row.get("deleted_at"), "deleted_at")?,
+        purge_after: parse_time(row.get("purge_after"), "purge_after")?,
     })
 }
 
