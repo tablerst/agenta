@@ -22,14 +22,19 @@ import type {
   McpLogLevel,
   McpRuntimeStatus,
   RuntimeStatus,
+  SyncOutboxListItem,
+  SyncStatusSummary,
 } from "../lib/types";
 import { useShellStore } from "../stores/shell";
 
 const shell = useShellStore();
 const runtime = ref<RuntimeStatus | null>(null);
 const mcp = ref<McpRuntimeStatus | null>(null);
+const syncStatus = ref<SyncStatusSummary | null>(null);
+const syncOutbox = ref<SyncOutboxListItem[]>([]);
 const logs = ref<McpLogEntry[]>([]);
 const busy = ref(false);
+const syncBusy = ref(false);
 const loadedAt = ref<string>("");
 const saveAsDefault = ref(false);
 const unlisteners: Array<() => void> = [];
@@ -60,11 +65,19 @@ const endpointLabel = computed(() => {
 });
 const canSaveDefaults = computed(() => Boolean(runtime.value?.loaded_config_path));
 const visibleLogs = computed(() => [...logs.value].reverse());
+const visibleSyncOutbox = computed(() => [...syncOutbox.value].slice(0, 8));
 const statusClass = computed(() => statusPillClass(mcp.value?.state ?? "stopped"));
 const canOpenLogDirectory = computed(
   () =>
     Boolean(mcp.value?.log_file_path) &&
     (mcp.value?.log_destinations ?? []).includes("file"),
+);
+const syncPendingCount = computed(() => syncStatus.value?.pending_outbox_count ?? 0);
+const syncRemoteHost = computed(
+  () => syncStatus.value?.remote?.postgres?.host ?? t("common.na"),
+);
+const syncRemoteDatabase = computed(
+  () => syncStatus.value?.remote?.postgres?.database ?? t("common.na"),
 );
 
 function statusPillClass(state: McpRuntimeStatus["state"]) {
@@ -114,6 +127,32 @@ function formatLogDestination(destination: McpLogDestination) {
   return t(`runtime.destinations.${destination}`);
 }
 
+function formatSyncEntityKind(kind: SyncOutboxListItem["entity_kind"]) {
+  void locale.value;
+  return t(`runtime.sync.entityKinds.${kind}`);
+}
+
+function formatSyncOperation(operation: SyncOutboxListItem["operation"]) {
+  void locale.value;
+  return t(`runtime.sync.operations.${operation}`);
+}
+
+function formatSyncOutboxStatus(status: SyncOutboxListItem["status"]) {
+  void locale.value;
+  return t(`runtime.sync.statuses.${status}`);
+}
+
+function syncOutboxStatusClass(status: SyncOutboxListItem["status"]) {
+  switch (status) {
+    case "acked":
+      return "status-pill status-pill-success";
+    case "failed":
+      return "status-pill status-pill-danger";
+    default:
+      return "status-pill status-pill-warning";
+  }
+}
+
 function hydrateForm(status: McpRuntimeStatus | null) {
   if (!status) {
     return;
@@ -156,16 +195,33 @@ async function refreshLogs() {
   }
 }
 
+async function loadSync() {
+  try {
+    const [syncEnvelope, outboxEnvelope] = await Promise.all([
+      desktopBridge.syncStatus(),
+      desktopBridge.syncOutboxList(20),
+    ]);
+    syncStatus.value = syncEnvelope.result;
+    syncOutbox.value = outboxEnvelope.result;
+  } catch (error) {
+    shell.pushNotice("error", formatDesktopError(error, t));
+  }
+}
+
 async function loadRuntime() {
   try {
-    const [runtimeEnvelope, mcpEnvelope, logsEnvelope] = await Promise.all([
+    const [runtimeEnvelope, mcpEnvelope, logsEnvelope, syncEnvelope, outboxEnvelope] = await Promise.all([
       desktopBridge.status(),
       desktopBridge.mcpStatus(),
       desktopBridge.mcpLogsSnapshot(),
+      desktopBridge.syncStatus(),
+      desktopBridge.syncOutboxList(20),
     ]);
     runtime.value = runtimeEnvelope.result;
     mcp.value = mcpEnvelope.result;
     logs.value = logsEnvelope.result.entries;
+    syncStatus.value = syncEnvelope.result;
+    syncOutbox.value = outboxEnvelope.result;
     hydrateForm(mcpEnvelope.result);
     loadedAt.value = new Date().toISOString();
   } catch (error) {
@@ -233,6 +289,45 @@ async function openLogDirectory() {
   }
 }
 
+async function runSyncBackfill() {
+  syncBusy.value = true;
+  try {
+    await desktopBridge.syncBackfill(100);
+    await loadSync();
+    shell.pushNotice("success", t("notices.syncBackfillCompleted"));
+  } catch (error) {
+    shell.pushNotice("error", formatDesktopError(error, t));
+  } finally {
+    syncBusy.value = false;
+  }
+}
+
+async function runSyncPush() {
+  syncBusy.value = true;
+  try {
+    await desktopBridge.syncPush(100);
+    await loadSync();
+    shell.pushNotice("success", t("notices.syncPushCompleted"));
+  } catch (error) {
+    shell.pushNotice("error", formatDesktopError(error, t));
+  } finally {
+    syncBusy.value = false;
+  }
+}
+
+async function runSyncPull() {
+  syncBusy.value = true;
+  try {
+    await desktopBridge.syncPull(100);
+    await loadSync();
+    shell.pushNotice("success", t("notices.syncPullCompleted"));
+  } catch (error) {
+    shell.pushNotice("error", formatDesktopError(error, t));
+  } finally {
+    syncBusy.value = false;
+  }
+}
+
 onMounted(async () => {
   unlisteners.push(
     await desktopBridge.onMcpStatus((payload) => {
@@ -281,7 +376,7 @@ onUnmounted(() => {
         </div>
       </header>
 
-      <div v-if="runtime && mcp" class="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
+      <div v-if="runtime && mcp && syncStatus" class="grid gap-5 md:grid-cols-2 xl:grid-cols-5">
         <section class="panel-section">
           <div class="mb-2 flex items-center gap-2 text-[var(--text-muted)]">
             <Activity :size="16" />
@@ -321,6 +416,17 @@ onUnmounted(() => {
           <p class="text-sm font-medium">{{ runtime.loaded_config_path ?? t("runtime.transientSession") }}</p>
           <p class="mt-2 text-sm text-[var(--text-muted)]">
             {{ t("runtime.pendingApprovals") }} {{ runtime.pending_approval_count }}
+          </p>
+        </section>
+
+        <section class="panel-section">
+          <div class="mb-2 flex items-center gap-2 text-[var(--text-muted)]">
+            <Database :size="16" />
+            <p class="section-label !mb-0">{{ t("runtime.sync.title") }}</p>
+          </div>
+          <p class="text-sm font-medium">{{ syncRemoteDatabase }}</p>
+          <p class="mt-2 text-sm text-[var(--text-muted)]">
+            {{ t("runtime.sync.pending") }} {{ syncPendingCount }}
           </p>
         </section>
       </div>
@@ -439,6 +545,125 @@ onUnmounted(() => {
                 <dd>{{ runtime.attachments_dir }}</dd>
               </div>
             </dl>
+          </section>
+
+          <section v-if="syncStatus" class="panel-section mt-4">
+            <div class="mb-4 flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p class="section-label">{{ t("runtime.sync.title") }}</p>
+                <p class="text-sm text-[var(--text-muted)]">{{ t("runtime.sync.statusSummary") }}</p>
+              </div>
+              <div class="flex flex-wrap items-center gap-2">
+                <button class="secondary-action spotlight-surface" :disabled="syncBusy" @click="loadSync">
+                  <RotateCcw :size="14" />
+                  {{ t("runtime.actions.refresh") }}
+                </button>
+                <button class="secondary-action spotlight-surface" :disabled="syncBusy" @click="runSyncBackfill">
+                  <FolderArchive :size="14" />
+                  {{ t("runtime.actions.backfill") }}
+                </button>
+                <button class="secondary-action spotlight-surface" :disabled="syncBusy" @click="runSyncPush">
+                  <Play :size="14" />
+                  {{ t("runtime.actions.push") }}
+                </button>
+                <button class="secondary-action spotlight-surface" :disabled="syncBusy" @click="runSyncPull">
+                  <RotateCcw :size="14" />
+                  {{ t("runtime.actions.pull") }}
+                </button>
+              </div>
+            </div>
+
+            <div v-if="!syncStatus.enabled" class="empty-state">
+              {{ t("runtime.sync.disabled") }}
+            </div>
+            <template v-else>
+              <div class="grid gap-4 md:grid-cols-2">
+                <section class="panel-section">
+                  <p class="section-label">{{ t("runtime.sync.remote") }}</p>
+                  <dl class="space-y-3 text-sm">
+                    <div>
+                      <dt class="text-[var(--text-muted)]">{{ t("runtime.sync.kind") }}</dt>
+                      <dd>{{ syncStatus.remote?.kind ?? t("common.na") }}</dd>
+                    </div>
+                    <div>
+                      <dt class="text-[var(--text-muted)]">{{ t("runtime.sync.host") }}</dt>
+                      <dd>{{ syncRemoteHost }}</dd>
+                    </div>
+                    <div>
+                      <dt class="text-[var(--text-muted)]">{{ t("runtime.sync.database") }}</dt>
+                      <dd>{{ syncRemoteDatabase }}</dd>
+                    </div>
+                    <div>
+                      <dt class="text-[var(--text-muted)]">{{ t("runtime.sync.mode") }}</dt>
+                      <dd>{{ syncStatus.mode }}</dd>
+                    </div>
+                  </dl>
+                </section>
+
+                <section class="panel-section">
+                  <p class="section-label">{{ t("runtime.sync.outbox") }}</p>
+                  <dl class="space-y-3 text-sm">
+                    <div>
+                      <dt class="text-[var(--text-muted)]">{{ t("runtime.sync.pending") }}</dt>
+                      <dd>{{ syncStatus.pending_outbox_count }}</dd>
+                    </div>
+                    <div>
+                      <dt class="text-[var(--text-muted)]">{{ t("runtime.sync.pushAck") }}</dt>
+                      <dd>{{ syncStatus.checkpoints.push_ack ?? t("common.na") }}</dd>
+                    </div>
+                    <div>
+                      <dt class="text-[var(--text-muted)]">{{ t("runtime.sync.pullCheckpoint") }}</dt>
+                      <dd>{{ syncStatus.checkpoints.pull ?? t("common.na") }}</dd>
+                    </div>
+                    <div>
+                      <dt class="text-[var(--text-muted)]">{{ t("runtime.sync.oldestPendingAt") }}</dt>
+                      <dd>{{ formatDateTime(syncStatus.oldest_pending_at) }}</dd>
+                    </div>
+                  </dl>
+                </section>
+              </div>
+
+              <section class="panel-section mt-4">
+                <div class="mb-3">
+                  <p class="section-label">{{ t("runtime.sync.outbox") }}</p>
+                  <p class="text-sm text-[var(--text-muted)]">{{ t("runtime.sync.outboxSummary") }}</p>
+                </div>
+                <div v-if="visibleSyncOutbox.length === 0" class="empty-state">
+                  {{ t("runtime.sync.emptyOutbox") }}
+                </div>
+                <div v-else class="space-y-3">
+                  <article
+                    v-for="item in visibleSyncOutbox"
+                    :key="item.mutation_id"
+                    class="rounded-2xl border border-[color:var(--border-muted)] bg-[var(--surface-raised)] px-4 py-3"
+                  >
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                      <div class="flex flex-wrap items-center gap-2">
+                        <span :class="syncOutboxStatusClass(item.status)">
+                          {{ formatSyncOutboxStatus(item.status) }}
+                        </span>
+                        <span class="status-pill">
+                          {{ formatSyncEntityKind(item.entity_kind) }}
+                        </span>
+                        <span class="status-pill">
+                          {{ formatSyncOperation(item.operation) }}
+                        </span>
+                      </div>
+                      <span class="text-xs text-[var(--text-muted)]">
+                        {{ formatDateTime(item.created_at) }}
+                      </span>
+                    </div>
+                    <p class="mt-2 text-sm font-medium text-[var(--text-main)]">{{ item.local_id }}</p>
+                    <p class="mt-1 text-xs text-[var(--text-muted)]">
+                      v{{ item.local_version }} · attempts {{ item.attempt_count }}
+                    </p>
+                    <p v-if="item.last_error" class="mt-2 text-xs text-[var(--danger-text)]">
+                      {{ item.last_error }}
+                    </p>
+                  </article>
+                </div>
+              </section>
+            </template>
           </section>
         </section>
 

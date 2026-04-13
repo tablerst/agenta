@@ -22,6 +22,37 @@ const MAX_OUTBOX_LIST_LIMIT: usize = 100;
 const FAIL_SYNC_OUTBOX_WRITE_ENV: &str = "AGENTA_TEST_FAIL_SYNC_OUTBOX_WRITE";
 
 impl SqliteStore {
+    pub async fn list_sync_outbox_for_delivery(
+        &self,
+        remote_id: &str,
+        limit: Option<usize>,
+    ) -> AppResult<Vec<SyncOutboxEntry>> {
+        let limit = limit
+            .unwrap_or(DEFAULT_OUTBOX_LIST_LIMIT)
+            .clamp(1, MAX_OUTBOX_LIST_LIMIT) as i64;
+        let rows = query(
+            r#"
+            SELECT
+                mutation_id, remote_id, entity_kind, local_id, operation,
+                local_version, payload_json, status, attempt_count,
+                last_attempt_at, acked_at, last_error, created_at
+            FROM sync_outbox
+            WHERE remote_id = ?
+              AND status IN (?, ?)
+            ORDER BY created_at ASC, mutation_id ASC
+            LIMIT ?
+            "#,
+        )
+        .bind(remote_id)
+        .bind(SyncOutboxStatus::Pending.to_string())
+        .bind(SyncOutboxStatus::Failed.to_string())
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter().map(map_sync_outbox_entry).collect()
+    }
+
     pub async fn get_sync_entity(
         &self,
         entity_kind: SyncEntityKind,
@@ -161,6 +192,183 @@ impl SqliteStore {
         .bind(checkpoint_value)
         .bind(format_time(updated_at)?)
         .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn mark_sync_outbox_acked(
+        &self,
+        mutation_id: Uuid,
+        acked_at: OffsetDateTime,
+    ) -> AppResult<()> {
+        query(
+            r#"
+            UPDATE sync_outbox
+            SET
+                status = ?,
+                attempt_count = attempt_count + 1,
+                last_attempt_at = ?,
+                acked_at = ?,
+                last_error = NULL
+            WHERE mutation_id = ?
+            "#,
+        )
+        .bind(SyncOutboxStatus::Acked.to_string())
+        .bind(format_time(acked_at)?)
+        .bind(format_time(acked_at)?)
+        .bind(mutation_id.to_string())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn mark_sync_outbox_failed(
+        &self,
+        mutation_id: Uuid,
+        failed_at: OffsetDateTime,
+        last_error: &str,
+    ) -> AppResult<()> {
+        query(
+            r#"
+            UPDATE sync_outbox
+            SET
+                status = ?,
+                attempt_count = attempt_count + 1,
+                last_attempt_at = ?,
+                last_error = ?
+            WHERE mutation_id = ?
+            "#,
+        )
+        .bind(SyncOutboxStatus::Failed.to_string())
+        .bind(format_time(failed_at)?)
+        .bind(last_error)
+        .bind(mutation_id.to_string())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn mark_sync_entity_acked(
+        &self,
+        entity_kind: SyncEntityKind,
+        local_id: Uuid,
+        remote_id: &str,
+        remote_entity_id: &str,
+        last_enqueued_mutation_id: Uuid,
+        acked_at: OffsetDateTime,
+    ) -> AppResult<()> {
+        query(
+            r#"
+            UPDATE sync_entities
+            SET
+                remote_id = ?,
+                remote_entity_id = ?,
+                dirty = 0,
+                last_synced_at = ?,
+                last_enqueued_mutation_id = ?
+            WHERE entity_kind = ? AND local_id = ?
+            "#,
+        )
+        .bind(remote_id)
+        .bind(remote_entity_id)
+        .bind(format_time(acked_at)?)
+        .bind(last_enqueued_mutation_id.to_string())
+        .bind(entity_kind.to_string())
+        .bind(local_id.to_string())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn upsert_synced_entity_state(
+        &self,
+        entity_kind: SyncEntityKind,
+        local_id: Uuid,
+        remote_id: &str,
+        remote_entity_id: &str,
+        local_version: i64,
+        synced_at: OffsetDateTime,
+    ) -> AppResult<()> {
+        query(
+            r#"
+            INSERT INTO sync_entities (
+                entity_kind,
+                local_id,
+                remote_id,
+                remote_entity_id,
+                local_version,
+                dirty,
+                last_synced_at,
+                last_enqueued_mutation_id,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(entity_kind, local_id) DO UPDATE SET
+                remote_id = excluded.remote_id,
+                remote_entity_id = excluded.remote_entity_id,
+                local_version = excluded.local_version,
+                dirty = excluded.dirty,
+                last_synced_at = excluded.last_synced_at,
+                last_enqueued_mutation_id = excluded.last_enqueued_mutation_id,
+                updated_at = excluded.updated_at
+            "#,
+        )
+        .bind(entity_kind.to_string())
+        .bind(local_id.to_string())
+        .bind(remote_id)
+        .bind(remote_entity_id)
+        .bind(local_version)
+        .bind(0_i64)
+        .bind(format_time(synced_at)?)
+        .bind(Option::<String>::None)
+        .bind(format_time(synced_at)?)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn upsert_synced_entity_state_tx(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        entity_kind: SyncEntityKind,
+        local_id: Uuid,
+        remote_id: &str,
+        remote_entity_id: &str,
+        local_version: i64,
+        synced_at: OffsetDateTime,
+    ) -> AppResult<()> {
+        query(
+            r#"
+            INSERT INTO sync_entities (
+                entity_kind,
+                local_id,
+                remote_id,
+                remote_entity_id,
+                local_version,
+                dirty,
+                last_synced_at,
+                last_enqueued_mutation_id,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(entity_kind, local_id) DO UPDATE SET
+                remote_id = excluded.remote_id,
+                remote_entity_id = excluded.remote_entity_id,
+                local_version = excluded.local_version,
+                dirty = excluded.dirty,
+                last_synced_at = excluded.last_synced_at,
+                last_enqueued_mutation_id = excluded.last_enqueued_mutation_id,
+                updated_at = excluded.updated_at
+            "#,
+        )
+        .bind(entity_kind.to_string())
+        .bind(local_id.to_string())
+        .bind(remote_id)
+        .bind(remote_entity_id)
+        .bind(local_version)
+        .bind(0_i64)
+        .bind(format_time(synced_at)?)
+        .bind(Option::<String>::None)
+        .bind(format_time(synced_at)?)
+        .execute(&mut **tx)
         .await?;
         Ok(())
     }

@@ -2,9 +2,11 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::time::Duration;
 
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
+use url::Url;
 
 use crate::domain::SyncMode;
 use crate::error::{AppError, AppResult};
@@ -15,6 +17,9 @@ const DEFAULT_MCP_BIND: &str = "127.0.0.1:8787";
 const DEFAULT_MCP_PATH: &str = "/mcp";
 const DEFAULT_MCP_LOG_FILE: &str = "logs/mcp.jsonl";
 const DEFAULT_MCP_UI_BUFFER_LINES: usize = 1000;
+const DEFAULT_SYNC_POSTGRES_MAX_CONNS: u32 = 30;
+const DEFAULT_SYNC_POSTGRES_MIN_CONNS: u32 = 5;
+const DEFAULT_SYNC_POSTGRES_MAX_CONN_LIFETIME: &str = "1h";
 const LOCAL_CONFIG_FILE: &str = "agenta.local.yaml";
 
 #[derive(Clone, Debug)]
@@ -143,15 +148,24 @@ pub struct ResolvedMcpSessionConfig {
 }
 
 #[derive(Clone, Debug)]
-pub struct SyncRemoteAuthConfig {
-    pub bearer_token: Option<String>,
+pub struct SyncRemotePostgresConfig {
+    pub dsn: String,
+    pub max_conns: u32,
+    pub min_conns: u32,
+    pub max_conn_lifetime: Duration,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncRemoteKind {
+    Postgres,
 }
 
 #[derive(Clone, Debug)]
 pub struct SyncRemoteConfig {
     pub id: String,
-    pub endpoint: String,
-    pub auth: SyncRemoteAuthConfig,
+    pub kind: SyncRemoteKind,
+    pub postgres: SyncRemotePostgresConfig,
 }
 
 #[derive(Clone, Debug)]
@@ -309,13 +323,16 @@ struct RawSyncConfig {
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 struct RawSyncRemoteConfig {
     id: Option<String>,
-    endpoint: Option<String>,
-    auth: Option<RawSyncRemoteAuthConfig>,
+    kind: Option<SyncRemoteKind>,
+    postgres: Option<RawSyncRemotePostgresConfig>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
-struct RawSyncRemoteAuthConfig {
-    bearer_token: Option<String>,
+struct RawSyncRemotePostgresConfig {
+    dsn: Option<String>,
+    max_conns: Option<String>,
+    min_conns: Option<String>,
+    max_conn_lifetime: Option<String>,
 }
 
 pub fn load_runtime_config(explicit_config_path: Option<PathBuf>) -> AppResult<RuntimeConfig> {
@@ -382,30 +399,62 @@ pub fn load_runtime_config(explicit_config_path: Option<PathBuf>) -> AppResult<R
         let raw_remote = raw_sync
             .remote
             .ok_or_else(|| AppError::Config("sync.remote.id must not be empty".to_string()))?;
-        let raw_auth = raw_remote.auth.unwrap_or_default();
         let remote_id = sanitize_non_empty(
             &expand_env_vars(raw_remote.id.as_deref().unwrap_or_default())?,
             "sync.remote.id",
         )?;
-        let remote_endpoint = sanitize_non_empty(
-            &expand_env_vars(raw_remote.endpoint.as_deref().unwrap_or_default())?,
-            "sync.remote.endpoint",
-        )?;
-        let bearer_token = sanitize_non_empty(
-            &expand_env_vars(raw_auth.bearer_token.as_deref().unwrap_or_default())?,
-            "sync.remote.auth.bearer_token",
-        )?;
+        let remote_kind = raw_remote
+            .kind
+            .ok_or_else(|| AppError::Config("sync.remote.kind must not be empty".to_string()))?;
+
+        let sync_remote = match remote_kind {
+            SyncRemoteKind::Postgres => {
+                let raw_postgres = raw_remote.postgres.ok_or_else(|| {
+                    AppError::Config("sync.remote.postgres.dsn must not be empty".to_string())
+                })?;
+                let dsn = sanitize_non_empty(
+                    &expand_env_vars(raw_postgres.dsn.as_deref().unwrap_or_default())?,
+                    "sync.remote.postgres.dsn",
+                )?;
+                validate_postgres_dsn(&dsn)?;
+                let max_conns = parse_u32_with_default(
+                    raw_postgres.max_conns.as_deref(),
+                    DEFAULT_SYNC_POSTGRES_MAX_CONNS,
+                    "sync.remote.postgres.max_conns",
+                )?;
+                let min_conns = parse_u32_with_default(
+                    raw_postgres.min_conns.as_deref(),
+                    DEFAULT_SYNC_POSTGRES_MIN_CONNS,
+                    "sync.remote.postgres.min_conns",
+                )?;
+                if min_conns > max_conns {
+                    return Err(AppError::Config(
+                        "sync.remote.postgres.min_conns must not exceed max_conns"
+                            .to_string(),
+                    ));
+                }
+                let max_conn_lifetime = parse_duration_with_default(
+                    raw_postgres.max_conn_lifetime.as_deref(),
+                    DEFAULT_SYNC_POSTGRES_MAX_CONN_LIFETIME,
+                    "sync.remote.postgres.max_conn_lifetime",
+                )?;
+                SyncRemoteConfig {
+                    id: remote_id,
+                    kind: SyncRemoteKind::Postgres,
+                    postgres: SyncRemotePostgresConfig {
+                        dsn,
+                        max_conns,
+                        min_conns,
+                        max_conn_lifetime,
+                    },
+                }
+            }
+        };
 
         SyncConfig {
             enabled: true,
             mode: sync_mode,
-            remote: Some(SyncRemoteConfig {
-                id: remote_id,
-                endpoint: remote_endpoint,
-                auth: SyncRemoteAuthConfig {
-                    bearer_token: Some(bearer_token),
-                },
-            }),
+            remote: Some(sync_remote),
         }
     } else {
         SyncConfig {
@@ -534,6 +583,49 @@ fn sanitize_non_empty(value: &str, field: &str) -> AppResult<String> {
     Ok(trimmed.to_string())
 }
 
+fn parse_u32_with_default(value: Option<&str>, default: u32, field: &str) -> AppResult<u32> {
+    let raw_input = match value {
+        Some(value) => value.to_string(),
+        None => default.to_string(),
+    };
+    let raw = expand_env_vars(&raw_input)?;
+    raw.trim().parse::<u32>().map_err(|error| {
+        AppError::Config(format!("invalid {field}: {error}"))
+    })
+}
+
+fn parse_duration_with_default(
+    value: Option<&str>,
+    default: &str,
+    field: &str,
+) -> AppResult<Duration> {
+    let raw = expand_env_vars(value.unwrap_or(default))?;
+    humantime::parse_duration(raw.trim())
+        .map_err(|error| AppError::Config(format!("invalid {field}: {error}")))
+}
+
+fn validate_postgres_dsn(value: &str) -> AppResult<()> {
+    let url = Url::parse(value)
+        .map_err(|error| AppError::Config(format!("invalid sync.remote.postgres.dsn: {error}")))?;
+    let scheme = url.scheme();
+    if scheme != "postgres" && scheme != "postgresql" {
+        return Err(AppError::Config(
+            "sync.remote.postgres.dsn must use postgres:// or postgresql://".to_string(),
+        ));
+    }
+    if url.host_str().is_none() {
+        return Err(AppError::Config(
+            "sync.remote.postgres.dsn must include a host".to_string(),
+        ));
+    }
+    if url.path().trim_matches('/').is_empty() {
+        return Err(AppError::Config(
+            "sync.remote.postgres.dsn must include a database name".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 fn normalize_mount_path(value: &str) -> AppResult<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -600,7 +692,7 @@ mod tests {
 
     use super::{
         load_runtime_config, save_mcp_config_defaults, McpConfig, McpHostKind, McpLaunchOverrides,
-        McpLogConfig, McpLogDestination, McpLogLevel,
+        McpLogConfig, McpLogDestination, McpLogLevel, SyncRemoteKind,
     };
     use crate::domain::SyncMode;
 
@@ -766,12 +858,12 @@ mod tests {
     }
 
     #[test]
-    fn disabled_sync_ignores_unexpanded_token_placeholder() {
+    fn disabled_sync_ignores_unexpanded_postgres_placeholders() {
         let tempdir = tempdir().expect("tempdir");
         let config_path = tempdir.path().join("agenta.local.yaml");
         std::fs::write(
             &config_path,
-            "sync:\n  enabled: false\n  mode: manual_bidirectional\n  remote:\n    id: primary\n    endpoint: https://example.invalid/sync\n    auth:\n      bearer_token: ${AGENTA_SYNC_BEARER_TOKEN}\n",
+            "sync:\n  enabled: false\n  mode: manual_bidirectional\n  remote:\n    id: primary\n    kind: postgres\n    postgres:\n      dsn: ${POSTGRES_DSN}\n      max_conns: ${POSTGRES_MAX_CONNS}\n      min_conns: ${POSTGRES_MIN_CONNS}\n      max_conn_lifetime: ${POSTGRES_MAX_CONN_LIFETIME}\n",
         )
         .expect("write config");
 
@@ -781,14 +873,17 @@ mod tests {
     }
 
     #[test]
-    fn sync_enabled_expands_bearer_token_environment_variable() {
+    fn sync_enabled_parses_postgres_remote_from_environment_variables() {
         let _guard = environment_lock().lock().expect("lock test environment");
         let tempdir = tempdir().expect("tempdir");
         let config_path = tempdir.path().join("agenta.local.yaml");
-        std::env::set_var("AGENTA_SYNC_BEARER_TOKEN", "secret-token");
+        std::env::set_var("POSTGRES_DSN", "postgres://sync:secret@example.invalid:5432/agenta?sslmode=disable");
+        std::env::set_var("POSTGRES_MAX_CONNS", "30");
+        std::env::set_var("POSTGRES_MIN_CONNS", "5");
+        std::env::set_var("POSTGRES_MAX_CONN_LIFETIME", "1h");
         std::fs::write(
             &config_path,
-            "sync:\n  enabled: true\n  mode: manual_bidirectional\n  remote:\n    id: primary\n    endpoint: https://example.invalid/sync\n    auth:\n      bearer_token: ${AGENTA_SYNC_BEARER_TOKEN}\n",
+            "sync:\n  enabled: true\n  mode: manual_bidirectional\n  remote:\n    id: primary\n    kind: postgres\n    postgres:\n      dsn: ${POSTGRES_DSN}\n      max_conns: ${POSTGRES_MAX_CONNS}\n      min_conns: ${POSTGRES_MIN_CONNS}\n      max_conn_lifetime: ${POSTGRES_MAX_CONN_LIFETIME}\n",
         )
         .expect("write config");
 
@@ -797,10 +892,19 @@ mod tests {
         assert!(config.sync.enabled);
         assert_eq!(config.sync.mode, SyncMode::ManualBidirectional);
         assert_eq!(remote.id, "primary");
-        assert_eq!(remote.endpoint, "https://example.invalid/sync");
-        assert_eq!(remote.auth.bearer_token.as_deref(), Some("secret-token"));
+        assert_eq!(remote.kind, SyncRemoteKind::Postgres);
+        assert_eq!(
+            remote.postgres.dsn,
+            "postgres://sync:secret@example.invalid:5432/agenta?sslmode=disable"
+        );
+        assert_eq!(remote.postgres.max_conns, 30);
+        assert_eq!(remote.postgres.min_conns, 5);
+        assert_eq!(remote.postgres.max_conn_lifetime, humantime::parse_duration("1h").unwrap());
 
-        std::env::remove_var("AGENTA_SYNC_BEARER_TOKEN");
+        std::env::remove_var("POSTGRES_DSN");
+        std::env::remove_var("POSTGRES_MAX_CONNS");
+        std::env::remove_var("POSTGRES_MIN_CONNS");
+        std::env::remove_var("POSTGRES_MAX_CONN_LIFETIME");
     }
 
     #[test]
@@ -808,34 +912,67 @@ mod tests {
         let _guard = environment_lock().lock().expect("lock test environment");
         let tempdir = tempdir().expect("tempdir");
         let config_path = tempdir.path().join("agenta.local.yaml");
-        std::env::set_var("AGENTA_SYNC_BEARER_TOKEN", "secret-token");
+        std::env::set_var("POSTGRES_DSN", "postgres://sync:secret@example.invalid:5432/agenta?sslmode=disable");
         std::fs::write(
             &config_path,
-            "sync:\n  enabled: true\n  mode: manual_bidirectional\n  remote:\n    endpoint: https://example.invalid/sync\n    auth:\n      bearer_token: ${AGENTA_SYNC_BEARER_TOKEN}\n",
+            "sync:\n  enabled: true\n  mode: manual_bidirectional\n  remote:\n    kind: postgres\n    postgres:\n      dsn: ${POSTGRES_DSN}\n",
         )
         .expect("write config");
 
         let error = load_runtime_config(Some(config_path)).expect_err("missing remote id");
         assert!(error.to_string().contains("sync.remote.id must not be empty"));
-        std::env::remove_var("AGENTA_SYNC_BEARER_TOKEN");
+        std::env::remove_var("POSTGRES_DSN");
     }
 
     #[test]
-    fn sync_enabled_requires_remote_endpoint() {
+    fn sync_enabled_requires_remote_kind() {
         let _guard = environment_lock().lock().expect("lock test environment");
         let tempdir = tempdir().expect("tempdir");
         let config_path = tempdir.path().join("agenta.local.yaml");
-        std::env::set_var("AGENTA_SYNC_BEARER_TOKEN", "secret-token");
+        std::env::set_var("POSTGRES_DSN", "postgres://sync:secret@example.invalid:5432/agenta?sslmode=disable");
         std::fs::write(
             &config_path,
-            "sync:\n  enabled: true\n  mode: manual_bidirectional\n  remote:\n    id: primary\n    auth:\n      bearer_token: ${AGENTA_SYNC_BEARER_TOKEN}\n",
+            "sync:\n  enabled: true\n  mode: manual_bidirectional\n  remote:\n    id: primary\n    postgres:\n      dsn: ${POSTGRES_DSN}\n",
         )
         .expect("write config");
 
-        let error = load_runtime_config(Some(config_path)).expect_err("missing remote endpoint");
+        let error = load_runtime_config(Some(config_path)).expect_err("missing remote kind");
+        assert!(error.to_string().contains("sync.remote.kind must not be empty"));
+        std::env::remove_var("POSTGRES_DSN");
+    }
+
+    #[test]
+    fn sync_enabled_requires_postgres_dsn() {
+        let tempdir = tempdir().expect("tempdir");
+        let config_path = tempdir.path().join("agenta.local.yaml");
+        std::fs::write(
+            &config_path,
+            "sync:\n  enabled: true\n  mode: manual_bidirectional\n  remote:\n    id: primary\n    kind: postgres\n    postgres:\n      max_conns: 30\n      min_conns: 5\n      max_conn_lifetime: 1h\n",
+        )
+        .expect("write config");
+
+        let error = load_runtime_config(Some(config_path)).expect_err("missing postgres dsn");
         assert!(error
             .to_string()
-            .contains("sync.remote.endpoint must not be empty"));
-        std::env::remove_var("AGENTA_SYNC_BEARER_TOKEN");
+            .contains("sync.remote.postgres.dsn must not be empty"));
+    }
+
+    #[test]
+    fn sync_enabled_requires_valid_postgres_bounds() {
+        let _guard = environment_lock().lock().expect("lock test environment");
+        let tempdir = tempdir().expect("tempdir");
+        let config_path = tempdir.path().join("agenta.local.yaml");
+        std::env::set_var("POSTGRES_DSN", "postgres://sync:secret@example.invalid:5432/agenta?sslmode=disable");
+        std::fs::write(
+            &config_path,
+            "sync:\n  enabled: true\n  mode: manual_bidirectional\n  remote:\n    id: primary\n    kind: postgres\n    postgres:\n      dsn: ${POSTGRES_DSN}\n      max_conns: 5\n      min_conns: 6\n",
+        )
+        .expect("write config");
+
+        let error = load_runtime_config(Some(config_path)).expect_err("min conns > max conns");
+        assert!(error
+            .to_string()
+            .contains("sync.remote.postgres.min_conns must not exceed max_conns"));
+        std::env::remove_var("POSTGRES_DSN");
     }
 }

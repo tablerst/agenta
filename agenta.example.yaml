@@ -22,9 +22,12 @@ sync:
   mode: manual_bidirectional
   remote:
     id: primary
-    endpoint: https://example.invalid/sync
-    auth:
-      bearer_token: ${AGENTA_SYNC_BEARER_TOKEN}
+    kind: postgres
+    postgres:
+      dsn: ${POSTGRES_DSN}
+      max_conns: 30
+      min_conns: 5
+      max_conn_lifetime: 3600      
 
 policy:
   default: auto

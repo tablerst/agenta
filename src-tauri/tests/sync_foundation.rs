@@ -17,8 +17,12 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::Row;
 use tempfile::TempDir;
 use time::OffsetDateTime;
+use uuid::Uuid;
 
-const SYNC_TOKEN_ENV: &str = "AGENTA_SYNC_BEARER_TOKEN";
+const POSTGRES_DSN_ENV: &str = "POSTGRES_DSN";
+const POSTGRES_MAX_CONNS_ENV: &str = "POSTGRES_MAX_CONNS";
+const POSTGRES_MIN_CONNS_ENV: &str = "POSTGRES_MIN_CONNS";
+const POSTGRES_MAX_CONN_LIFETIME_ENV: &str = "POSTGRES_MAX_CONN_LIFETIME";
 const FAIL_SYNC_OUTBOX_WRITE_ENV: &str = "AGENTA_TEST_FAIL_SYNC_OUTBOX_WRITE";
 
 fn environment_lock() -> &'static Mutex<()> {
@@ -30,10 +34,16 @@ fn environment_lock() -> &'static Mutex<()> {
 async fn sync_migrations_create_tables_and_cli_status_is_stable(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let _guard = environment_lock().lock().expect("lock environment");
-    std::env::set_var(SYNC_TOKEN_ENV, "sync-token");
+    std::env::set_var(
+        POSTGRES_DSN_ENV,
+        "postgres://sync:secret@example.invalid:5432/agenta?sslmode=disable",
+    );
+    std::env::set_var(POSTGRES_MAX_CONNS_ENV, "30");
+    std::env::set_var(POSTGRES_MIN_CONNS_ENV, "5");
+    std::env::set_var(POSTGRES_MAX_CONN_LIFETIME_ENV, "1h");
 
     let tempdir = TempDir::new()?;
-    let config_path = write_test_config(&tempdir, None)?;
+    let config_path = write_test_config(&tempdir, "primary", true, None)?;
     let runtime = AppRuntime::bootstrap(BootstrapOptions {
         config_path: Some(config_path.clone()),
     })
@@ -94,17 +104,26 @@ async fn sync_migrations_create_tables_and_cli_status_is_stable(
     assert_eq!(output["action"], "sync.status");
     assert_eq!(output["result"]["enabled"], true);
     assert_eq!(output["result"]["mode"], "manual_bidirectional");
-    assert_eq!(output["result"]["remote_id"], "primary");
+    assert_eq!(output["result"]["remote"]["id"], "primary");
+    assert_eq!(output["result"]["remote"]["kind"], "postgres");
     assert_eq!(
-        output["result"]["remote_endpoint"],
-        "https://example.invalid/sync"
+        output["result"]["remote"]["postgres"]["host"],
+        "example.invalid"
     );
+    assert_eq!(output["result"]["remote"]["postgres"]["port"], 5432);
+    assert_eq!(output["result"]["remote"]["postgres"]["database"], "agenta");
+    assert_eq!(output["result"]["remote"]["postgres"]["max_conns"], 30);
+    assert_eq!(output["result"]["remote"]["postgres"]["min_conns"], 5);
+    assert_eq!(output["result"]["remote"]["postgres"]["max_conn_lifetime"], "1h");
     assert_eq!(output["result"]["pending_outbox_count"], 0);
     assert!(output["result"]["oldest_pending_at"].is_null());
     assert_eq!(output["result"]["checkpoints"]["pull"], "pull-cursor-1");
     assert_eq!(output["result"]["checkpoints"]["push_ack"], "push-ack-9");
 
-    std::env::remove_var(SYNC_TOKEN_ENV);
+    std::env::remove_var(POSTGRES_DSN_ENV);
+    std::env::remove_var(POSTGRES_MAX_CONNS_ENV);
+    std::env::remove_var(POSTGRES_MIN_CONNS_ENV);
+    std::env::remove_var(POSTGRES_MAX_CONN_LIFETIME_ENV);
     Ok(())
 }
 
@@ -112,10 +131,16 @@ async fn sync_migrations_create_tables_and_cli_status_is_stable(
 async fn sync_core_writes_enqueue_outbox_and_cli_lists_recent_items(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let _guard = environment_lock().lock().expect("lock environment");
-    std::env::set_var(SYNC_TOKEN_ENV, "sync-token");
+    std::env::set_var(
+        POSTGRES_DSN_ENV,
+        "postgres://sync:secret@example.invalid:5432/agenta?sslmode=disable",
+    );
+    std::env::set_var(POSTGRES_MAX_CONNS_ENV, "30");
+    std::env::set_var(POSTGRES_MIN_CONNS_ENV, "5");
+    std::env::set_var(POSTGRES_MAX_CONN_LIFETIME_ENV, "1h");
 
     let tempdir = TempDir::new()?;
-    let config_path = write_test_config(&tempdir, None)?;
+    let config_path = write_test_config(&tempdir, "primary", true, None)?;
     let runtime = AppRuntime::bootstrap(BootstrapOptions {
         config_path: Some(config_path.clone()),
     })
@@ -256,18 +281,29 @@ async fn sync_core_writes_enqueue_outbox_and_cli_lists_recent_items(
     assert!(items[0]["entity_kind"].is_string());
     assert!(items[0]["local_id"].is_string());
 
-    std::env::remove_var(SYNC_TOKEN_ENV);
+    std::env::remove_var(POSTGRES_DSN_ENV);
+    std::env::remove_var(POSTGRES_MAX_CONNS_ENV);
+    std::env::remove_var(POSTGRES_MIN_CONNS_ENV);
+    std::env::remove_var(POSTGRES_MAX_CONN_LIFETIME_ENV);
     Ok(())
 }
 
 #[tokio::test]
 async fn approval_replay_writes_sync_outbox_entries() -> Result<(), Box<dyn std::error::Error>> {
     let _guard = environment_lock().lock().expect("lock environment");
-    std::env::set_var(SYNC_TOKEN_ENV, "sync-token");
+    std::env::set_var(
+        POSTGRES_DSN_ENV,
+        "postgres://sync:secret@example.invalid:5432/agenta?sslmode=disable",
+    );
+    std::env::set_var(POSTGRES_MAX_CONNS_ENV, "30");
+    std::env::set_var(POSTGRES_MIN_CONNS_ENV, "5");
+    std::env::set_var(POSTGRES_MAX_CONN_LIFETIME_ENV, "1h");
 
     let tempdir = TempDir::new()?;
     let config_path = write_test_config(
         &tempdir,
+        "primary",
+        true,
         Some(
             "policy:\n  default: auto\n  actions:\n    project.create: require_human\n",
         ),
@@ -314,7 +350,10 @@ async fn approval_replay_writes_sync_outbox_entries() -> Result<(), Box<dyn std:
     assert_eq!(outbox[0].entity_kind, SyncEntityKind::Project);
     assert_eq!(outbox[0].operation.to_string(), "create");
 
-    std::env::remove_var(SYNC_TOKEN_ENV);
+    std::env::remove_var(POSTGRES_DSN_ENV);
+    std::env::remove_var(POSTGRES_MAX_CONNS_ENV);
+    std::env::remove_var(POSTGRES_MIN_CONNS_ENV);
+    std::env::remove_var(POSTGRES_MAX_CONN_LIFETIME_ENV);
     Ok(())
 }
 
@@ -322,11 +361,17 @@ async fn approval_replay_writes_sync_outbox_entries() -> Result<(), Box<dyn std:
 async fn forced_sync_outbox_failure_rolls_back_project_write(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let _guard = environment_lock().lock().expect("lock environment");
-    std::env::set_var(SYNC_TOKEN_ENV, "sync-token");
+    std::env::set_var(
+        POSTGRES_DSN_ENV,
+        "postgres://sync:secret@example.invalid:5432/agenta?sslmode=disable",
+    );
+    std::env::set_var(POSTGRES_MAX_CONNS_ENV, "30");
+    std::env::set_var(POSTGRES_MIN_CONNS_ENV, "5");
+    std::env::set_var(POSTGRES_MAX_CONN_LIFETIME_ENV, "1h");
     std::env::set_var(FAIL_SYNC_OUTBOX_WRITE_ENV, "1");
 
     let tempdir = TempDir::new()?;
-    let config_path = write_test_config(&tempdir, None)?;
+    let config_path = write_test_config(&tempdir, "primary", true, None)?;
     let runtime = AppRuntime::bootstrap(BootstrapOptions {
         config_path: Some(config_path),
     })
@@ -348,7 +393,10 @@ async fn forced_sync_outbox_failure_rolls_back_project_write(
     assert!(runtime.service.list_projects().await?.is_empty());
     assert!(runtime.service.list_sync_outbox(Some(10)).await?.is_empty());
 
-    std::env::remove_var(SYNC_TOKEN_ENV);
+    std::env::remove_var(POSTGRES_DSN_ENV);
+    std::env::remove_var(POSTGRES_MAX_CONNS_ENV);
+    std::env::remove_var(POSTGRES_MIN_CONNS_ENV);
+    std::env::remove_var(POSTGRES_MAX_CONN_LIFETIME_ENV);
     Ok(())
 }
 
@@ -356,10 +404,16 @@ async fn forced_sync_outbox_failure_rolls_back_project_write(
 async fn forced_sync_outbox_failure_rolls_back_attachment_and_cleans_file(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let _guard = environment_lock().lock().expect("lock environment");
-    std::env::set_var(SYNC_TOKEN_ENV, "sync-token");
+    std::env::set_var(
+        POSTGRES_DSN_ENV,
+        "postgres://sync:secret@example.invalid:5432/agenta?sslmode=disable",
+    );
+    std::env::set_var(POSTGRES_MAX_CONNS_ENV, "30");
+    std::env::set_var(POSTGRES_MIN_CONNS_ENV, "5");
+    std::env::set_var(POSTGRES_MAX_CONN_LIFETIME_ENV, "1h");
 
     let tempdir = TempDir::new()?;
-    let config_path = write_test_config(&tempdir, None)?;
+    let config_path = write_test_config(&tempdir, "primary", true, None)?;
     let runtime = AppRuntime::bootstrap(BootstrapOptions {
         config_path: Some(config_path),
     })
@@ -421,18 +475,293 @@ async fn forced_sync_outbox_failure_rolls_back_attachment_and_cleans_file(
         assert!(std::fs::read_dir(task_dir)?.next().is_none());
     }
 
-    std::env::remove_var(SYNC_TOKEN_ENV);
+    std::env::remove_var(POSTGRES_DSN_ENV);
+    std::env::remove_var(POSTGRES_MAX_CONNS_ENV);
+    std::env::remove_var(POSTGRES_MIN_CONNS_ENV);
+    std::env::remove_var(POSTGRES_MAX_CONN_LIFETIME_ENV);
+    Ok(())
+}
+
+#[tokio::test]
+async fn sync_backfill_enqueues_existing_local_data_idempotently(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let _guard = environment_lock().lock().expect("lock environment");
+    std::env::set_var(
+        POSTGRES_DSN_ENV,
+        "postgres://sync:secret@example.invalid:5432/agenta?sslmode=disable",
+    );
+    std::env::set_var(POSTGRES_MAX_CONNS_ENV, "30");
+    std::env::set_var(POSTGRES_MIN_CONNS_ENV, "5");
+    std::env::set_var(POSTGRES_MAX_CONN_LIFETIME_ENV, "1h");
+
+    let tempdir = TempDir::new()?;
+    let disabled_config = write_test_config(&tempdir, "primary", false, None)?;
+    let disabled_runtime = AppRuntime::bootstrap(BootstrapOptions {
+        config_path: Some(disabled_config),
+    })
+    .await?;
+
+    let project = disabled_runtime
+        .service
+        .create_project(CreateProjectInput {
+            slug: "backfill-project".to_string(),
+            name: "Backfill Project".to_string(),
+            description: Some("Created before sync enabled".to_string()),
+        })
+        .await?;
+    let version = disabled_runtime
+        .service
+        .create_version(CreateVersionInput {
+            project: project.slug.clone(),
+            name: "Backfill v1".to_string(),
+            description: Some("Created before sync enabled".to_string()),
+            status: None,
+        })
+        .await?;
+    let task = disabled_runtime
+        .service
+        .create_task(CreateTaskInput {
+            project: project.slug.clone(),
+            version: Some(version.version_id.to_string()),
+            title: "Backfill Task".to_string(),
+            summary: Some("Should be backfilled".to_string()),
+            description: None,
+            status: None,
+            priority: None,
+            created_by: Some("backfill".to_string()),
+        })
+        .await?;
+    let _note = disabled_runtime
+        .service
+        .create_note(CreateNoteInput {
+            task: task.task_id.to_string(),
+            content: "Backfill note".to_string(),
+            created_by: Some("backfill".to_string()),
+        })
+        .await?;
+    let source_path = tempdir.path().join("backfill-attachment.txt");
+    std::fs::write(&source_path, "backfill attachment payload")?;
+    let _attachment = disabled_runtime
+        .service
+        .create_attachment(CreateAttachmentInput {
+            task: task.task_id.to_string(),
+            path: source_path,
+            kind: None,
+            created_by: Some("backfill".to_string()),
+            summary: Some("Backfill attachment".to_string()),
+        })
+        .await?;
+    drop(disabled_runtime);
+
+    let enabled_config = write_test_config(&tempdir, "primary", true, None)?;
+    let runtime = AppRuntime::bootstrap(BootstrapOptions {
+        config_path: Some(enabled_config.clone()),
+    })
+    .await?;
+
+    assert!(runtime.service.list_sync_outbox(Some(20)).await?.is_empty());
+
+    let first = runtime.service.sync_backfill(Some(20)).await?;
+    assert_eq!(first.queued, 5);
+    assert_eq!(first.queued_projects, 1);
+    assert_eq!(first.queued_versions, 1);
+    assert_eq!(first.queued_tasks, 1);
+    assert_eq!(first.queued_notes, 1);
+    assert_eq!(first.queued_attachments, 1);
+
+    let second = runtime.service.sync_backfill(Some(20)).await?;
+    assert_eq!(second.queued, 0);
+    assert_eq!(second.skipped, 5);
+
+    let cli_backfill = run_cli_json(
+        &enabled_config,
+        &["sync", "backfill", "--limit", "20"],
+    )?;
+    assert_eq!(cli_backfill["ok"], true);
+    assert_eq!(cli_backfill["action"], "sync.backfill");
+    assert_eq!(cli_backfill["result"]["queued"], 0);
+
+    std::env::remove_var(POSTGRES_DSN_ENV);
+    std::env::remove_var(POSTGRES_MAX_CONNS_ENV);
+    std::env::remove_var(POSTGRES_MIN_CONNS_ENV);
+    std::env::remove_var(POSTGRES_MAX_CONN_LIFETIME_ENV);
+    Ok(())
+}
+
+#[tokio::test]
+async fn postgres_remote_smoke_connects_when_env_present(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let _guard = environment_lock().lock().expect("lock environment");
+    if std::env::var_os(POSTGRES_DSN_ENV).is_none() {
+        return Ok(());
+    }
+
+    if std::env::var_os(POSTGRES_MAX_CONNS_ENV).is_none() {
+        std::env::set_var(POSTGRES_MAX_CONNS_ENV, "30");
+    }
+    if std::env::var_os(POSTGRES_MIN_CONNS_ENV).is_none() {
+        std::env::set_var(POSTGRES_MIN_CONNS_ENV, "5");
+    }
+    if std::env::var_os(POSTGRES_MAX_CONN_LIFETIME_ENV).is_none() {
+        std::env::set_var(POSTGRES_MAX_CONN_LIFETIME_ENV, "1h");
+    }
+
+    let tempdir = TempDir::new()?;
+    let config_path = write_test_config(&tempdir, "primary", true, None)?;
+    let runtime = AppRuntime::bootstrap(BootstrapOptions {
+        config_path: Some(config_path),
+    })
+    .await?;
+
+    runtime.service.sync_postgres_smoke_check().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn postgres_remote_round_trip_pushes_and_pulls_between_runtimes(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let _guard = environment_lock().lock().expect("lock environment");
+    if std::env::var_os(POSTGRES_DSN_ENV).is_none() {
+        return Ok(());
+    }
+
+    if std::env::var_os(POSTGRES_MAX_CONNS_ENV).is_none() {
+        std::env::set_var(POSTGRES_MAX_CONNS_ENV, "30");
+    }
+    if std::env::var_os(POSTGRES_MIN_CONNS_ENV).is_none() {
+        std::env::set_var(POSTGRES_MIN_CONNS_ENV, "5");
+    }
+    if std::env::var_os(POSTGRES_MAX_CONN_LIFETIME_ENV).is_none() {
+        std::env::set_var(POSTGRES_MAX_CONN_LIFETIME_ENV, "1h");
+    }
+
+    let remote_id = format!("pg-roundtrip-{}", Uuid::new_v4());
+    let sender_root = TempDir::new()?;
+    let receiver_root = TempDir::new()?;
+    let sender_disabled = write_test_config(&sender_root, &remote_id, false, None)?;
+    let sender_disabled_runtime = AppRuntime::bootstrap(BootstrapOptions {
+        config_path: Some(sender_disabled),
+    })
+    .await?;
+    let slug = format!("remote-sync-{}", Uuid::new_v4().simple());
+    let project = sender_disabled_runtime
+        .service
+        .create_project(CreateProjectInput {
+            slug: slug.clone(),
+            name: "Remote Sync Project".to_string(),
+            description: Some("PG roundtrip project".to_string()),
+        })
+        .await?;
+    let version = sender_disabled_runtime
+        .service
+        .create_version(CreateVersionInput {
+            project: slug.clone(),
+            name: "Remote Sync v1".to_string(),
+            description: Some("PG roundtrip version".to_string()),
+            status: None,
+        })
+        .await?;
+    let task = sender_disabled_runtime
+        .service
+        .create_task(CreateTaskInput {
+            project: slug.clone(),
+            version: Some(version.version_id.to_string()),
+            title: "Remote Sync Task".to_string(),
+            summary: Some("Roundtrip task".to_string()),
+            description: Some("Task should roundtrip through postgres".to_string()),
+            status: None,
+            priority: None,
+            created_by: Some("sender".to_string()),
+        })
+        .await?;
+    let note = sender_disabled_runtime
+        .service
+        .create_note(CreateNoteInput {
+            task: task.task_id.to_string(),
+            content: "Roundtrip note".to_string(),
+            created_by: Some("sender".to_string()),
+        })
+        .await?;
+    let source_path = sender_root.path().join("roundtrip-attachment.txt");
+    std::fs::write(&source_path, "postgres roundtrip attachment payload")?;
+    let attachment = sender_disabled_runtime
+        .service
+        .create_attachment(CreateAttachmentInput {
+            task: task.task_id.to_string(),
+            path: source_path,
+            kind: None,
+            created_by: Some("sender".to_string()),
+            summary: Some("Roundtrip attachment".to_string()),
+        })
+        .await?;
+    drop(sender_disabled_runtime);
+
+    let sender_config = write_test_config(&sender_root, &remote_id, true, None)?;
+    let receiver_config = write_test_config(&receiver_root, &remote_id, true, None)?;
+
+    let sender = AppRuntime::bootstrap(BootstrapOptions {
+        config_path: Some(sender_config),
+    })
+    .await?;
+    let receiver = AppRuntime::bootstrap(BootstrapOptions {
+        config_path: Some(receiver_config),
+    })
+    .await?;
+
+    let backfill = sender.service.sync_backfill(Some(20)).await?;
+    assert_eq!(backfill.queued, 5);
+    let push_summary = sender.service.sync_push(Some(20)).await?;
+    assert!(push_summary.pushed >= 5);
+
+    let pull_summary = receiver.service.sync_pull(Some(50)).await?;
+    assert!(pull_summary.applied >= 5);
+
+    let pulled_project = receiver.service.get_project(&project.project_id.to_string()).await?;
+    let pulled_version = receiver.service.get_version(&version.version_id.to_string()).await?;
+    let pulled_task = receiver.service.get_task(&task.task_id.to_string()).await?;
+    let pulled_notes = receiver.service.list_notes(&task.task_id.to_string()).await?;
+    let pulled_attachments = receiver
+        .service
+        .list_attachments(&task.task_id.to_string())
+        .await?;
+
+    assert_eq!(pulled_project.slug, project.slug);
+    assert_eq!(pulled_version.version_id, version.version_id);
+    assert_eq!(pulled_task.task_id, task.task_id);
+    assert_eq!(pulled_notes.len(), 1);
+    assert_eq!(pulled_notes[0].activity_id, note.activity_id);
+    assert_eq!(pulled_attachments.len(), 1);
+    assert_eq!(pulled_attachments[0].attachment_id, attachment.attachment_id);
+    assert!(receiver
+        .config
+        .paths
+        .attachments_dir
+        .join(&attachment.storage_path)
+        .exists());
+
+    let receiver_status = receiver.service.sync_status().await?;
+    assert_eq!(
+        receiver_status.checkpoints.pull.as_deref(),
+        pull_summary
+            .last_remote_mutation_id
+            .as_ref()
+            .map(|value| value.to_string())
+            .as_deref()
+    );
+
     Ok(())
 }
 
 fn write_test_config(
     tempdir: &TempDir,
+    remote_id: &str,
+    sync_enabled: bool,
     extra_block: Option<&str>,
 ) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let config_path = tempdir.path().join("agenta.local.yaml");
     let data_dir = normalize_path_for_yaml(&tempdir.path().join("data"));
     let mut yaml = format!(
-        "paths:\n  data_dir: {data_dir}\nmcp:\n  bind: \"127.0.0.1:8787\"\n  path: \"/mcp\"\nsync:\n  enabled: true\n  mode: manual_bidirectional\n  remote:\n    id: primary\n    endpoint: https://example.invalid/sync\n    auth:\n      bearer_token: ${{{SYNC_TOKEN_ENV}}}\n"
+        "paths:\n  data_dir: {data_dir}\nmcp:\n  bind: \"127.0.0.1:8787\"\n  path: \"/mcp\"\nsync:\n  enabled: {sync_enabled}\n  mode: manual_bidirectional\n  remote:\n    id: {remote_id}\n    kind: postgres\n    postgres:\n      dsn: ${{{POSTGRES_DSN_ENV}}}\n      max_conns: ${{{POSTGRES_MAX_CONNS_ENV}}}\n      min_conns: ${{{POSTGRES_MIN_CONNS_ENV}}}\n      max_conn_lifetime: ${{{POSTGRES_MAX_CONN_LIFETIME_ENV}}}\n"
     );
     if let Some(extra_block) = extra_block {
         yaml.push_str(extra_block);

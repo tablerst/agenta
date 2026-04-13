@@ -1,6 +1,6 @@
 # Agenta
 
-Agenta is a local-first task and context service for agent hosts. The local desktop baseline, host hardening, and regression gate are complete, and the current active execution plan focuses on the foundations required for remote replica sync.
+Agenta is a local-first task and context service for agent hosts. The local desktop baseline, host hardening, and regression gate are complete, and the current active execution plan focuses on PostgreSQL-oriented foundations required for remote replica sync.
 
 ## Distribution
 
@@ -54,8 +54,11 @@ The sync foundation section now supports:
 - `sync.enabled`
 - `sync.mode`
 - `sync.remote.id`
-- `sync.remote.endpoint`
-- `sync.remote.auth.bearer_token`
+- `sync.remote.kind`
+- `sync.remote.postgres.dsn`
+- `sync.remote.postgres.max_conns`
+- `sync.remote.postgres.min_conns`
+- `sync.remote.postgres.max_conn_lifetime`
 
 When `mcp.log.destinations` is omitted, defaults depend on the host:
 
@@ -66,7 +69,7 @@ Current sync defaults stay intentionally conservative:
 
 - Only one global remote is modeled
 - Sync foundation records local mutation/outbox state but does not perform network push/pull yet
-- Diagnostics are CLI-only in this stage
+- Diagnostics are CLI-only in this stage and redact PostgreSQL credentials from status output
 
 ## Documentation
 

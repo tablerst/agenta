@@ -13,6 +13,12 @@ import type {
   RuntimeStatus,
   SearchResponse,
   SuccessEnvelope,
+  SyncBackfillSummary,
+  SyncEntityKind,
+  SyncOutboxListItem,
+  SyncPullSummary,
+  SyncPushSummary,
+  SyncStatusSummary,
   Task,
   TaskActivity,
   TaskPriority,
@@ -36,9 +42,14 @@ const PREVIEW_WARNING = "Running in browser preview mode with seeded local data.
 
 const previewNow = Date.now();
 const PREVIEW_MCP_LOG_FILE = "D:/preview/agenta/data/logs/mcp.jsonl";
+const PREVIEW_SYNC_REMOTE_ID = "preview-primary";
 
 let mcpRuntime = createPreviewMcpRuntime();
 let mcpLogs: McpLogEntry[] = [];
+let syncOutbox: SyncOutboxListItem[] = [];
+let syncPullCheckpoint: string | null = null;
+let syncPushAckCheckpoint: string | null = null;
+let previewRemoteMutationCursor = 12;
 
 function iso(hoursAgo: number) {
   return new Date(previewNow - hoursAgo * 60 * 60 * 1000).toISOString();
@@ -145,6 +156,176 @@ function stopPreviewMcp() {
     actual_bind: null,
     last_error: null,
   });
+}
+
+function createPreviewSyncStatus(): SyncStatusSummary {
+  const pending = syncOutbox.filter((item) => item.status === "pending");
+  return {
+    enabled: true,
+    mode: "manual_bidirectional",
+    remote: {
+      id: PREVIEW_SYNC_REMOTE_ID,
+      kind: "postgres",
+      postgres: {
+        host: "preview.db.local",
+        port: 5432,
+        database: "agenta_preview",
+        max_conns: 30,
+        min_conns: 5,
+        max_conn_lifetime: "1h",
+      },
+    },
+    pending_outbox_count: pending.length,
+    oldest_pending_at: pending.length > 0 ? pending[pending.length - 1]?.created_at ?? null : null,
+    checkpoints: {
+      pull: syncPullCheckpoint,
+      push_ack: syncPushAckCheckpoint,
+    },
+  };
+}
+
+function syncEntityKindFor(value: Project | Version | Task | TaskActivity | Attachment): SyncEntityKind {
+  if ("project_id" in value && "slug" in value) {
+    return "project";
+  }
+  if ("project_id" in value && "version_id" in value && "name" in value) {
+    return "version";
+  }
+  if ("task_id" in value && "title" in value) {
+    return "task";
+  }
+  if ("attachment_id" in value) {
+    return "attachment";
+  }
+  return "note";
+}
+
+function syncLocalIdFor(value: Project | Version | Task | TaskActivity | Attachment): string {
+  if ("project_id" in value && "slug" in value) {
+    return value.project_id;
+  }
+  if ("project_id" in value && "version_id" in value && "name" in value) {
+    return value.version_id;
+  }
+  if ("task_id" in value && "title" in value) {
+    return value.task_id;
+  }
+  if ("attachment_id" in value) {
+    return value.attachment_id;
+  }
+  return value.activity_id;
+}
+
+function enqueuePreviewMutation(
+  value: Project | Version | Task | TaskActivity | Attachment,
+  operation: "create" | "update" = "create",
+) {
+  const entity_kind = syncEntityKindFor(value);
+  const local_id = syncLocalIdFor(value);
+  const existing = syncOutbox.find((item) => item.entity_kind === entity_kind && item.local_id === local_id);
+  if (existing) {
+    if (operation === "update") {
+      existing.operation = "update";
+      existing.status = "pending";
+      existing.last_error = null;
+    }
+    return false;
+  }
+  const entry: SyncOutboxListItem = {
+    mutation_id: crypto.randomUUID(),
+    entity_kind,
+    local_id,
+    operation,
+    local_version: 1,
+    status: "pending",
+    created_at: new Date().toISOString(),
+    attempt_count: 0,
+    last_error: null,
+  };
+  syncOutbox = [entry, ...syncOutbox];
+  return true;
+}
+
+function runPreviewBackfill(limit?: number): SyncBackfillSummary {
+  const maxToQueue = typeof limit === "number" ? Math.max(1, limit) : 1000;
+  const summary: SyncBackfillSummary = {
+    scanned: 0,
+    queued: 0,
+    skipped: 0,
+    queued_projects: 0,
+    queued_versions: 0,
+    queued_tasks: 0,
+    queued_notes: 0,
+    queued_attachments: 0,
+  };
+
+  const tryQueue = (value: Project | Version | Task | TaskActivity | Attachment) => {
+    if (summary.queued >= maxToQueue) {
+      return;
+    }
+    summary.scanned += 1;
+    if (enqueuePreviewMutation(value, "create")) {
+      summary.queued += 1;
+      switch (syncEntityKindFor(value)) {
+        case "project":
+          summary.queued_projects += 1;
+          break;
+        case "version":
+          summary.queued_versions += 1;
+          break;
+        case "task":
+          summary.queued_tasks += 1;
+          break;
+        case "note":
+          summary.queued_notes += 1;
+          break;
+        case "attachment":
+          summary.queued_attachments += 1;
+          break;
+      }
+    } else {
+      summary.skipped += 1;
+    }
+  };
+
+  listProjects().forEach(tryQueue);
+  listVersions().forEach(tryQueue);
+  state.tasks.forEach(tryQueue);
+  state.taskActivities.filter((item) => item.kind === "note").forEach(tryQueue);
+  state.attachments.forEach(tryQueue);
+
+  return summary;
+}
+
+function runPreviewPush(limit?: number): SyncPushSummary {
+  const maxToPush = typeof limit === "number" ? Math.max(1, limit) : 50;
+  const pending = syncOutbox.filter((item) => item.status === "pending").slice(0, maxToPush);
+  for (const item of pending) {
+    previewRemoteMutationCursor += 1;
+    item.status = "acked";
+    item.attempt_count += 1;
+    item.last_error = null;
+    syncPushAckCheckpoint = String(previewRemoteMutationCursor);
+  }
+  return {
+    attempted: pending.length,
+    pushed: pending.length,
+    failed: 0,
+    last_remote_mutation_id: pending.length > 0 ? previewRemoteMutationCursor : null,
+  };
+}
+
+function runPreviewPull(limit?: number): SyncPullSummary {
+  const fetched = typeof limit === "number" ? Math.max(0, Math.min(limit, 1)) : 1;
+  if (fetched > 0) {
+    syncPullCheckpoint = String(previewRemoteMutationCursor);
+  }
+  return {
+    fetched,
+    applied: 0,
+    skipped: fetched,
+    last_remote_mutation_id: fetched > 0 ? previewRemoteMutationCursor : null,
+  };
 }
 
 function createSeedState(): MockState {
@@ -622,6 +803,7 @@ function updateProject(input: JsonMap) {
     project.status = input.status as Project["status"];
   }
   project.updated_at = new Date().toISOString();
+  enqueuePreviewMutation(project, "update");
   return project;
 }
 
@@ -641,6 +823,7 @@ function createVersion(input: JsonMap) {
     project.default_version_id = version.version_id;
     project.updated_at = new Date().toISOString();
   }
+  enqueuePreviewMutation(version, "create");
   return version;
 }
 
@@ -657,6 +840,7 @@ function updateVersion(input: JsonMap) {
     version.status = input.status as VersionStatus;
   }
   version.updated_at = new Date().toISOString();
+  enqueuePreviewMutation(version, "update");
   return version;
 }
 
@@ -693,6 +877,7 @@ function createTask(input: JsonMap) {
     closed_at: null,
   });
   state.tasks = [task, ...state.tasks];
+  enqueuePreviewMutation(task, "create");
   return task;
 }
 
@@ -724,6 +909,7 @@ function updateTask(input: JsonMap) {
   task.updated_at = new Date().toISOString();
   task.task_search_summary = buildTaskSearchSummary(task.title, task.summary, task.description);
   task.task_context_digest = buildTaskContextDigest(task);
+  enqueuePreviewMutation(task, "update");
   return task;
 }
 
@@ -741,6 +927,7 @@ function createNote(input: JsonMap) {
     metadata_json: {},
   };
   state.taskActivities = [note, ...state.taskActivities];
+  enqueuePreviewMutation(note, "create");
   return note;
 }
 
@@ -780,6 +967,7 @@ function createAttachment(input: JsonMap) {
   };
   state.attachments = [attachment, ...state.attachments];
   state.taskActivities = [activity, ...state.taskActivities];
+  enqueuePreviewMutation(attachment, "create");
   return attachment;
 }
 
@@ -875,6 +1063,33 @@ function runtimeStatus(): RuntimeStatus {
 export const mockDesktopBridge = {
   status() {
     return Promise.resolve(envelope("desktop_status", runtimeStatus(), "Loaded preview runtime status."));
+  },
+  syncStatus() {
+    return Promise.resolve(
+      envelope("desktop_sync_status", createPreviewSyncStatus(), "Loaded preview sync status."),
+    );
+  },
+  syncOutboxList(limit?: number) {
+    const result =
+      typeof limit === "number" && limit > 0 ? syncOutbox.slice(0, limit) : [...syncOutbox];
+    return Promise.resolve(
+      envelope("desktop_sync_outbox_list", result, "Loaded preview sync outbox."),
+    );
+  },
+  syncBackfill(limit?: number) {
+    return Promise.resolve(
+      envelope("desktop_sync_backfill", runPreviewBackfill(limit), "Completed preview sync backfill."),
+    );
+  },
+  syncPush(limit?: number) {
+    return Promise.resolve(
+      envelope("desktop_sync_push", runPreviewPush(limit), "Completed preview sync push."),
+    );
+  },
+  syncPull(limit?: number) {
+    return Promise.resolve(
+      envelope("desktop_sync_pull", runPreviewPull(limit), "Completed preview sync pull."),
+    );
   },
   mcpStatus() {
     return Promise.resolve(envelope("desktop_mcp_status", mcpRuntime, "Loaded preview MCP runtime status."));
@@ -1026,5 +1241,9 @@ export const mockDesktopBridge = {
     state = createSeedState();
     mcpRuntime = createPreviewMcpRuntime();
     mcpLogs = [];
+    syncOutbox = [];
+    syncPullCheckpoint = null;
+    syncPushAckCheckpoint = null;
+    previewRemoteMutationCursor = 12;
   },
 };

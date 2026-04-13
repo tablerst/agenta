@@ -1,6 +1,6 @@
 # Agenta Docs Index
 
-当前正式文档以前四阶段归档结果为基线，当前 active workstream 聚焦远程数据副本同步前置基础设施，重点围绕同步配置、sync metadata、outbox、checkpoint 与事务边界推进。
+当前正式文档以前四阶段归档结果为基线，当前 active workstream 聚焦面向 PostgreSQL 的远程数据副本同步前置基础设施，重点围绕同步配置、sync metadata、outbox、checkpoint 与事务边界推进。
 
 ## 正式文档
 
@@ -28,4 +28,4 @@
 - Desktop 默认承载 MCP 生命周期与 Runtime 控制台；`mcp.autostart=true` 时 setup 后自动拉起，否则保持手动启动
 - MCP 发布面继续保持显式工具名 contract，不回退到 `action` 多路复用
 - YAML-first 配置继续生效，MCP 日志按宿主类型套用默认 destinations
-- 第五阶段仅建设远程数据副本同步前置基础设施：单远端全局、手动双向骨架、CLI 只读诊断，不启用后台自动同步
+- 第五阶段仅建设面向 PostgreSQL 的远程数据副本同步前置基础设施：单远端全局、手动双向骨架、CLI 只读诊断，不启用后台自动同步

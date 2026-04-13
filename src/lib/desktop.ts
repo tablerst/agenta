@@ -14,6 +14,11 @@ import type {
   RuntimeStatus,
   SearchResponse,
   SuccessEnvelope,
+  SyncBackfillSummary,
+  SyncOutboxListItem,
+  SyncPullSummary,
+  SyncPushSummary,
+  SyncStatusSummary,
   Task,
   TaskActivity,
   Version,
@@ -153,6 +158,43 @@ export const desktopBridge = {
           { limit: typeof limit === "number" ? limit : null },
         )
       : callPreview(() => mockDesktopBridge.mcpLogsSnapshot(limit));
+  },
+  syncStatus() {
+    return resolveBridgeMode() === "desktop"
+      ? callDesktop<SyncStatusSummary>("desktop_sync_status")
+      : callPreview(() => mockDesktopBridge.syncStatus());
+  },
+  syncOutboxList(limit?: number) {
+    return resolveBridgeMode() === "desktop"
+      ? callDesktop<SyncOutboxListItem[]>(
+          "desktop_sync_outbox_list",
+          { limit: typeof limit === "number" ? limit : null },
+        )
+      : callPreview(() => mockDesktopBridge.syncOutboxList(limit));
+  },
+  syncBackfill(limit?: number) {
+    return resolveBridgeMode() === "desktop"
+      ? callDesktop<SyncBackfillSummary>(
+          "desktop_sync_backfill",
+          { limit: typeof limit === "number" ? limit : null },
+        )
+      : callPreview(() => mockDesktopBridge.syncBackfill(limit));
+  },
+  syncPush(limit?: number) {
+    return resolveBridgeMode() === "desktop"
+      ? callDesktop<SyncPushSummary>(
+          "desktop_sync_push",
+          { limit: typeof limit === "number" ? limit : null },
+        )
+      : callPreview(() => mockDesktopBridge.syncPush(limit));
+  },
+  syncPull(limit?: number) {
+    return resolveBridgeMode() === "desktop"
+      ? callDesktop<SyncPullSummary>(
+          "desktop_sync_pull",
+          { limit: typeof limit === "number" ? limit : null },
+        )
+      : callPreview(() => mockDesktopBridge.syncPull(limit));
   },
   onMcpStatus(listener: (payload: McpRuntimeStatus) => void) {
     return subscribeDesktopEvent<McpRuntimeStatus>("desktop://mcp-status", listener);

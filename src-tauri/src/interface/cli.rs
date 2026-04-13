@@ -86,6 +86,9 @@ enum SearchCommand {
 #[derive(Debug, Subcommand)]
 enum SyncCommand {
     Status,
+    Backfill(SyncExecuteArgs),
+    Push(SyncExecuteArgs),
+    Pull(SyncExecuteArgs),
     #[command(subcommand)]
     Outbox(SyncOutboxCommand),
 }
@@ -259,6 +262,12 @@ struct SearchQueryArgs {
 
 #[derive(Debug, Args)]
 struct SyncOutboxListArgs {
+    #[arg(long)]
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Args)]
+struct SyncExecuteArgs {
     #[arg(long)]
     limit: Option<usize>,
 }
@@ -540,6 +549,18 @@ async fn execute_sync(app: AgentaApp, command: SyncCommand) -> AppResult<Success
         SyncCommand::Status => {
             let result = app.service.sync_status().await?;
             success("sync.status", result, "Loaded sync status")
+        }
+        SyncCommand::Backfill(args) => {
+            let result = app.service.sync_backfill(args.limit).await?;
+            success("sync.backfill", result, "Completed sync backfill")
+        }
+        SyncCommand::Push(args) => {
+            let result = app.service.sync_push(args.limit).await?;
+            success("sync.push", result, "Completed sync push")
+        }
+        SyncCommand::Pull(args) => {
+            let result = app.service.sync_pull(args.limit).await?;
+            success("sync.pull", result, "Completed sync pull")
         }
         SyncCommand::Outbox(command) => match command {
             SyncOutboxCommand::List(args) => {

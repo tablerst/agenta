@@ -9,6 +9,7 @@ pub mod policy;
 pub mod search;
 pub mod service;
 pub mod storage;
+pub mod sync;
 // The Desktop shell pulls in Windows GUI/runtime dependencies that make the
 // default lib test harness fail to start on this environment. Keep it out of
 // `cargo test --lib` and cover shell behavior through non-lib test targets.

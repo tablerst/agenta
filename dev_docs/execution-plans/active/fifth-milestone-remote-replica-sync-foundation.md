@@ -11,7 +11,7 @@
 
 这意味着当前系统已经具备“本地单机稳定可用”的前提，但远程数据副本同步仍然没有可承接的底座。现状缺口主要集中在以下几类：
 
-- 当前 `RuntimeConfig` 只有 `paths / policy / mcp`，没有远程副本同步所需的 endpoint、认证、方向、检查点或退避配置
+- 当前 `RuntimeConfig` 只有 `paths / policy / mcp`，没有远程 PostgreSQL 副本同步所需的 DSN、连接池、方向、检查点或退避配置
 - 当前 SQLite schema 只有本地业务对象表，没有 sync metadata、outbox、checkpoint、tombstone 等同步基元
 - 当前多步写路径尚未围绕同步需求建立统一的事务边界与变更记录语义
 - 当前审批 replay、本地 CRUD 与附件落盘已经可用，但还没有统一的“可推送 / 可确认 / 可恢复”的 mutation substrate
@@ -23,7 +23,7 @@
 ### 同步配置模型
 
 - 在 YAML-first 配置体系下新增正式 `sync` 配置面
-- 明确远程副本同步的最小必需配置：remote 标识、endpoint、认证注入口、方向策略、手动/自动触发策略、checkpoint 持久化语义
+- 明确远程 PostgreSQL 副本同步的最小必需配置：remote 标识、driver kind、DSN、连接池参数、方向策略、手动/自动触发策略、checkpoint 持久化语义
 - 默认保持保守策略：先不启用后台常驻同步，不引入隐式自动推送
 
 ### 本地同步基元
@@ -50,7 +50,7 @@
 ### Phase 1：同步模型与配置落盘
 
 - 新增 `sync` 配置模型与 YAML 示例字段
-- 定义远程副本、方向策略、认证注入口和 checkpoint 基础结构
+- 定义 PostgreSQL 远程配置、方向策略、连接池参数和 checkpoint 基础结构
 - 明确默认关闭策略与错误口径，避免静默启用
 
 ### Phase 2：schema 与存储基元建设
@@ -76,7 +76,7 @@
 | 状态 | 事项 | 备注 |
 | --- | --- | --- |
 | [x] | 新建第五阶段 active 计划并切换为唯一 active 施工单 | 本文件 |
-| [x] | 设计并落地 `sync` 配置模型 | 已新增 `sync.enabled / mode / remote.id / remote.endpoint / remote.auth.bearer_token` |
+| [x] | 设计并落地 `sync` 配置模型 | 已新增 `sync.enabled / mode / remote.id / remote.kind / remote.postgres.*` |
 | [x] | 更新 `agenta.example.yaml` 与配置文档口径 | README、`agenta.example.yaml`、`dev_docs/README.md` 已同步 |
 | [x] | 为 sync metadata / outbox / checkpoint / tombstone 新增 migration | 已新增 `0002_sync_foundation.sql` |
 | [x] | 新增同步基础存储接口 | 已补齐 outbox / checkpoint / entity 读取与 checkpoint upsert |
@@ -89,5 +89,5 @@
 
 - 前四阶段已经把本地单机能力、宿主闭环与测试基线收口完成
 - 第五阶段应先建设远程数据副本同步前置基础设施，而不是直接跳到完整同步产品能力实现
-- 第五阶段的 sync foundation 已经落地：配置、migration、事务写路径、CLI 诊断与回归测试均已接通
+- 第五阶段的 sync foundation 已经按 PostgreSQL 远端模型落地：配置、migration、事务写路径、CLI 诊断与回归测试均已接通
 - 只有当前置基础设施稳定后，后续远程副本同步、冲突处理与更高阶宿主能力扩展才不会反复回改底层模型

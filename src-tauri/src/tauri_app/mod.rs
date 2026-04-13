@@ -181,6 +181,11 @@ struct DesktopMcpLogsSnapshotInput {
     limit: Option<usize>,
 }
 
+#[derive(Debug, Deserialize, Default)]
+struct DesktopSyncInput {
+    limit: Option<usize>,
+}
+
 #[tauri::command]
 async fn desktop_status(
     state: State<'_, Arc<DesktopAppState>>,
@@ -703,6 +708,91 @@ async fn desktop_mcp_logs_snapshot(
     .map_err(|app_error| error(&app_error))
 }
 
+#[tauri::command]
+async fn desktop_sync_status(
+    state: State<'_, Arc<DesktopAppState>>,
+) -> Result<SuccessEnvelope, ErrorEnvelope> {
+    success(
+        "desktop.sync_status",
+        state
+            .service
+            .sync_status()
+            .await
+            .map_err(|app_error| error(&app_error))?,
+        "Loaded sync status",
+    )
+    .map_err(|app_error| error(&app_error))
+}
+
+#[tauri::command]
+async fn desktop_sync_outbox_list(
+    state: State<'_, Arc<DesktopAppState>>,
+    input: DesktopSyncInput,
+) -> Result<SuccessEnvelope, ErrorEnvelope> {
+    let result = state
+        .service
+        .list_sync_outbox(input.limit)
+        .await
+        .map_err(|app_error| error(&app_error))?;
+    success(
+        "desktop.sync_outbox_list",
+        &result,
+        format!("Listed {} sync outbox item(s)", result.len()),
+    )
+    .map_err(|app_error| error(&app_error))
+}
+
+#[tauri::command]
+async fn desktop_sync_backfill(
+    state: State<'_, Arc<DesktopAppState>>,
+    input: DesktopSyncInput,
+) -> Result<SuccessEnvelope, ErrorEnvelope> {
+    success(
+        "desktop.sync_backfill",
+        state
+            .service
+            .sync_backfill(input.limit)
+            .await
+            .map_err(|app_error| error(&app_error))?,
+        "Completed sync backfill",
+    )
+    .map_err(|app_error| error(&app_error))
+}
+
+#[tauri::command]
+async fn desktop_sync_push(
+    state: State<'_, Arc<DesktopAppState>>,
+    input: DesktopSyncInput,
+) -> Result<SuccessEnvelope, ErrorEnvelope> {
+    success(
+        "desktop.sync_push",
+        state
+            .service
+            .sync_push(input.limit)
+            .await
+            .map_err(|app_error| error(&app_error))?,
+        "Completed sync push",
+    )
+    .map_err(|app_error| error(&app_error))
+}
+
+#[tauri::command]
+async fn desktop_sync_pull(
+    state: State<'_, Arc<DesktopAppState>>,
+    input: DesktopSyncInput,
+) -> Result<SuccessEnvelope, ErrorEnvelope> {
+    success(
+        "desktop.sync_pull",
+        state
+            .service
+            .sync_pull(input.limit)
+            .await
+            .map_err(|app_error| error(&app_error))?,
+        "Completed sync pull",
+    )
+    .map_err(|app_error| error(&app_error))
+}
+
 pub fn run(runtime: Arc<AppRuntime>) {
     let state = Arc::new(DesktopAppState::new(runtime));
     let state_for_setup = state.clone();
@@ -731,6 +821,11 @@ pub fn run(runtime: Arc<AppRuntime>) {
             desktop_mcp_start,
             desktop_mcp_stop,
             desktop_mcp_logs_snapshot,
+            desktop_sync_status,
+            desktop_sync_outbox_list,
+            desktop_sync_backfill,
+            desktop_sync_push,
+            desktop_sync_pull,
             desktop_project,
             desktop_version,
             desktop_task,

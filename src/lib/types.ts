@@ -140,6 +140,11 @@ export interface RuntimeStatus {
 export type McpLifecycleState = "stopped" | "starting" | "running" | "stopping" | "failed";
 export type McpLogLevel = "trace" | "debug" | "info" | "warn" | "error";
 export type McpLogDestination = "ui" | "stdout" | "file";
+export type SyncMode = "manual_bidirectional";
+export type SyncRemoteKind = "postgres";
+export type SyncOutboxStatus = "pending" | "acked" | "failed";
+export type SyncEntityKind = "project" | "version" | "task" | "note" | "attachment";
+export type SyncOperation = "create" | "update";
 
 export interface McpRuntimeStatus {
   state: McpLifecycleState;
@@ -178,6 +183,72 @@ export interface McpLogEntry {
 export interface McpLogSnapshot {
   session_id: string | null;
   entries: McpLogEntry[];
+}
+
+export interface SyncCheckpointStatus {
+  pull: string | null;
+  push_ack: string | null;
+}
+
+export interface SyncPostgresRemoteStatus {
+  host: string | null;
+  port: number | null;
+  database: string | null;
+  max_conns: number;
+  min_conns: number;
+  max_conn_lifetime: string;
+}
+
+export interface SyncRemoteStatus {
+  id: string;
+  kind: SyncRemoteKind;
+  postgres: SyncPostgresRemoteStatus | null;
+}
+
+export interface SyncStatusSummary {
+  enabled: boolean;
+  mode: SyncMode;
+  remote: SyncRemoteStatus | null;
+  pending_outbox_count: number;
+  oldest_pending_at: string | null;
+  checkpoints: SyncCheckpointStatus;
+}
+
+export interface SyncOutboxListItem {
+  mutation_id: string;
+  entity_kind: SyncEntityKind;
+  local_id: string;
+  operation: SyncOperation;
+  local_version: number;
+  status: SyncOutboxStatus;
+  created_at: string;
+  attempt_count: number;
+  last_error: string | null;
+}
+
+export interface SyncBackfillSummary {
+  scanned: number;
+  queued: number;
+  skipped: number;
+  queued_projects: number;
+  queued_versions: number;
+  queued_tasks: number;
+  queued_notes: number;
+  queued_attachments: number;
+}
+
+export interface SyncPushSummary {
+  attempted: number;
+  pushed: number;
+  failed: number;
+  last_remote_mutation_id: number | null;
+}
+
+export interface SyncPullSummary {
+  fetched: number;
+  applied: number;
+  skipped: number;
+  last_remote_mutation_id: number | null;
 }
 
 export interface SearchTaskHit {

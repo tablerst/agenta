@@ -53,13 +53,15 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
 sha2 = "0.10"
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite", "migrate", "macros", "uuid", "time"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite", "postgres", "migrate", "macros", "uuid", "time"] }
 thiserror = "2"
 time = { version = "0.3", features = ["formatting", "parsing", "serde"] }
 tokio = { version = "1", features = ["fs", "macros", "rt-multi-thread", "sync", "time"] }
 tower = "0.5"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+humantime = "2"
+url = "2"
 uuid = { version = "1", features = ["serde", "v4"] }
 
 [dev-dependencies]
