@@ -47,12 +47,82 @@ export class DesktopBridgeError extends Error implements AppBridgeError {
   }
 }
 
+type SerializedOffsetDateTime = readonly [
+  year: number,
+  ordinal: number,
+  hour: number,
+  minute: number,
+  second: number,
+  nanosecond: number,
+  offsetHours: number,
+  offsetMinutes: number,
+  offsetSeconds: number,
+];
+
+function normalizeSuccessEnvelope<TResult>(
+  envelope: SuccessEnvelope<TResult>,
+): SuccessEnvelope<TResult> {
+  return {
+    ...envelope,
+    result: normalizeBridgePayload(envelope.result) as TResult,
+  };
+}
+
+function normalizeBridgePayload<T>(value: T): T {
+  if (isSerializedOffsetDateTime(value)) {
+    return offsetDateTimeTupleToIsoString(value) as T;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => normalizeBridgePayload(item)) as T;
+  }
+
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, normalizeBridgePayload(item)]),
+    ) as T;
+  }
+
+  return value;
+}
+
+function isSerializedOffsetDateTime(value: unknown): value is SerializedOffsetDateTime {
+  return (
+    Array.isArray(value) &&
+    value.length === 9 &&
+    isIntegerInRange(value[0], 1, 9999) &&
+    isIntegerInRange(value[1], 1, 366) &&
+    isIntegerInRange(value[2], 0, 23) &&
+    isIntegerInRange(value[3], 0, 59) &&
+    isIntegerInRange(value[4], 0, 60) &&
+    isIntegerInRange(value[5], 0, 999_999_999) &&
+    isIntegerInRange(value[6], -23, 23) &&
+    isIntegerInRange(value[7], -59, 59) &&
+    isIntegerInRange(value[8], -59, 59)
+  );
+}
+
+function isIntegerInRange(value: unknown, min: number, max: number): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= min && value <= max;
+}
+
+function offsetDateTimeTupleToIsoString(value: SerializedOffsetDateTime): string {
+  const [year, ordinal, hour, minute, second, nanosecond, offsetHours, offsetMinutes, offsetSeconds] =
+    value;
+  const offsetInSeconds = offsetHours * 60 * 60 + offsetMinutes * 60 + offsetSeconds;
+  const milliseconds = Math.floor(nanosecond / 1_000_000);
+  const utcTimestamp =
+    Date.UTC(year, 0, ordinal, hour, minute, second, milliseconds) - offsetInSeconds * 1_000;
+  return new Date(utcTimestamp).toISOString();
+}
+
 async function callDesktop<TResult>(
   command: string,
   input?: Record<string, unknown>,
 ): Promise<SuccessEnvelope<TResult>> {
   try {
-    return await invoke<SuccessEnvelope<TResult>>(command, input ? { input } : undefined);
+    const envelope = await invoke<SuccessEnvelope<TResult>>(command, input ? { input } : undefined);
+    return normalizeSuccessEnvelope(envelope);
   } catch (error) {
     throw normalizeError(error);
   }
@@ -62,7 +132,7 @@ async function callPreview<TResult>(
   loader: () => Promise<SuccessEnvelope<TResult>>,
 ): Promise<SuccessEnvelope<TResult>> {
   try {
-    return await loader();
+    return normalizeSuccessEnvelope(await loader());
   } catch (error) {
     throw normalizeError(error);
   }
@@ -123,7 +193,7 @@ async function subscribeDesktopEvent<TPayload>(
   }
 
   return listen<TPayload>(event, (eventPayload) => {
-    listener(eventPayload.payload);
+    listener(normalizeBridgePayload(eventPayload.payload) as TPayload);
   });
 }
 

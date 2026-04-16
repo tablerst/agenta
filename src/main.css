@@ -343,25 +343,38 @@ html[data-theme="dark"] {
     @apply mt-3 max-w-4xl text-sm leading-6 text-[var(--text-muted)];
   }
 
-  .workspace-secondary-nav {
-    @apply mt-5 flex items-end gap-1 overflow-x-auto;
+  .workspace-secondary-nav,
+  .task-detail-tablist {
+    @apply flex items-end gap-1 overflow-x-auto;
     padding-bottom: 0;
     border-bottom: 1px solid var(--border-color);
     scrollbar-width: none;
   }
 
-  .workspace-secondary-nav::-webkit-scrollbar {
+  .workspace-secondary-nav {
+    @apply mt-5;
+    --tab-surface-color: var(--bg-main);
+  }
+
+  .task-detail-tablist {
+    @apply mb-4;
+    --tab-surface-color: color-mix(in srgb, var(--bg-elevated) 88%, var(--bg-panel));
+  }
+
+  .workspace-secondary-nav::-webkit-scrollbar,
+  .task-detail-tablist::-webkit-scrollbar {
     display: none;
   }
 
-  .section-route-chip {
+  .section-route-chip,
+  .task-detail-tab {
     position: relative;
     display: inline-flex;
     flex-shrink: 0;
     align-items: center;
     justify-content: center;
-    min-height: 38px;
-    padding: 0 15px 11px;
+    min-height: 36px;
+    padding: 0 14px 10px;
     margin-bottom: -1px;
     border: 1px solid transparent;
     border-bottom-color: transparent;
@@ -379,7 +392,13 @@ html[data-theme="dark"] {
       opacity 140ms ease;
   }
 
-  .section-route-chip::after {
+  .task-detail-tab {
+    min-height: 34px;
+    padding: 0 13px 9px;
+  }
+
+  .section-route-chip::after,
+  .task-detail-tab::after {
     content: "";
     position: absolute;
     right: 12px;
@@ -395,35 +414,33 @@ html[data-theme="dark"] {
       transform 140ms ease;
   }
 
-  .filter-chip,
-  .workspace-tab,
-  .task-detail-tab {
+  .filter-chip {
     @apply inline-flex min-h-8 items-center justify-center gap-1.5 rounded-[8px] border border-transparent px-3 py-1.5 text-[13px] text-[var(--text-muted)] transition;
     background: color-mix(in srgb, var(--bg-panel) 46%, transparent);
   }
 
-  .section-route-chip-active {
+  .section-route-chip-active,
+  .task-detail-tab-active {
     color: var(--text-main);
     border-color: color-mix(in srgb, var(--accent-color) 12%, var(--border-color));
-    border-bottom-color: color-mix(in srgb, var(--bg-main) 94%, transparent);
+    border-bottom-color: color-mix(in srgb, var(--tab-surface-color) 94%, transparent);
     background: linear-gradient(
       180deg,
       color-mix(in srgb, var(--accent-soft) 82%, transparent),
-      color-mix(in srgb, var(--bg-main) 92%, transparent)
+      color-mix(in srgb, var(--tab-surface-color) 92%, transparent)
     );
     box-shadow:
       inset 0 1px 0 var(--border-highlight),
       0 10px 24px color-mix(in srgb, var(--accent-color) 4%, transparent);
   }
 
-  .section-route-chip-active::after {
+  .section-route-chip-active::after,
+  .task-detail-tab-active::after {
     opacity: 1;
     transform: scaleX(1);
   }
 
-  .filter-chip-active,
-  .workspace-tab-active,
-  .task-detail-tab-active {
+  .filter-chip-active {
     color: var(--text-main);
     border-color: color-mix(in srgb, var(--accent-color) 14%, var(--border-color));
     background: linear-gradient(180deg, var(--accent-soft), color-mix(in srgb, var(--accent-soft) 46%, transparent));
@@ -565,50 +582,30 @@ html[data-theme="dark"] {
     @apply max-w-xl text-center;
   }
 
-  .workspace-tablist {
-    @apply flex flex-wrap gap-2 border-b border-[var(--border-color)] pb-4;
-  }
-
   .filter-chip-group {
     @apply flex flex-wrap gap-2;
   }
 
-  .task-detail-tablist {
-    @apply mb-4 flex flex-wrap gap-2 border-b border-[var(--border-color)] pb-4;
-  }
-
-  .task-detail-tab {
-    @apply inline-flex min-h-8 items-center justify-center gap-1.5 rounded-[8px] border border-transparent px-3 py-1.5 text-[13px] text-[var(--text-muted)] transition;
-    background: color-mix(in srgb, var(--bg-panel) 46%, transparent);
-  }
-
-  .task-detail-tab-active {
-    color: var(--text-main);
-    border-color: color-mix(in srgb, var(--accent-color) 14%, var(--border-color));
-    background: linear-gradient(180deg, var(--accent-soft), color-mix(in srgb, var(--accent-soft) 46%, transparent));
-    box-shadow: inset 0 1px 0 var(--border-highlight);
-  }
-
   .task-detail-tab:focus-visible,
+  .section-route-chip:focus-visible,
   .filter-chip:focus-visible {
-    outline: none;
-    border-color: var(--text-muted);
-    box-shadow:
-      inset 0 1px 0 var(--border-highlight),
-      0 0 0 2px color-mix(in srgb, var(--text-muted) 14%, transparent);
-  }
-
-  .section-route-chip:focus-visible {
     outline: none;
     color: var(--text-main);
     border-color: color-mix(in srgb, var(--text-muted) 18%, var(--border-color));
-    background: color-mix(in srgb, var(--accent-soft) 76%, transparent);
+    background: linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--accent-soft) 76%, transparent),
+      color-mix(in srgb, var(--tab-surface-color, var(--bg-panel)) 94%, transparent)
+    );
     box-shadow:
       inset 0 1px 0 var(--border-highlight),
       0 0 0 2px color-mix(in srgb, var(--text-muted) 14%, transparent);
   }
 
-  .task-detail-tablist,
+  .filter-chip:focus-visible {
+    background: color-mix(in srgb, var(--accent-soft) 76%, transparent);
+  }
+
   .filter-chip-row {
     @apply flex flex-wrap gap-2;
   }
@@ -725,7 +722,6 @@ html[data-theme="dark"] {
   .list-row,
   .sidebar-setting-option,
   .filter-chip,
-  .workspace-tab,
   .task-detail-tab {
     user-select: none;
     touch-action: manipulation;
@@ -750,9 +746,7 @@ html[data-theme="dark"] {
       .shell-brand,
       .list-row,
       .sidebar-setting-option,
-      .filter-chip,
-      .workspace-tab,
-      .task-detail-tab
+      .filter-chip
     ):not(:disabled):not([aria-disabled="true"]):hover {
       color: var(--text-main);
       border-color: color-mix(in srgb, var(--accent-color) 18%, var(--border-color));
@@ -762,16 +756,22 @@ html[data-theme="dark"] {
         0 1px 2px color-mix(in srgb, var(--accent-color) 8%, transparent);
     }
 
-    .section-route-chip:hover {
+    .section-route-chip:hover,
+    .task-detail-tab:hover {
       color: var(--text-main);
+      border-color: color-mix(in srgb, var(--accent-color) 18%, var(--border-color));
       background: linear-gradient(
         180deg,
         color-mix(in srgb, var(--accent-soft) 72%, transparent),
-        color-mix(in srgb, var(--bg-main) 90%, transparent)
+        color-mix(in srgb, var(--tab-surface-color) 90%, transparent)
       );
+      box-shadow:
+        inset 0 1px 0 var(--border-highlight),
+        0 1px 2px color-mix(in srgb, var(--accent-color) 8%, transparent);
     }
 
-    .section-route-chip:hover::after {
+    .section-route-chip:hover::after,
+    .task-detail-tab:hover::after {
       opacity: 0.36;
       transform: scaleX(0.88);
     }
@@ -786,9 +786,7 @@ html[data-theme="dark"] {
     .shell-brand,
     .list-row,
     .sidebar-setting-option,
-    .filter-chip,
-    .workspace-tab,
-    .task-detail-tab
+    .filter-chip
   ):not(:disabled):not([aria-disabled="true"]):active {
     transform: translateY(1px) scale(0.995);
     box-shadow:
@@ -805,9 +803,7 @@ html[data-theme="dark"] {
     .shell-brand,
     .list-row,
     .sidebar-setting-option,
-    .filter-chip,
-    .workspace-tab,
-    .task-detail-tab
+    .filter-chip
   ):focus-visible {
     outline: none;
     border-color: var(--text-muted);
@@ -826,7 +822,6 @@ html[data-theme="dark"] {
     .list-row,
     .sidebar-setting-option,
     .filter-chip,
-    .workspace-tab,
     .task-detail-tab
   ):disabled,
   :where(
@@ -839,7 +834,6 @@ html[data-theme="dark"] {
     .list-row,
     .sidebar-setting-option,
     .filter-chip,
-    .workspace-tab,
     .task-detail-tab
   )[aria-disabled="true"] {
     opacity: 0.48;
@@ -1717,7 +1711,6 @@ html[data-theme="dark"] {
   .sidebar-setting-option,
   .section-route-chip,
   .filter-chip,
-  .workspace-tab,
   .task-detail-tab,
   .spotlight-surface::before,
   .overview-editor,
@@ -1738,7 +1731,6 @@ html[data-theme="dark"] {
     .sidebar-setting-option,
     .section-route-chip,
     .filter-chip,
-    .workspace-tab,
     .task-detail-tab
   ):not(:disabled):not([aria-disabled="true"]):active {
     transform: none;
