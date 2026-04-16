@@ -27,6 +27,9 @@ import type {
 } from "../lib/types";
 import { useShellStore } from "../stores/shell";
 
+type RuntimeAction = "refresh" | "start" | "stop" | "refreshLogs" | "openLogDirectory";
+type SyncAction = "refresh" | "backfill" | "push" | "pull";
+
 const shell = useShellStore();
 const runtime = ref<RuntimeStatus | null>(null);
 const mcp = ref<McpRuntimeStatus | null>(null);
@@ -35,6 +38,8 @@ const syncOutbox = ref<SyncOutboxListItem[]>([]);
 const logs = ref<McpLogEntry[]>([]);
 const busy = ref(false);
 const syncBusy = ref(false);
+const runtimeAction = ref<RuntimeAction | null>(null);
+const syncAction = ref<SyncAction | null>(null);
 const loadedAt = ref<string>("");
 const saveAsDefault = ref(false);
 const unlisteners: Array<() => void> = [];
@@ -186,7 +191,45 @@ function toggleDestination(destination: McpLogDestination) {
   form.logDestinations = [...form.logDestinations, destination];
 }
 
-async function refreshLogs() {
+function isRuntimeActionPending(action: RuntimeAction) {
+  return runtimeAction.value === action;
+}
+
+function isSyncActionPending(action: SyncAction) {
+  return syncAction.value === action;
+}
+
+async function withRuntimeAction<T>(action: RuntimeAction, task: () => Promise<T>) {
+  if (busy.value) {
+    return;
+  }
+
+  busy.value = true;
+  runtimeAction.value = action;
+  try {
+    return await task();
+  } finally {
+    runtimeAction.value = null;
+    busy.value = false;
+  }
+}
+
+async function withSyncAction<T>(action: SyncAction, task: () => Promise<T>) {
+  if (syncBusy.value) {
+    return;
+  }
+
+  syncBusy.value = true;
+  syncAction.value = action;
+  try {
+    return await task();
+  } finally {
+    syncAction.value = null;
+    syncBusy.value = false;
+  }
+}
+
+async function refreshLogsSnapshot() {
   try {
     const envelope = await desktopBridge.mcpLogsSnapshot();
     logs.value = envelope.result.entries;
@@ -195,7 +238,11 @@ async function refreshLogs() {
   }
 }
 
-async function loadSync() {
+async function refreshLogs() {
+  await withRuntimeAction("refreshLogs", refreshLogsSnapshot);
+}
+
+async function loadSyncSnapshot() {
   try {
     const [syncEnvelope, outboxEnvelope] = await Promise.all([
       desktopBridge.syncStatus(),
@@ -208,7 +255,11 @@ async function loadSync() {
   }
 }
 
-async function loadRuntime() {
+async function loadSync() {
+  await withSyncAction("refresh", loadSyncSnapshot);
+}
+
+async function loadRuntimeSnapshot() {
   try {
     const [runtimeEnvelope, mcpEnvelope, logsEnvelope, syncEnvelope, outboxEnvelope] = await Promise.all([
       desktopBridge.status(),
@@ -229,44 +280,46 @@ async function loadRuntime() {
   }
 }
 
+async function loadRuntime() {
+  await withRuntimeAction("refresh", loadRuntimeSnapshot);
+}
+
 async function startMcp() {
-  busy.value = true;
-  try {
-    const payload: McpLaunchOverrides = {
-      bind: form.bind,
-      path: form.path,
-      autostart: form.autostart,
-      log_level: form.logLevel,
-      log_destinations: form.logDestinations,
-      log_file_path: form.logFilePath,
-      log_ui_buffer_lines: form.logUiBufferLines,
-      save_as_default: saveAsDefault.value,
-    };
-    const envelope = await desktopBridge.mcpStart(payload);
-    mcp.value = envelope.result;
-    hydrateForm(envelope.result);
-    await Promise.all([refreshLogs(), loadDesktopStatus()]);
-    saveAsDefault.value = false;
-    shell.pushNotice("success", t("notices.runtimeStarted"));
-  } catch (error) {
-    shell.pushNotice("error", formatDesktopError(error, t));
-  } finally {
-    busy.value = false;
-  }
+  await withRuntimeAction("start", async () => {
+    try {
+      const payload: McpLaunchOverrides = {
+        bind: form.bind,
+        path: form.path,
+        autostart: form.autostart,
+        log_level: form.logLevel,
+        log_destinations: form.logDestinations,
+        log_file_path: form.logFilePath,
+        log_ui_buffer_lines: form.logUiBufferLines,
+        save_as_default: saveAsDefault.value,
+      };
+      const envelope = await desktopBridge.mcpStart(payload);
+      mcp.value = envelope.result;
+      hydrateForm(envelope.result);
+      await Promise.all([refreshLogsSnapshot(), loadDesktopStatus()]);
+      saveAsDefault.value = false;
+      shell.pushNotice("success", t("notices.runtimeStarted"));
+    } catch (error) {
+      shell.pushNotice("error", formatDesktopError(error, t));
+    }
+  });
 }
 
 async function stopMcp() {
-  busy.value = true;
-  try {
-    const envelope = await desktopBridge.mcpStop();
-    mcp.value = envelope.result;
-    await refreshLogs();
-    shell.pushNotice("info", t("notices.runtimeStopped"));
-  } catch (error) {
-    shell.pushNotice("error", formatDesktopError(error, t));
-  } finally {
-    busy.value = false;
-  }
+  await withRuntimeAction("stop", async () => {
+    try {
+      const envelope = await desktopBridge.mcpStop();
+      mcp.value = envelope.result;
+      await refreshLogsSnapshot();
+      shell.pushNotice("info", t("notices.runtimeStopped"));
+    } catch (error) {
+      shell.pushNotice("error", formatDesktopError(error, t));
+    }
+  });
 }
 
 async function loadDesktopStatus() {
@@ -282,50 +335,49 @@ async function openLogDirectory() {
   if (!logFilePath) {
     return;
   }
-  try {
-    await desktopBridge.revealItemInDir(logFilePath);
-  } catch (error) {
-    shell.pushNotice("error", formatDesktopError(error, t));
-  }
+  await withRuntimeAction("openLogDirectory", async () => {
+    try {
+      await desktopBridge.revealItemInDir(logFilePath);
+    } catch (error) {
+      shell.pushNotice("error", formatDesktopError(error, t));
+    }
+  });
 }
 
 async function runSyncBackfill() {
-  syncBusy.value = true;
-  try {
-    await desktopBridge.syncBackfill(100);
-    await loadSync();
-    shell.pushNotice("success", t("notices.syncBackfillCompleted"));
-  } catch (error) {
-    shell.pushNotice("error", formatDesktopError(error, t));
-  } finally {
-    syncBusy.value = false;
-  }
+  await withSyncAction("backfill", async () => {
+    try {
+      await desktopBridge.syncBackfill(100);
+      await loadSyncSnapshot();
+      shell.pushNotice("success", t("notices.syncBackfillCompleted"));
+    } catch (error) {
+      shell.pushNotice("error", formatDesktopError(error, t));
+    }
+  });
 }
 
 async function runSyncPush() {
-  syncBusy.value = true;
-  try {
-    await desktopBridge.syncPush(100);
-    await loadSync();
-    shell.pushNotice("success", t("notices.syncPushCompleted"));
-  } catch (error) {
-    shell.pushNotice("error", formatDesktopError(error, t));
-  } finally {
-    syncBusy.value = false;
-  }
+  await withSyncAction("push", async () => {
+    try {
+      await desktopBridge.syncPush(100);
+      await loadSyncSnapshot();
+      shell.pushNotice("success", t("notices.syncPushCompleted"));
+    } catch (error) {
+      shell.pushNotice("error", formatDesktopError(error, t));
+    }
+  });
 }
 
 async function runSyncPull() {
-  syncBusy.value = true;
-  try {
-    await desktopBridge.syncPull(100);
-    await loadSync();
-    shell.pushNotice("success", t("notices.syncPullCompleted"));
-  } catch (error) {
-    shell.pushNotice("error", formatDesktopError(error, t));
-  } finally {
-    syncBusy.value = false;
-  }
+  await withSyncAction("pull", async () => {
+    try {
+      await desktopBridge.syncPull(100);
+      await loadSyncSnapshot();
+      shell.pushNotice("success", t("notices.syncPullCompleted"));
+    } catch (error) {
+      shell.pushNotice("error", formatDesktopError(error, t));
+    }
+  });
 }
 
 onMounted(async () => {
@@ -347,7 +399,7 @@ onMounted(async () => {
     }),
   );
 
-  await loadRuntime();
+  await loadRuntimeSnapshot();
 });
 
 onUnmounted(() => {
@@ -439,12 +491,20 @@ onUnmounted(() => {
               <p class="text-sm text-[var(--text-muted)]">{{ t("runtime.launchConfigSummary") }}</p>
             </div>
             <div class="flex flex-wrap items-center gap-2">
-              <button class="secondary-action spotlight-surface" :disabled="busy" @click="loadRuntime">
+              <button
+                class="secondary-action spotlight-surface"
+                :aria-busy="isRuntimeActionPending('refresh') ? 'true' : undefined"
+                :data-pending="isRuntimeActionPending('refresh') ? 'true' : undefined"
+                :disabled="busy"
+                @click="loadRuntime()"
+              >
                 <RotateCcw :size="14" />
                 {{ t("runtime.actions.refresh") }}
               </button>
               <button
                 class="primary-action spotlight-surface"
+                :aria-busy="isRuntimeActionPending('start') ? 'true' : undefined"
+                :data-pending="isRuntimeActionPending('start') ? 'true' : undefined"
                 :disabled="busy || isTransitioning"
                 @click="startMcp"
               >
@@ -453,6 +513,8 @@ onUnmounted(() => {
               </button>
               <button
                 class="secondary-action spotlight-surface"
+                :aria-busy="isRuntimeActionPending('stop') ? 'true' : undefined"
+                :data-pending="isRuntimeActionPending('stop') ? 'true' : undefined"
                 :disabled="busy || (!mcp || (mcp.state !== 'running' && mcp.state !== 'starting' && mcp.state !== 'failed'))"
                 @click="stopMcp"
               >
@@ -554,19 +616,43 @@ onUnmounted(() => {
                 <p class="text-sm text-[var(--text-muted)]">{{ t("runtime.sync.statusSummary") }}</p>
               </div>
               <div class="flex flex-wrap items-center gap-2">
-                <button class="secondary-action spotlight-surface" :disabled="syncBusy" @click="loadSync">
+                <button
+                  class="secondary-action spotlight-surface"
+                  :aria-busy="isSyncActionPending('refresh') ? 'true' : undefined"
+                  :data-pending="isSyncActionPending('refresh') ? 'true' : undefined"
+                  :disabled="syncBusy"
+                  @click="loadSync()"
+                >
                   <RotateCcw :size="14" />
                   {{ t("runtime.actions.refresh") }}
                 </button>
-                <button class="secondary-action spotlight-surface" :disabled="syncBusy" @click="runSyncBackfill">
+                <button
+                  class="secondary-action spotlight-surface"
+                  :aria-busy="isSyncActionPending('backfill') ? 'true' : undefined"
+                  :data-pending="isSyncActionPending('backfill') ? 'true' : undefined"
+                  :disabled="syncBusy"
+                  @click="runSyncBackfill"
+                >
                   <FolderArchive :size="14" />
                   {{ t("runtime.actions.backfill") }}
                 </button>
-                <button class="secondary-action spotlight-surface" :disabled="syncBusy" @click="runSyncPush">
+                <button
+                  class="secondary-action spotlight-surface"
+                  :aria-busy="isSyncActionPending('push') ? 'true' : undefined"
+                  :data-pending="isSyncActionPending('push') ? 'true' : undefined"
+                  :disabled="syncBusy"
+                  @click="runSyncPush"
+                >
                   <Play :size="14" />
                   {{ t("runtime.actions.push") }}
                 </button>
-                <button class="secondary-action spotlight-surface" :disabled="syncBusy" @click="runSyncPull">
+                <button
+                  class="secondary-action spotlight-surface"
+                  :aria-busy="isSyncActionPending('pull') ? 'true' : undefined"
+                  :data-pending="isSyncActionPending('pull') ? 'true' : undefined"
+                  :disabled="syncBusy"
+                  @click="runSyncPull"
+                >
                   <RotateCcw :size="14" />
                   {{ t("runtime.actions.pull") }}
                 </button>
@@ -674,12 +760,20 @@ onUnmounted(() => {
               <p class="text-sm text-[var(--text-muted)]">{{ t("runtime.logsSummary") }}</p>
             </div>
             <div class="flex flex-wrap items-center gap-2">
-              <button class="secondary-action spotlight-surface" :disabled="busy" @click="refreshLogs">
+              <button
+                class="secondary-action spotlight-surface"
+                :aria-busy="isRuntimeActionPending('refreshLogs') ? 'true' : undefined"
+                :data-pending="isRuntimeActionPending('refreshLogs') ? 'true' : undefined"
+                :disabled="busy"
+                @click="refreshLogs()"
+              >
                 <RotateCcw :size="14" />
                 {{ t("runtime.actions.refreshLogs") }}
               </button>
               <button
                 class="secondary-action spotlight-surface"
+                :aria-busy="isRuntimeActionPending('openLogDirectory') ? 'true' : undefined"
+                :data-pending="isRuntimeActionPending('openLogDirectory') ? 'true' : undefined"
                 :disabled="busy || !canOpenLogDirectory"
                 @click="openLogDirectory"
               >
@@ -717,10 +811,22 @@ onUnmounted(() => {
             </div>
           </div>
           <div class="flex flex-wrap items-center gap-2">
-            <button class="secondary-action spotlight-surface" :disabled="busy" @click="refreshLogs">
+            <button
+              class="secondary-action spotlight-surface"
+              :aria-busy="isRuntimeActionPending('refreshLogs') ? 'true' : undefined"
+              :data-pending="isRuntimeActionPending('refreshLogs') ? 'true' : undefined"
+              :disabled="busy"
+              @click="refreshLogs()"
+            >
               {{ t("runtime.actions.refreshLogs") }}
             </button>
-            <button class="primary-action spotlight-surface" :disabled="busy || isTransitioning" @click="startMcp">
+            <button
+              class="primary-action spotlight-surface"
+              :aria-busy="isRuntimeActionPending('start') ? 'true' : undefined"
+              :data-pending="isRuntimeActionPending('start') ? 'true' : undefined"
+              :disabled="busy || isTransitioning"
+              @click="startMcp"
+            >
               {{ t("runtime.actions.retry") }}
             </button>
           </div>

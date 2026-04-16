@@ -10,11 +10,11 @@
 
 当前代码状态：
 
-- `src/App.vue` 已替换为里程碑状态壳
+- `src/App.vue` 已演进为全局壳层，接入侧边栏、全局搜索与 Router 容器
 - `src-tauri/src/lib.rs` 已切到共享应用装配入口
-- `src-tauri/src/bin/agenta-cli.rs` 与 `src-tauri/src/bin/agenta-mcp.rs` 已存在
-- 已落 `app / domain / storage / service / search / policy / interface / tauri_app`
-- 已接入 SQLite migration、附件落盘、FTS、CLI、MCP `streamable_http`
+- `src-tauri/src/bin/agenta.rs`、`src-tauri/src/bin/agenta-cli.rs` 与 `src-tauri/src/bin/agenta-mcp.rs` 已存在
+- 已落 `app / domain / storage / service / search / policy / interface / tauri_app / sync`
+- 已接入 SQLite migration、附件落盘、FTS、审批回放、CLI、MCP `streamable_http` 与手动远程副本同步
 
 因此，当前文档重点从“如何开始”转为“如何在首轮里程碑完成后继续推进”。
 
@@ -97,23 +97,21 @@
 - 调用链路仍然复用同一套服务层
 - MCP 不直接操作存储层
 
-## Phase 4：桌面 UI 进入业务化改造
+## Phase 4：桌面 UI 持续业务化完善
 
 目标：
 
-- 把当前状态壳替换成真正可操作的桌面界面
+- 在现有项目工作区与 Runtime 控制台基础上继续扩展真实桌面工作流
 
 建议改动：
 
-- 前端引入 `vue-router`
-- 视需要引入 Tailwind、Lucide 图标和状态管理
-- 首批页面只做：
-  - 项目列表
-  - 任务列表
-  - 任务详情
-  - 活动时间线
-  - 附件面板
-  - 搜索结果页
+- 继续沿用现有 `vue-router + pinia + tailwindcss + @lucide/vue`
+- 保持“全局壳层 + 项目工作区 + Runtime”信息结构
+- 在已落地页面基础上继续补强：
+  - 任务详情深度交互
+  - 附件面板与物化操作
+  - 搜索结果深链与上下文跳转
+  - 更细的审批与运行时诊断反馈
 
 当前阶段的建议是：
 
@@ -172,8 +170,10 @@
 - 已完成 Rust Foundation、配置、路径、migration 和五个核心对象
 - 已完成 CLI 与 MCP `streamable_http` 闭环
 - 已完成 FTS5、摘要字段与基础写策略
+- 已完成项目工作区、版本/任务/审批页面、全局搜索与 Runtime 控制台
+- 已完成面向 PostgreSQL 单远端的手动远程副本同步：`status / outbox / backfill / push / pull`
 - 已完成基础单元测试与集成测试
-- Desktop 仍未进入真实业务页面阶段
+- Desktop 已进入真实业务页面阶段，但仍需继续补强详情交互与更细的产品完成度
 
 ## Workspace 拆分触发条件
 
@@ -188,8 +188,9 @@
 
 ## 当前已冻结的默认值
 
-1. 首个里程碑先交付 CLI + MCP，不要求 Desktop 同期完成。
+1. CLI 与 MCP 仍是 canonical contract，Desktop 已接入首批真实页面但不承载独占逻辑。
 2. 数据层直接以 `sqlx + sqlite` 进入 Phase 1。
 3. 前端默认命令继续保持 `bun`。
 4. 数据库与附件正式根目录默认使用系统应用数据目录，便携模式后续再补。
 5. MCP 首发 transport 使用 `streamable_http`，`stdio` 作为后续补充。
+6. 远程副本同步当前保持单远端、手动触发，不启用后台自动同步。

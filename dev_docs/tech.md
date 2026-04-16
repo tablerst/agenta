@@ -4,9 +4,9 @@
 
 这份文档定义当前仓库的目标技术架构，并明确哪些决策现在就要执行，哪些只做预留。
 
-- 产品边界以 [baseline.md](/e:/JetBrains/RustRover/agenta/dev_docs/baseline.md) 为准
-- 依赖与构建口径以 [deps_build.md](/e:/JetBrains/RustRover/agenta/dev_docs/deps_build.md) 为准
-- 迁移顺序以 [migration_plan.md](/e:/JetBrains/RustRover/agenta/dev_docs/migration_plan.md) 为准
+- 产品边界以 [baseline.md](baseline.md) 为准
+- 依赖与构建口径以 [deps_build.md](deps_build.md) 为准
+- 迁移顺序以 [migration_plan.md](migration_plan.md) 为准
 
 ## 2. 当前状态与目标状态
 
@@ -14,18 +14,20 @@
 
 仓库当前已经具备：
 
-- Vue 3 桌面状态壳
+- Vue 3 Desktop 全局壳层、项目工作区、审批中心、全局搜索与 Runtime 控制台
 - 单 `src-tauri` Rust crate
 - 共享业务层、SQLite migration、附件落盘
 - CLI 与 MCP `streamable_http` 入口
+- 面向 PostgreSQL 单远端的手动远程副本同步骨架
 - Bun 驱动的前端开发与构建配置
 
 仓库当前仍然没有：
 
 - Rust workspace
 - 独立 app crate / core crate 拆分
-- 真实 Desktop 业务页面
 - 默认启用的向量后端或 sidecar
+- 后台自动同步守护进程
+- 冲突解决 UI 与多远端同步拓扑
 
 ### 2.2 目标状态
 
@@ -37,7 +39,7 @@
 - Storage：SQLite 与文件存储实现
 - CLI：本地命令入口
 - MCP：Agent 宿主入口
-- Desktop：桌面观察与操作壳
+- Desktop：桌面工作区、审批中心与运行时控制台
 
 ## 3. 架构原则
 
@@ -181,7 +183,7 @@ Desktop 必须是壳，不是业务唯一宿主。
 
 - Core 不直接依赖 SQLx
 - SQLite 实现在 storage crate 中
-- PostgreSQL 只作为未来接口预留，不进入 MVP 默认运行时
+- PostgreSQL 已作为远程副本同步后端落地，但不替代 SQLite 作为本地主元数据源
 
 ### 5.3 搜索与摘要
 
@@ -266,13 +268,13 @@ Desktop 的合理落地顺序：
 
 ## 8. 前端技术策略
 
-当前前端仍基于 Vue 3。
+当前前端仍基于 Vue 3，并已接入真实信息架构。
 
 正式建议：
 
-- 路由：`vue-router`
-- 状态：`pinia`
-- 样式体系：`tailwindcss`
+- 路由：`vue-router`，已承载项目工作区与 Runtime 页面
+- 状态：`pinia`，已承载项目、任务、审批、搜索与 shell 状态
+- 样式体系：`tailwindcss` v4 + CSS tokens，继续沿用 `src/main.css`
 - 图标：`@lucide/vue`
 
 可选但不设为 MVP 硬前提：
@@ -282,9 +284,9 @@ Desktop 的合理落地顺序：
 
 这样做的原因很直接：
 
-- 当前仓库还没有任何真实信息架构
-- 先把路由、状态和基础样式定下来即可
-- 组件分发体系要在真实页面边界出现后再收敛
+- 当前仓库已经形成项目工作区、审批、Runtime 与全局搜索等真实页面边界
+- 继续在既有路由、状态和 token 体系上扩展成本最低
+- 组件分发体系应继续围绕真实页面与交互约束收敛，而不是回退到模板壳
 
 ## 9. 配置原则
 

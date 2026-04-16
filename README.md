@@ -1,6 +1,6 @@
 # Agenta
 
-Agenta is a local-first task and context service for agent hosts. The local desktop baseline, host hardening, and regression gate are complete, and the current active execution plan focuses on PostgreSQL-oriented foundations required for remote replica sync.
+Agenta is a local-first task and context service for agent hosts. The local desktop baseline, host hardening, regression gate, and the fifth remote-replica milestone are complete; the repository now includes Desktop workspace pages plus a manual PostgreSQL-backed remote replica sync flow.
 
 ## Distribution
 
@@ -68,13 +68,13 @@ When `mcp.log.destinations` is omitted, defaults depend on the host:
 Current sync defaults stay intentionally conservative:
 
 - Only one global remote is modeled
-- Sync foundation records local mutation/outbox state but does not perform network push/pull yet
-- Diagnostics are CLI-only in this stage and redact PostgreSQL credentials from status output
+- Sync uses manual `status / outbox / backfill / push / pull`; background auto-sync is still disabled
+- Status output redacts PostgreSQL credentials, and Runtime exposes the same manual sync actions inside Desktop
 
 ## Documentation
 
-- Quickstart: [docs/cli-mcp-quickstart.md](/e:/JetBrains/RustRover/agenta/docs/cli-mcp-quickstart.md)
-- Active execution plan: [dev_docs/execution-plans/active/fifth-milestone-remote-replica-sync-foundation.md](/e:/JetBrains/RustRover/agenta/dev_docs/execution-plans/active/fifth-milestone-remote-replica-sync-foundation.md)
-- Archived execution plans: [dev_docs/execution-plans/archive](/e:/JetBrains/RustRover/agenta/dev_docs/execution-plans/archive)
-- Product baseline: [dev_docs/baseline.md](/e:/JetBrains/RustRover/agenta/dev_docs/baseline.md)
-- Architecture notes: [dev_docs/architecture.md](/e:/JetBrains/RustRover/agenta/dev_docs/architecture.md)
+- Quickstart: [docs/cli-mcp-quickstart.md](docs/cli-mcp-quickstart.md)
+- Latest archived execution plan: [dev_docs/execution-plans/archive/fifth-milestone-remote-replica-sync-foundation.md](dev_docs/execution-plans/archive/fifth-milestone-remote-replica-sync-foundation.md)
+- Archived execution plans: [dev_docs/execution-plans/archive](dev_docs/execution-plans/archive)
+- Product baseline: [dev_docs/baseline.md](dev_docs/baseline.md)
+- Architecture notes: [dev_docs/architecture.md](dev_docs/architecture.md)

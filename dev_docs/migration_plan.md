@@ -10,10 +10,10 @@
 
 仓库当前状态：
 
-- 一个已从模板页切到状态壳的 Vue/Tauri 桌面入口
+- 一个已落地全局壳层、项目工作区、审批中心、全局搜索与 Runtime 控制台的 Vue/Tauri 桌面入口
 - 一个单 `src-tauri` Rust package
-- 已落数据库、CLI、MCP、正式领域模型
-- 已有 migration、附件落盘、FTS 与基础策略能力
+- 已落数据库、CLI、MCP、正式领域模型与 Desktop 命令桥
+- 已有 migration、附件落盘、FTS、审批回放与手动远程副本同步能力
 
 这意味着迁移主线已经走过“从 0 到 1”的阶段，下一步要避免在 Desktop 或新增能力上重新引入分叉。
 
@@ -45,9 +45,9 @@
 
 交付物：
 
-- [baseline.md](/e:/JetBrains/RustRover/agenta/dev_docs/baseline.md)
-- [tech.md](/e:/JetBrains/RustRover/agenta/dev_docs/tech.md)
-- [deps_build.md](/e:/JetBrains/RustRover/agenta/dev_docs/deps_build.md)
+- [baseline.md](baseline.md)
+- [tech.md](tech.md)
+- [deps_build.md](deps_build.md)
 - 当前文档
 
 退出条件：
@@ -166,18 +166,18 @@
 
 - 拆分带来清晰收益，而不是只带来目录变化
 
-### Phase 7: 接回 Desktop
+### Phase 7: 继续扩展 Desktop
 
 目标：
 
-- 把 Tauri 从示例壳升级为真实观察与操作界面
+- 在已落地的工作区与 Runtime 页面基础上补强真实观察与操作界面
 
 建议动作：
 
-1. 引入 `vue-router`
-2. 引入 `pinia`
-3. 用真实数据替换当前状态壳中的占位信息
-4. 建立项目、任务、附件、检索的基础界面
+1. 在既有 `vue-router` 与 `pinia` 基础上继续补强任务详情、附件与检索深链
+2. 保持“Desktop 只消费共享 contract”的薄客户端原则
+3. 为审批、Runtime 与同步链路补更多可观察性与错误反馈
+4. 继续收敛页面间的导航、滚动和上下文切换语义
 
 退出条件：
 
@@ -231,17 +231,17 @@
 
 以下问题暂按默认值处理，但仍值得尽快确认：
 
-1. 首个生产里程碑是否只要求 CLI + MCP，还是必须同时交付可用 Desktop。
-2. MCP 首发 `streamable_http` 的宿主约束已成立，后续只需评估是否补 `stdio`。
-3. PostgreSQL 是否在近两个版本内就要成为真实运行时，而不只是接口预留。
+1. 远程副本同步是否继续保持手动 `backfill / push / pull`，还是进入后台自动同步阶段。
+2. MCP 首发 `streamable_http` 的宿主约束已成立，后续是否补 `stdio` 仍需评估。
+3. Desktop 下一轮优先补任务详情/附件面板/搜索深链，还是优先补更多 Runtime 与 sync 可观察性。
 4. 是否需要支持仓库内便携模式，而不是只使用系统应用数据目录。
 
 ## 8. 推荐的立即执行项
 
 如果下一步直接开工，建议按这个顺序：
 
-1. 先收敛 CLI 与 MCP 对外 contract，补最小使用文档与示例。
-2. 为 Desktop 设计并接回第一批真实页面，继续保持薄客户端原则。
+1. 先把文档口径与当前实现重新对齐，消除“状态壳 / sync 只读诊断”等过期表述。
+2. 继续补 Desktop 的任务详情、附件、检索深链与审批交互，保持薄客户端原则。
 3. 在真实使用压力下补更细的错误码、筛选能力和人类友好输出。
-4. 评估是否需要补 `stdio` 作为 MCP 次级 transport。
-5. Desktop 稳定后再评估 workspace 拆分，而不是提前拆目录。
+4. 评估是否需要补 `stdio` 作为 MCP 次级 transport，以及是否进入后台自动同步阶段。
+5. Desktop 与 sync 主线稳定后再评估 workspace 拆分，而不是提前拆目录。
