@@ -3534,7 +3534,7 @@ impl AgentaService {
                         self.store.insert_activity_tx(&mut tx, &activity).await?;
                     }
                 }
-                self.refresh_task_context_digest_tx(&mut tx, task.task_id)
+                self.refresh_task_note_rollup_tx(&mut tx, task.task_id)
                     .await?;
 
                 self.store
