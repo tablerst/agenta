@@ -9,14 +9,17 @@ use axum::body::Body;
 use axum::http::{header::CONTENT_TYPE, Request};
 use http_body_util::BodyExt;
 use reqwest::Client;
+use rmcp::handler::server::wrapper::Parameters;
 use rmcp::transport::streamable_http_server::{
     session::local::LocalSessionManager, tower::StreamableHttpService, StreamableHttpServerConfig,
 };
 use serde_json::{json, Value};
 use tempfile::TempDir;
+use tokio::task::JoinSet;
 
 use agenta_lib::{
     app::{AppRuntime, BootstrapOptions, McpHostKind, McpLaunchOverrides, McpSessionLogger},
+    domain::{TaskPriority, TaskStatus},
     interface::mcp::AgentaMcpServer,
     service::{
         CreateAttachmentInput, CreateNoteInput, CreateProjectInput, CreateTaskInput,
@@ -458,6 +461,97 @@ async fn mcp_streamable_http_tool_call_returns_structured_content(
         payload["result"]["structuredContent"]["project"]["name"],
         "MCP Demo"
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn shared_runtime_serializes_service_and_mcp_writes() -> Result<(), Box<dyn std::error::Error>>
+{
+    let tempdir = TempDir::new()?;
+    let config_path = write_test_config(&tempdir)?;
+    let runtime = Arc::new(
+        AppRuntime::bootstrap(BootstrapOptions {
+            config_path: Some(config_path),
+        })
+        .await?,
+    );
+
+    let project = runtime
+        .service
+        .create_project(CreateProjectInput {
+            slug: "shared-runtime".to_string(),
+            name: "Shared Runtime".to_string(),
+            description: Some("Desktop UI + managed MCP".to_string()),
+        })
+        .await?;
+
+    let logger = McpSessionLogger::new(
+        "shared-runtime-session".to_string(),
+        runtime
+            .config
+            .resolve_mcp_session(McpHostKind::Standalone, &McpLaunchOverrides::default())?,
+        None,
+    );
+    let mcp_server = Arc::new(AgentaMcpServer::new(runtime.service.clone(), logger));
+
+    let mut create_set = JoinSet::new();
+    for index in 0..5 {
+        let service = runtime.service.clone();
+        let project_slug = project.slug.clone();
+        create_set.spawn(async move {
+            service
+                .create_task(CreateTaskInput {
+                    project: project_slug,
+                    version: None,
+                    title: format!("Desktop task {index}"),
+                    summary: Some(format!("Desktop summary {index}")),
+                    description: None,
+                    status: Some(TaskStatus::Ready),
+                    priority: Some(TaskPriority::Normal),
+                    created_by: Some("desktop-ui".to_string()),
+                })
+                .await
+                .map(|task| task.task_id.to_string())
+                .map_err(|error| error.to_string())
+        });
+
+        let server = mcp_server.clone();
+        let project_slug = project.slug.clone();
+        create_set.spawn(async move {
+            server
+                .task_create(Parameters(
+                    agenta_lib::interface::mcp::TaskCreateToolInput {
+                        project: project_slug,
+                        version: None,
+                        title: format!("MCP task {index}"),
+                        summary: Some(format!("MCP summary {index}")),
+                        description: None,
+                        status: Some(TaskStatus::Ready),
+                        priority: Some(TaskPriority::Normal),
+                        created_by: Some("managed-mcp".to_string()),
+                    },
+                ))
+                .await
+                .map(|payload| payload.0.task.task_id)
+                .map_err(|error| error.to_string())
+        });
+    }
+
+    let mut task_ids = Vec::new();
+    while let Some(result) = create_set.join_next().await {
+        task_ids.push(result??);
+    }
+
+    assert_eq!(task_ids.len(), 10);
+    let tasks = runtime
+        .service
+        .list_tasks(agenta_lib::service::TaskQuery {
+            project: Some(project.slug.clone()),
+            ..Default::default()
+        })
+        .await?;
+    assert_eq!(tasks.len(), 10);
 
     Ok(())
 }

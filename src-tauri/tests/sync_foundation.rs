@@ -95,10 +95,7 @@ async fn sync_migrations_create_tables_and_cli_status_is_stable(
         )
         .await?;
 
-    let output = run_cli_json(
-        &config_path,
-        &["sync", "status"],
-    )?;
+    let output = run_cli_json(&config_path, &["sync", "status"])?;
 
     assert_eq!(output["ok"], true);
     assert_eq!(output["action"], "sync.status");
@@ -114,7 +111,10 @@ async fn sync_migrations_create_tables_and_cli_status_is_stable(
     assert_eq!(output["result"]["remote"]["postgres"]["database"], "agenta");
     assert_eq!(output["result"]["remote"]["postgres"]["max_conns"], 30);
     assert_eq!(output["result"]["remote"]["postgres"]["min_conns"], 5);
-    assert_eq!(output["result"]["remote"]["postgres"]["max_conn_lifetime"], "1h");
+    assert_eq!(
+        output["result"]["remote"]["postgres"]["max_conn_lifetime"],
+        "1h"
+    );
     assert_eq!(output["result"]["pending_outbox_count"], 0);
     assert!(output["result"]["oldest_pending_at"].is_null());
     assert_eq!(output["result"]["checkpoints"]["pull"], "pull-cursor-1");
@@ -210,11 +210,21 @@ async fn sync_core_writes_enqueue_outbox_and_cli_lists_recent_items(
 
     let outbox = runtime.service.list_sync_outbox(Some(20)).await?;
     assert_eq!(outbox.len(), 7);
-    assert!(outbox.iter().any(|item| item.entity_kind == SyncEntityKind::Project));
-    assert!(outbox.iter().any(|item| item.entity_kind == SyncEntityKind::Version));
-    assert!(outbox.iter().any(|item| item.entity_kind == SyncEntityKind::Task));
-    assert!(outbox.iter().any(|item| item.entity_kind == SyncEntityKind::Note));
-    assert!(outbox.iter().any(|item| item.entity_kind == SyncEntityKind::Attachment));
+    assert!(outbox
+        .iter()
+        .any(|item| item.entity_kind == SyncEntityKind::Project));
+    assert!(outbox
+        .iter()
+        .any(|item| item.entity_kind == SyncEntityKind::Version));
+    assert!(outbox
+        .iter()
+        .any(|item| item.entity_kind == SyncEntityKind::Task));
+    assert!(outbox
+        .iter()
+        .any(|item| item.entity_kind == SyncEntityKind::Note));
+    assert!(outbox
+        .iter()
+        .any(|item| item.entity_kind == SyncEntityKind::Attachment));
 
     let store = SqliteStore::open(
         &runtime.config.paths.data_dir,
@@ -269,10 +279,7 @@ async fn sync_core_writes_enqueue_outbox_and_cli_lists_recent_items(
     assert!(payload_json.contains(&attachment.storage_path));
     assert!(!payload_json.contains("sync attachment payload"));
 
-    let cli_outbox = run_cli_json(
-        &config_path,
-        &["sync", "outbox", "list", "--limit", "3"],
-    )?;
+    let cli_outbox = run_cli_json(&config_path, &["sync", "outbox", "list", "--limit", "3"])?;
     let items = cli_outbox["result"]
         .as_array()
         .expect("sync outbox list result array");
@@ -304,9 +311,7 @@ async fn approval_replay_writes_sync_outbox_entries() -> Result<(), Box<dyn std:
         &tempdir,
         "primary",
         true,
-        Some(
-            "policy:\n  default: auto\n  actions:\n    project.create: require_human\n",
-        ),
+        Some("policy:\n  default: auto\n  actions:\n    project.create: require_human\n"),
     )?;
     let runtime = AppRuntime::bootstrap(BootstrapOptions {
         config_path: Some(config_path),
@@ -386,7 +391,9 @@ async fn forced_sync_outbox_failure_rolls_back_project_write(
         })
         .await
         .expect_err("forced sync failure should roll back project");
-    assert!(error.to_string().contains("forced sync outbox write failure"));
+    assert!(error
+        .to_string()
+        .contains("forced sync outbox write failure"));
 
     std::env::remove_var(FAIL_SYNC_OUTBOX_WRITE_ENV);
 
@@ -458,13 +465,19 @@ async fn forced_sync_outbox_failure_rolls_back_attachment_and_cleans_file(
         .expect_err("forced sync failure should roll back attachment");
     std::env::remove_var(FAIL_SYNC_OUTBOX_WRITE_ENV);
 
-    assert!(error.to_string().contains("forced sync outbox write failure"));
+    assert!(error
+        .to_string()
+        .contains("forced sync outbox write failure"));
     assert!(runtime
         .service
         .list_attachments(&task.task_id.to_string())
         .await?
         .is_empty());
-    assert!(runtime.service.list_task_activities(&task.task_id.to_string()).await?.is_empty());
+    assert!(runtime
+        .service
+        .list_task_activities(&task.task_id.to_string())
+        .await?
+        .is_empty());
 
     let task_dir = runtime
         .config
@@ -573,10 +586,7 @@ async fn sync_backfill_enqueues_existing_local_data_idempotently(
     assert_eq!(second.queued, 0);
     assert_eq!(second.skipped, 5);
 
-    let cli_backfill = run_cli_json(
-        &enabled_config,
-        &["sync", "backfill", "--limit", "20"],
-    )?;
+    let cli_backfill = run_cli_json(&enabled_config, &["sync", "backfill", "--limit", "20"])?;
     assert_eq!(cli_backfill["ok"], true);
     assert_eq!(cli_backfill["action"], "sync.backfill");
     assert_eq!(cli_backfill["result"]["queued"], 0);
@@ -589,8 +599,8 @@ async fn sync_backfill_enqueues_existing_local_data_idempotently(
 }
 
 #[tokio::test]
-async fn postgres_remote_smoke_connects_when_env_present(
-) -> Result<(), Box<dyn std::error::Error>> {
+async fn postgres_remote_smoke_connects_when_env_present() -> Result<(), Box<dyn std::error::Error>>
+{
     let _guard = environment_lock().lock().expect("lock environment");
     if std::env::var_os(POSTGRES_DSN_ENV).is_none() {
         return Ok(());
@@ -716,10 +726,19 @@ async fn postgres_remote_round_trip_pushes_and_pulls_between_runtimes(
     let pull_summary = receiver.service.sync_pull(Some(50)).await?;
     assert!(pull_summary.applied >= 5);
 
-    let pulled_project = receiver.service.get_project(&project.project_id.to_string()).await?;
-    let pulled_version = receiver.service.get_version(&version.version_id.to_string()).await?;
+    let pulled_project = receiver
+        .service
+        .get_project(&project.project_id.to_string())
+        .await?;
+    let pulled_version = receiver
+        .service
+        .get_version(&version.version_id.to_string())
+        .await?;
     let pulled_task = receiver.service.get_task(&task.task_id.to_string()).await?;
-    let pulled_notes = receiver.service.list_notes(&task.task_id.to_string()).await?;
+    let pulled_notes = receiver
+        .service
+        .list_notes(&task.task_id.to_string())
+        .await?;
     let pulled_attachments = receiver
         .service
         .list_attachments(&task.task_id.to_string())
@@ -731,7 +750,10 @@ async fn postgres_remote_round_trip_pushes_and_pulls_between_runtimes(
     assert_eq!(pulled_notes.len(), 1);
     assert_eq!(pulled_notes[0].activity_id, note.activity_id);
     assert_eq!(pulled_attachments.len(), 1);
-    assert_eq!(pulled_attachments[0].attachment_id, attachment.attachment_id);
+    assert_eq!(
+        pulled_attachments[0].attachment_id,
+        attachment.attachment_id
+    );
     assert!(receiver
         .config
         .paths
@@ -770,10 +792,7 @@ fn write_test_config(
     Ok(config_path)
 }
 
-fn run_cli_json(
-    config_path: &Path,
-    args: &[&str],
-) -> Result<Value, Box<dyn std::error::Error>> {
+fn run_cli_json(config_path: &Path, args: &[&str]) -> Result<Value, Box<dyn std::error::Error>> {
     let mut command = Command::cargo_bin("agenta")?;
     let output = command
         .arg("--config")

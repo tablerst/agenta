@@ -88,7 +88,9 @@ impl PostgresSyncRemote {
         let pool = tokio::time::timeout(Duration::from_secs(5), pool_options.connect_with(options))
             .await
             .map_err(|_| AppError::Io("timed out while connecting to sync postgres".to_string()))?
-            .map_err(|error| AppError::Io(format!("failed to connect to sync postgres: {error}")))?;
+            .map_err(|error| {
+                AppError::Io(format!("failed to connect to sync postgres: {error}"))
+            })?;
 
         Ok(Self { pool })
     }
@@ -105,7 +107,9 @@ impl PostgresSyncRemote {
         raw_sql(REMOTE_SCHEMA_SQL)
             .execute(&self.pool)
             .await
-            .map_err(|error| AppError::Io(format!("failed to initialize remote sync schema: {error}")))?;
+            .map_err(|error| {
+                AppError::Io(format!("failed to initialize remote sync schema: {error}"))
+            })?;
         Ok(())
     }
 
@@ -117,7 +121,9 @@ impl PostgresSyncRemote {
     ) -> AppResult<PushAck> {
         let remote_entity_id = entry.local_id.to_string();
         let mut tx = self.pool.begin().await.map_err(|error| {
-            AppError::Io(format!("failed to begin remote postgres transaction: {error}"))
+            AppError::Io(format!(
+                "failed to begin remote postgres transaction: {error}"
+            ))
         })?;
 
         query(
@@ -157,18 +163,14 @@ impl PostgresSyncRemote {
                 .get("sha256")
                 .and_then(Value::as_str)
                 .ok_or_else(|| {
-                    AppError::InvalidArguments(
-                        "attachment sync payload missing sha256".to_string(),
-                    )
+                    AppError::InvalidArguments("attachment sync payload missing sha256".to_string())
                 })?;
             let mime = entry
                 .payload_json
                 .get("mime")
                 .and_then(Value::as_str)
                 .ok_or_else(|| {
-                    AppError::InvalidArguments(
-                        "attachment sync payload missing mime".to_string(),
-                    )
+                    AppError::InvalidArguments("attachment sync payload missing mime".to_string())
                 })?;
             let size_bytes = entry
                 .payload_json
@@ -182,7 +184,9 @@ impl PostgresSyncRemote {
             let content = tokio::fs::read(attachments_dir.join(storage_path))
                 .await
                 .map_err(|error| {
-                    AppError::Io(format!("failed to read local attachment for remote push: {error}"))
+                    AppError::Io(format!(
+                        "failed to read local attachment for remote push: {error}"
+                    ))
                 })?;
 
             query(
@@ -284,9 +288,8 @@ impl PostgresSyncRemote {
 }
 
 fn map_remote_mutation(row: PgRow) -> AppResult<RemoteMutation> {
-    let local_id = Uuid::parse_str(row.get::<String, _>("local_id").as_str()).map_err(|error| {
-        AppError::Storage(format!("invalid remote local_id uuid: {error}"))
-    })?;
+    let local_id = Uuid::parse_str(row.get::<String, _>("local_id").as_str())
+        .map_err(|error| AppError::Storage(format!("invalid remote local_id uuid: {error}")))?;
     let payload_json = row.get::<Value, _>("payload_json");
 
     Ok(RemoteMutation {

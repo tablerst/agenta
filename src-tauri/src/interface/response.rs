@@ -71,7 +71,9 @@ fn any_json_schema(_: &mut SchemaGenerator) -> Schema {
 mod tests {
     use schemars::schema_for;
 
-    use super::SuccessEnvelope;
+    use crate::error::AppError;
+
+    use super::{error, SuccessEnvelope};
 
     #[test]
     fn success_envelope_result_schema_uses_object_schema_for_any_json() {
@@ -89,5 +91,14 @@ mod tests {
                 .is_empty(),
             "result schema should stay permissive for arbitrary JSON payloads"
         );
+    }
+
+    #[test]
+    fn storage_busy_error_envelope_keeps_retryable_code_and_details() {
+        let envelope = error(&AppError::StorageBusy("database is locked".to_string()));
+
+        assert_eq!(envelope.error.code, "storage_busy");
+        assert_eq!(envelope.error.details["retryable"], true);
+        assert_eq!(envelope.error.details["message"], "database is locked");
     }
 }

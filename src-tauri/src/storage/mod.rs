@@ -6,6 +6,7 @@ mod sync;
 mod tasks;
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 use sqlx::SqlitePool;
@@ -51,7 +52,8 @@ impl SqliteStore {
             .filename(database_path)
             .create_if_missing(true)
             .foreign_keys(true)
-            .journal_mode(SqliteJournalMode::Wal);
+            .journal_mode(SqliteJournalMode::Wal)
+            .busy_timeout(Duration::from_secs(5));
         let pool = SqlitePoolOptions::new()
             .max_connections(5)
             .connect_with(options)

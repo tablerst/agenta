@@ -29,6 +29,8 @@ pub enum AppError {
     },
     #[error("storage error: {0}")]
     Storage(String),
+    #[error("storage is busy: {0}")]
+    StorageBusy(String),
     #[error("i/o error: {0}")]
     Io(String),
     #[error("internal error: {0}")]
@@ -48,6 +50,7 @@ impl AppError {
                 WriteDecision::RequireHuman => "requires_human_review",
                 WriteDecision::Deny => "policy_blocked",
             },
+            Self::StorageBusy(_) => "storage_busy",
             Self::Storage(_) | Self::Io(_) | Self::Internal(_) => "internal_error",
         }
     }
@@ -65,6 +68,10 @@ impl AppError {
             | Self::Storage(message)
             | Self::Io(message)
             | Self::Internal(message) => json!({ "message": message }),
+            Self::StorageBusy(message) => json!({
+                "message": message,
+                "retryable": true,
+            }),
             Self::NotFound { entity, reference } => {
                 json!({ "entity": entity, "reference": reference })
             }
@@ -99,7 +106,12 @@ impl From<std::io::Error> for AppError {
 
 impl From<sqlx::Error> for AppError {
     fn from(error: sqlx::Error) -> Self {
-        Self::Storage(error.to_string())
+        let message = error.to_string();
+        if is_sqlite_busy_error(&error) {
+            Self::StorageBusy(message)
+        } else {
+            Self::Storage(message)
+        }
     }
 }
 
@@ -107,4 +119,31 @@ impl From<serde_yaml::Error> for AppError {
     fn from(error: serde_yaml::Error) -> Self {
         Self::Config(error.to_string())
     }
+}
+
+fn is_sqlite_busy_error(error: &sqlx::Error) -> bool {
+    match error {
+        sqlx::Error::Database(database_error) => {
+            if database_error
+                .code()
+                .and_then(|code| code.parse::<i32>().ok())
+                .is_some_and(|code| matches!(code & 0xff, 5 | 6))
+            {
+                return true;
+            }
+
+            is_sqlite_busy_message(database_error.message())
+        }
+        _ => is_sqlite_busy_message(&error.to_string()),
+    }
+}
+
+fn is_sqlite_busy_message(message: &str) -> bool {
+    let normalized = message.to_ascii_lowercase();
+    normalized.contains("database is locked")
+        || normalized.contains("database file is locked")
+        || normalized.contains("database table is locked")
+        || normalized.contains("table in the database is locked")
+        || normalized.contains("sqlite_busy")
+        || normalized.contains("sqlite_locked")
 }

@@ -1,4 +1,9 @@
+use std::sync::Arc;
+
+use sqlx::sqlite::SqliteConnectOptions;
+use sqlx::{Connection, Executor, SqliteConnection};
 use tempfile::TempDir;
+use tokio::task::JoinSet;
 
 use agenta_lib::{
     app::{AppRuntime, BootstrapOptions},
@@ -79,7 +84,10 @@ async fn workspace_flow_persists_updates_filters_and_paginates(
         )
         .await?;
     assert_eq!(updated_project.name, "Workspace Alpha Prime");
-    assert_eq!(updated_project.default_version_id, Some(alpha_v2.version_id));
+    assert_eq!(
+        updated_project.default_version_id,
+        Some(alpha_v2.version_id)
+    );
 
     let foreign_default_error = runtime
         .service
@@ -317,4 +325,208 @@ fn write_test_config(tempdir: &TempDir) -> Result<std::path::PathBuf, Box<dyn st
 
 fn normalize_path_for_yaml(path: &std::path::Path) -> String {
     path.to_string_lossy().replace('\\', "/")
+}
+
+#[tokio::test]
+async fn concurrent_writes_share_the_same_runtime_write_queue(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let tempdir = TempDir::new()?;
+    let config_path = write_test_config(&tempdir)?;
+    let runtime = Arc::new(
+        AppRuntime::bootstrap(BootstrapOptions {
+            config_path: Some(config_path),
+        })
+        .await?,
+    );
+
+    let project = runtime
+        .service
+        .create_project(CreateProjectInput {
+            slug: "queue-runtime".to_string(),
+            name: "Queue Runtime".to_string(),
+            description: Some("Concurrent write regression".to_string()),
+        })
+        .await?;
+    let version = runtime
+        .service
+        .create_version(CreateVersionInput {
+            project: project.slug.clone(),
+            name: "Queue Runtime v1".to_string(),
+            description: Some("Concurrent lane".to_string()),
+            status: Some(VersionStatus::Active),
+        })
+        .await?;
+
+    let mut create_set = JoinSet::new();
+    for index in 0..8 {
+        let service = runtime.service.clone();
+        let project_slug = project.slug.clone();
+        let version_id = version.version_id.to_string();
+        create_set.spawn(async move {
+            service
+                .create_task(CreateTaskInput {
+                    project: project_slug,
+                    version: Some(version_id),
+                    title: format!("Concurrent task {index}"),
+                    summary: Some(format!("Concurrent summary {index}")),
+                    description: Some(format!("Concurrent description {index}")),
+                    status: Some(TaskStatus::Ready),
+                    priority: Some(TaskPriority::Normal),
+                    created_by: Some("queue-test".to_string()),
+                })
+                .await
+        });
+    }
+
+    let mut task_ids = Vec::new();
+    while let Some(result) = create_set.join_next().await {
+        let task = result??;
+        task_ids.push(task.task_id.to_string());
+    }
+    assert_eq!(task_ids.len(), 8);
+
+    let mut mutation_set = JoinSet::new();
+    for (index, task_id) in task_ids.iter().enumerate() {
+        let note_service = runtime.service.clone();
+        let note_task_id = task_id.clone();
+        mutation_set.spawn(async move {
+            note_service
+                .create_note(CreateNoteInput {
+                    task: note_task_id,
+                    content: format!("Concurrent note {index}"),
+                    created_by: Some("queue-test".to_string()),
+                })
+                .await
+                .map(|_| None)
+        });
+
+        let update_service = runtime.service.clone();
+        let update_task_id = task_id.clone();
+        mutation_set.spawn(async move {
+            update_service
+                .update_task(
+                    &update_task_id,
+                    UpdateTaskInput {
+                        summary: Some(format!("Updated summary {index}")),
+                        description: Some(format!("Updated description {index}")),
+                        status: Some(TaskStatus::InProgress),
+                        priority: Some(TaskPriority::High),
+                        updated_by: Some("queue-reviewer".to_string()),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .map(|_| None)
+        });
+    }
+
+    let mut expected_attachment_paths = Vec::new();
+    for index in 0..4 {
+        let source = tempdir.path().join(format!("queue-attachment-{index}.txt"));
+        std::fs::write(&source, format!("attachment payload {index}"))?;
+        let service = runtime.service.clone();
+        let task_id = task_ids[index].clone();
+        mutation_set.spawn(async move {
+            service
+                .create_attachment(CreateAttachmentInput {
+                    task: task_id,
+                    path: source,
+                    kind: None,
+                    created_by: Some("queue-test".to_string()),
+                    summary: Some(format!("Concurrent attachment {index}")),
+                })
+                .await
+                .map(|attachment| Some(attachment.storage_path))
+        });
+    }
+
+    while let Some(result) = mutation_set.join_next().await {
+        match result?? {
+            Some(storage_path) => expected_attachment_paths.push(storage_path),
+            None => {}
+        }
+    }
+
+    let sample_context = runtime
+        .service
+        .get_task_context(&task_ids[0], Some(10))
+        .await?;
+    assert_eq!(sample_context.notes.len(), 1);
+    assert_eq!(sample_context.attachments.len(), 1);
+    assert!(sample_context
+        .recent_activities
+        .iter()
+        .any(|activity| activity.kind == TaskActivityKind::StatusChange));
+
+    for task_id in task_ids.iter().take(4) {
+        let attachments = runtime.service.list_attachments(task_id).await?;
+        assert_eq!(attachments.len(), 1);
+    }
+
+    for storage_path in expected_attachment_paths {
+        assert!(runtime
+            .config
+            .paths
+            .attachments_dir
+            .join(storage_path)
+            .exists());
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn cross_connection_write_lock_returns_storage_busy() -> Result<(), Box<dyn std::error::Error>>
+{
+    let tempdir = TempDir::new()?;
+    let config_path = write_test_config(&tempdir)?;
+    let runtime = AppRuntime::bootstrap(BootstrapOptions {
+        config_path: Some(config_path),
+    })
+    .await?;
+
+    let project = runtime
+        .service
+        .create_project(CreateProjectInput {
+            slug: "busy-project".to_string(),
+            name: "Busy Project".to_string(),
+            description: Some("Storage busy regression".to_string()),
+        })
+        .await?;
+
+    let mut lock_holder = SqliteConnection::connect_with(
+        &SqliteConnectOptions::new().filename(&runtime.config.paths.database_path),
+    )
+    .await?;
+    lock_holder.execute("BEGIN IMMEDIATE").await?;
+
+    let result = runtime
+        .service
+        .create_task(CreateTaskInput {
+            project: project.slug,
+            version: None,
+            title: "Blocked by external write lock".to_string(),
+            summary: Some("Should surface storage_busy".to_string()),
+            description: None,
+            status: Some(TaskStatus::Ready),
+            priority: Some(TaskPriority::Normal),
+            created_by: Some("busy-test".to_string()),
+        })
+        .await;
+
+    lock_holder.execute("ROLLBACK").await?;
+
+    match result {
+        Err(AppError::StorageBusy(message)) => {
+            let normalized = message.to_ascii_lowercase();
+            assert!(
+                normalized.contains("locked") || normalized.contains("busy"),
+                "unexpected storage busy message: {message}"
+            );
+        }
+        Err(other) => panic!("expected storage busy error, got {other:?}"),
+        Ok(task) => panic!("expected storage busy error, got task {}", task.task_id),
+    }
+
+    Ok(())
 }

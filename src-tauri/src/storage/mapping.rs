@@ -7,8 +7,8 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::domain::{
-    ApprovalRequest, Attachment, Project, SyncCheckpoint, SyncEntityState, SyncTombstone,
-    SyncOutboxEntry, Task, TaskActivity, Version,
+    ApprovalRequest, Attachment, Project, SyncCheckpoint, SyncEntityState, SyncOutboxEntry,
+    SyncTombstone, Task, TaskActivity, Version,
 };
 use crate::error::{AppError, AppResult};
 

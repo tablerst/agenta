@@ -429,8 +429,7 @@ pub fn load_runtime_config(explicit_config_path: Option<PathBuf>) -> AppResult<R
                 )?;
                 if min_conns > max_conns {
                     return Err(AppError::Config(
-                        "sync.remote.postgres.min_conns must not exceed max_conns"
-                            .to_string(),
+                        "sync.remote.postgres.min_conns must not exceed max_conns".to_string(),
                     ));
                 }
                 let max_conn_lifetime = parse_duration_with_default(
@@ -589,9 +588,9 @@ fn parse_u32_with_default(value: Option<&str>, default: u32, field: &str) -> App
         None => default.to_string(),
     };
     let raw = expand_env_vars(&raw_input)?;
-    raw.trim().parse::<u32>().map_err(|error| {
-        AppError::Config(format!("invalid {field}: {error}"))
-    })
+    raw.trim()
+        .parse::<u32>()
+        .map_err(|error| AppError::Config(format!("invalid {field}: {error}")))
 }
 
 fn parse_duration_with_default(
@@ -877,7 +876,10 @@ mod tests {
         let _guard = environment_lock().lock().expect("lock test environment");
         let tempdir = tempdir().expect("tempdir");
         let config_path = tempdir.path().join("agenta.local.yaml");
-        std::env::set_var("POSTGRES_DSN", "postgres://sync:secret@example.invalid:5432/agenta?sslmode=disable");
+        std::env::set_var(
+            "POSTGRES_DSN",
+            "postgres://sync:secret@example.invalid:5432/agenta?sslmode=disable",
+        );
         std::env::set_var("POSTGRES_MAX_CONNS", "30");
         std::env::set_var("POSTGRES_MIN_CONNS", "5");
         std::env::set_var("POSTGRES_MAX_CONN_LIFETIME", "1h");
@@ -899,7 +901,10 @@ mod tests {
         );
         assert_eq!(remote.postgres.max_conns, 30);
         assert_eq!(remote.postgres.min_conns, 5);
-        assert_eq!(remote.postgres.max_conn_lifetime, humantime::parse_duration("1h").unwrap());
+        assert_eq!(
+            remote.postgres.max_conn_lifetime,
+            humantime::parse_duration("1h").unwrap()
+        );
 
         std::env::remove_var("POSTGRES_DSN");
         std::env::remove_var("POSTGRES_MAX_CONNS");
@@ -912,7 +917,10 @@ mod tests {
         let _guard = environment_lock().lock().expect("lock test environment");
         let tempdir = tempdir().expect("tempdir");
         let config_path = tempdir.path().join("agenta.local.yaml");
-        std::env::set_var("POSTGRES_DSN", "postgres://sync:secret@example.invalid:5432/agenta?sslmode=disable");
+        std::env::set_var(
+            "POSTGRES_DSN",
+            "postgres://sync:secret@example.invalid:5432/agenta?sslmode=disable",
+        );
         std::fs::write(
             &config_path,
             "sync:\n  enabled: true\n  mode: manual_bidirectional\n  remote:\n    kind: postgres\n    postgres:\n      dsn: ${POSTGRES_DSN}\n",
@@ -920,7 +928,9 @@ mod tests {
         .expect("write config");
 
         let error = load_runtime_config(Some(config_path)).expect_err("missing remote id");
-        assert!(error.to_string().contains("sync.remote.id must not be empty"));
+        assert!(error
+            .to_string()
+            .contains("sync.remote.id must not be empty"));
         std::env::remove_var("POSTGRES_DSN");
     }
 
@@ -929,7 +939,10 @@ mod tests {
         let _guard = environment_lock().lock().expect("lock test environment");
         let tempdir = tempdir().expect("tempdir");
         let config_path = tempdir.path().join("agenta.local.yaml");
-        std::env::set_var("POSTGRES_DSN", "postgres://sync:secret@example.invalid:5432/agenta?sslmode=disable");
+        std::env::set_var(
+            "POSTGRES_DSN",
+            "postgres://sync:secret@example.invalid:5432/agenta?sslmode=disable",
+        );
         std::fs::write(
             &config_path,
             "sync:\n  enabled: true\n  mode: manual_bidirectional\n  remote:\n    id: primary\n    postgres:\n      dsn: ${POSTGRES_DSN}\n",
@@ -937,7 +950,9 @@ mod tests {
         .expect("write config");
 
         let error = load_runtime_config(Some(config_path)).expect_err("missing remote kind");
-        assert!(error.to_string().contains("sync.remote.kind must not be empty"));
+        assert!(error
+            .to_string()
+            .contains("sync.remote.kind must not be empty"));
         std::env::remove_var("POSTGRES_DSN");
     }
 
@@ -962,7 +977,10 @@ mod tests {
         let _guard = environment_lock().lock().expect("lock test environment");
         let tempdir = tempdir().expect("tempdir");
         let config_path = tempdir.path().join("agenta.local.yaml");
-        std::env::set_var("POSTGRES_DSN", "postgres://sync:secret@example.invalid:5432/agenta?sslmode=disable");
+        std::env::set_var(
+            "POSTGRES_DSN",
+            "postgres://sync:secret@example.invalid:5432/agenta?sslmode=disable",
+        );
         std::fs::write(
             &config_path,
             "sync:\n  enabled: true\n  mode: manual_bidirectional\n  remote:\n    id: primary\n    kind: postgres\n    postgres:\n      dsn: ${POSTGRES_DSN}\n      max_conns: 5\n      min_conns: 6\n",

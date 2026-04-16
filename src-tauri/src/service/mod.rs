@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -5,13 +7,14 @@ use serde_json::{json, Value};
 use sqlx::{Sqlite, Transaction};
 use time::OffsetDateTime;
 use tokio::fs;
-use uuid::Uuid;
+use tokio::sync::Mutex;
 use url::Url;
+use uuid::Uuid;
 
 use crate::app::{SyncConfig, SyncRemoteConfig, SyncRemoteKind};
 use crate::domain::{
     ApprovalRequest, ApprovalRequestedVia, ApprovalStatus, Attachment, AttachmentKind, Project,
-    ProjectStatus, SyncCheckpointKind, SyncEntityKind, SyncOperation, SyncOutboxStatus, SyncMode,
+    ProjectStatus, SyncCheckpointKind, SyncEntityKind, SyncMode, SyncOperation, SyncOutboxStatus,
     Task, TaskActivity, TaskActivityKind, TaskPriority, TaskStatus, Version, VersionStatus,
 };
 use crate::error::{AppError, AppResult};
@@ -28,6 +31,7 @@ pub struct AgentaService {
     store: SqliteStore,
     policy: PolicyEngine,
     sync: SyncConfig,
+    write_queue: Arc<Mutex<()>>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -292,7 +296,12 @@ impl RequestOrigin {
 
 impl AgentaService {
     pub fn new(store: SqliteStore, policy: PolicyEngine, sync: SyncConfig) -> Self {
-        Self { store, policy, sync }
+        Self {
+            store,
+            policy,
+            sync,
+            write_queue: Arc::new(Mutex::new(())),
+        }
     }
 
     pub async fn service_overview(&self) -> AppResult<ServiceOverview> {
@@ -350,6 +359,7 @@ impl AgentaService {
         let remote = self
             .sync_remote()
             .ok_or_else(|| AppError::Conflict("sync is not enabled".to_string()))?;
+        let _write_guard = self.write_queue.lock().await;
         let max_to_queue = limit.unwrap_or(1000).clamp(1, 10_000);
         let mut summary = SyncBackfillSummary::default();
 
@@ -489,14 +499,11 @@ impl AgentaService {
 
         for entry in entries {
             match remote
-                .push_outbox_entry(
-                    &remote_config.id,
-                    &entry,
-                    &self.store.attachments_dir,
-                )
+                .push_outbox_entry(&remote_config.id, &entry, &self.store.attachments_dir)
                 .await
             {
                 Ok(ack) => {
+                    let _write_guard = self.write_queue.lock().await;
                     self.store
                         .mark_sync_outbox_acked(entry.mutation_id, ack.acked_at)
                         .await?;
@@ -523,6 +530,7 @@ impl AgentaService {
                 }
                 Err(error) => {
                     let failed_at = OffsetDateTime::now_utc();
+                    let _write_guard = self.write_queue.lock().await;
                     self.store
                         .mark_sync_outbox_failed(entry.mutation_id, failed_at, &error.to_string())
                         .await?;
@@ -559,20 +567,26 @@ impl AgentaService {
         };
 
         for mutation in mutations {
-            let applied = self.apply_remote_mutation(&remote_config.id, &mutation).await?;
+            let applied = {
+                let _write_guard = self.write_queue.lock().await;
+                let applied = self
+                    .apply_remote_mutation(&remote_config.id, &mutation)
+                    .await?;
+                self.store
+                    .upsert_sync_checkpoint(
+                        &remote_config.id,
+                        SyncCheckpointKind::Pull,
+                        &mutation.remote_mutation_id.to_string(),
+                        mutation.created_at,
+                    )
+                    .await?;
+                applied
+            };
             if applied {
                 summary.applied += 1;
             } else {
                 summary.skipped += 1;
             }
-            self.store
-                .upsert_sync_checkpoint(
-                    &remote_config.id,
-                    SyncCheckpointKind::Pull,
-                    &mutation.remote_mutation_id.to_string(),
-                    mutation.created_at,
-                )
-                .await?;
             summary.last_remote_mutation_id = Some(mutation.remote_mutation_id);
         }
 
@@ -623,6 +637,7 @@ impl AgentaService {
             actor_or_default(None, origin),
             &input,
         )?;
+        let _write_guard = self.write_queue.lock().await;
         self.create_project_internal(input, ApprovalMode::Standard(approval))
             .await
     }
@@ -670,6 +685,7 @@ impl AgentaService {
                 input: input.clone(),
             },
         )?;
+        let _write_guard = self.write_queue.lock().await;
         self.update_project_internal(reference, input, ApprovalMode::Standard(approval))
             .await
     }
@@ -694,6 +710,7 @@ impl AgentaService {
             actor_or_default(None, origin),
             &input,
         )?;
+        let _write_guard = self.write_queue.lock().await;
         self.create_version_internal(input, ApprovalMode::Standard(approval))
             .await
     }
@@ -749,6 +766,7 @@ impl AgentaService {
                 input: input.clone(),
             },
         )?;
+        let _write_guard = self.write_queue.lock().await;
         self.update_version_internal(reference, input, ApprovalMode::Standard(approval))
             .await
     }
@@ -776,6 +794,7 @@ impl AgentaService {
             actor_or_default(input.created_by.as_deref(), origin),
             &input,
         )?;
+        let _write_guard = self.write_queue.lock().await;
         self.create_task_internal(input, ApprovalMode::Standard(approval))
             .await
     }
@@ -856,6 +875,7 @@ impl AgentaService {
                 input: input.clone(),
             },
         )?;
+        let _write_guard = self.write_queue.lock().await;
         self.update_task_internal(reference, input, ApprovalMode::Standard(approval))
             .await
     }
@@ -883,6 +903,7 @@ impl AgentaService {
             actor_or_default(input.created_by.as_deref(), origin),
             &input,
         )?;
+        let _write_guard = self.write_queue.lock().await;
         self.create_note_internal(input, ApprovalMode::Standard(approval))
             .await
     }
@@ -963,6 +984,7 @@ impl AgentaService {
             actor_or_default(input.created_by.as_deref(), origin),
             &input,
         )?;
+        let _write_guard = self.write_queue.lock().await;
         self.create_attachment_internal(input, ApprovalMode::Standard(approval))
             .await
     }
@@ -1063,6 +1085,7 @@ impl AgentaService {
         request_id: &str,
         input: ReviewApprovalInput,
     ) -> AppResult<ApprovalRequest> {
+        let _write_guard = self.write_queue.lock().await;
         let request_id = parse_uuid(request_id, "request_id")?;
         let mut request = self.store.get_approval_request(request_id).await?;
         ensure_pending(&request)?;
@@ -1098,6 +1121,7 @@ impl AgentaService {
         request_id: &str,
         input: ReviewApprovalInput,
     ) -> AppResult<ApprovalRequest> {
+        let _write_guard = self.write_queue.lock().await;
         let request_id = parse_uuid(request_id, "request_id")?;
         let mut request = self.store.get_approval_request(request_id).await?;
         ensure_pending(&request)?;
@@ -1176,7 +1200,10 @@ impl AgentaService {
             project.status = status;
         }
         if let Some(default_version) = input.default_version {
-            let version = self.store.get_version_by_ref_tx(&mut tx, &default_version).await?;
+            let version = self
+                .store
+                .get_version_by_ref_tx(&mut tx, &default_version)
+                .await?;
             if version.project_id != project.project_id {
                 return Err(AppError::Conflict(
                     "default version must belong to the target project".to_string(),
@@ -1206,7 +1233,10 @@ impl AgentaService {
     ) -> AppResult<Version> {
         self.enforce("version.create", mode).await?;
         let mut tx = self.store.pool.begin().await?;
-        let mut project = self.store.get_project_by_ref_tx(&mut tx, &input.project).await?;
+        let mut project = self
+            .store
+            .get_project_by_ref_tx(&mut tx, &input.project)
+            .await?;
         let now = OffsetDateTime::now_utc();
         let version = Version {
             version_id: Uuid::new_v4(),
@@ -1292,7 +1322,10 @@ impl AgentaService {
     ) -> AppResult<Task> {
         self.enforce("task.create", mode).await?;
         let mut tx = self.store.pool.begin().await?;
-        let project = self.store.get_project_by_ref_tx(&mut tx, &input.project).await?;
+        let project = self
+            .store
+            .get_project_by_ref_tx(&mut tx, &input.project)
+            .await?;
         let version_id = self
             .resolve_version_for_project_tx(&mut tx, project.project_id, input.version.as_deref())
             .await?;
@@ -1509,7 +1542,9 @@ impl AgentaService {
         let mut tx = self.store.pool.begin().await?;
         let result = async {
             let _ = self.store.get_task_by_ref_tx(&mut tx, &input.task).await?;
-            self.store.insert_attachment_tx(&mut tx, &attachment).await?;
+            self.store
+                .insert_attachment_tx(&mut tx, &attachment)
+                .await?;
             self.store.insert_activity_tx(&mut tx, &activity).await?;
             self.enqueue_sync_mutation_tx(
                 &mut tx,
@@ -1900,12 +1935,18 @@ impl AgentaService {
         payload: &T,
         updated_at: OffsetDateTime,
     ) -> AppResult<bool> {
-        if self.store.get_sync_entity(entity_kind, local_id).await?.is_some() {
+        if self
+            .store
+            .get_sync_entity(entity_kind, local_id)
+            .await?
+            .is_some()
+        {
             return Ok(false);
         }
 
-        let payload_json = serde_json::to_value(payload)
-            .map_err(|error| AppError::internal(format!("failed to serialize sync payload: {error}")))?;
+        let payload_json = serde_json::to_value(payload).map_err(|error| {
+            AppError::internal(format!("failed to serialize sync payload: {error}"))
+        })?;
         let mut tx = self.store.pool.begin().await?;
         self.store
             .record_sync_mutation_tx(
@@ -2005,11 +2046,10 @@ impl AgentaService {
                 Ok(true)
             }
             SyncEntityKind::Task => {
-                let task: Task = serde_json::from_value(mutation.payload_json.clone()).map_err(
-                    |error| {
+                let task: Task =
+                    serde_json::from_value(mutation.payload_json.clone()).map_err(|error| {
                         AppError::InvalidArguments(format!("invalid remote task payload: {error}"))
-                    },
-                )?;
+                    })?;
                 let mut tx = self.store.pool.begin().await?;
                 let previous = match self
                     .store
@@ -2029,8 +2069,10 @@ impl AgentaService {
 
                 if let Some(previous) = previous {
                     if previous.status != task.status {
-                        let content =
-                            format!("Status changed from {} to {}.", previous.status, task.status);
+                        let content = format!(
+                            "Status changed from {} to {}.",
+                            previous.status, task.status
+                        );
                         let activity = TaskActivity {
                             activity_id: Uuid::new_v4(),
                             task_id: task.task_id,
@@ -2068,9 +2110,7 @@ impl AgentaService {
             SyncEntityKind::Note => {
                 let activity: TaskActivity = serde_json::from_value(mutation.payload_json.clone())
                     .map_err(|error| {
-                        AppError::InvalidArguments(format!(
-                            "invalid remote note payload: {error}"
-                        ))
+                        AppError::InvalidArguments(format!("invalid remote note payload: {error}"))
                     })?;
                 let mut tx = self.store.pool.begin().await?;
                 let exists = sqlx::query("SELECT 1 FROM task_activities WHERE activity_id = ?")
@@ -2118,7 +2158,9 @@ impl AgentaService {
                     .is_some();
                 let result = async {
                     if !exists {
-                        self.store.insert_attachment_tx(&mut tx, &attachment).await?;
+                        self.store
+                            .insert_attachment_tx(&mut tx, &attachment)
+                            .await?;
                         let activity = TaskActivity {
                             activity_id: Uuid::new_v4(),
                             task_id: attachment.task_id,
@@ -2175,8 +2217,9 @@ impl AgentaService {
         let Some(remote) = self.sync_remote() else {
             return Ok(());
         };
-        let payload_json = serde_json::to_value(payload)
-            .map_err(|error| AppError::internal(format!("failed to serialize sync payload: {error}")))?;
+        let payload_json = serde_json::to_value(payload).map_err(|error| {
+            AppError::internal(format!("failed to serialize sync payload: {error}"))
+        })?;
         self.store
             .record_sync_mutation_tx(
                 tx,

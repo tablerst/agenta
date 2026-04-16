@@ -689,7 +689,10 @@ mod tests {
             return Ok(None);
         }
 
-        supervisor.start(McpLaunchOverrides::default()).await.map(Some)
+        supervisor
+            .start(McpLaunchOverrides::default())
+            .await
+            .map(Some)
     }
 
     #[tokio::test]
@@ -703,7 +706,10 @@ mod tests {
             .expect("skip autostart");
 
         assert!(result.is_none());
-        assert_eq!(supervisor.status_snapshot().state, McpLifecycleState::Stopped);
+        assert_eq!(
+            supervisor.status_snapshot().state,
+            McpLifecycleState::Stopped
+        );
     }
 
     #[tokio::test]

@@ -6,14 +6,14 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::domain::{
-    SyncCheckpoint, SyncCheckpointKind, SyncEntityKind, SyncEntityState, SyncOutboxEntry,
-    SyncOutboxStatus, SyncOperation, SyncTombstone,
+    SyncCheckpoint, SyncCheckpointKind, SyncEntityKind, SyncEntityState, SyncOperation,
+    SyncOutboxEntry, SyncOutboxStatus, SyncTombstone,
 };
 use crate::error::{AppError, AppResult};
 
 use super::mapping::{
-    format_time, map_sync_checkpoint, map_sync_entity, map_sync_outbox_entry,
-    map_sync_tombstone, parse_time,
+    format_time, map_sync_checkpoint, map_sync_entity, map_sync_outbox_entry, map_sync_tombstone,
+    parse_time,
 };
 use super::SqliteStore;
 

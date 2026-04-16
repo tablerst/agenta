@@ -105,6 +105,9 @@ export function formatDesktopError(error: unknown, t: Translate): string {
       return t("notices.errors.notFound", { entity });
     }
 
+    case "storage_busy":
+      return t("notices.errors.storageBusy");
+
     default:
       return t("notices.errors.unknown");
   }
