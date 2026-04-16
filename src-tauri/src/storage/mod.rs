@@ -14,7 +14,7 @@ use sqlx::SqlitePool;
 use tokio::fs;
 use uuid::Uuid;
 
-use crate::domain::TaskStatus;
+use crate::domain::{TaskKind, TaskStatus};
 use crate::error::{AppError, AppResult};
 
 #[derive(Clone)]
@@ -38,6 +38,9 @@ pub struct TaskListFilter {
     pub project_id: Option<Uuid>,
     pub version_id: Option<Uuid>,
     pub status: Option<TaskStatus>,
+    pub task_kind: Option<TaskKind>,
+    pub task_code_prefix: Option<String>,
+    pub title_prefix: Option<String>,
 }
 
 impl SqliteStore {

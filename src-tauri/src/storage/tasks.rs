@@ -3,7 +3,7 @@ use uuid::Uuid;
 
 use time::OffsetDateTime;
 
-use crate::domain::{Task, TaskActivity, TaskActivityKind};
+use crate::domain::{KnowledgeStatus, Task, TaskActivity, TaskActivityKind};
 use crate::error::{AppError, AppResult};
 use crate::search::{ActivitySearchHit, SearchResponse, TaskSearchHit};
 
@@ -18,11 +18,15 @@ impl SqliteStore {
                 task_id,
                 project_id,
                 version_id,
+                task_code,
+                task_kind,
                 title,
                 summary,
                 description,
                 task_search_summary,
                 task_context_digest,
+                latest_note_summary,
+                knowledge_status,
                 status,
                 priority,
                 created_by,
@@ -30,17 +34,21 @@ impl SqliteStore {
                 created_at,
                 updated_at,
                 closed_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(task.task_id.to_string())
         .bind(task.project_id.to_string())
         .bind(task.version_id.map(|value| value.to_string()))
+        .bind(&task.task_code)
+        .bind(task.task_kind.to_string())
         .bind(&task.title)
         .bind(&task.summary)
         .bind(&task.description)
         .bind(&task.task_search_summary)
         .bind(&task.task_context_digest)
+        .bind(&task.latest_note_summary)
+        .bind(task.knowledge_status.to_string())
         .bind(task.status.to_string())
         .bind(task.priority.to_string())
         .bind(&task.created_by)
@@ -64,11 +72,15 @@ impl SqliteStore {
                 task_id,
                 project_id,
                 version_id,
+                task_code,
+                task_kind,
                 title,
                 summary,
                 description,
                 task_search_summary,
                 task_context_digest,
+                latest_note_summary,
+                knowledge_status,
                 status,
                 priority,
                 created_by,
@@ -76,17 +88,21 @@ impl SqliteStore {
                 created_at,
                 updated_at,
                 closed_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(task.task_id.to_string())
         .bind(task.project_id.to_string())
         .bind(task.version_id.map(|value| value.to_string()))
+        .bind(&task.task_code)
+        .bind(task.task_kind.to_string())
         .bind(&task.title)
         .bind(&task.summary)
         .bind(&task.description)
         .bind(&task.task_search_summary)
         .bind(&task.task_context_digest)
+        .bind(&task.latest_note_summary)
+        .bind(task.knowledge_status.to_string())
         .bind(task.status.to_string())
         .bind(task.priority.to_string())
         .bind(&task.created_by)
@@ -103,8 +119,8 @@ impl SqliteStore {
         let row = query(
             r#"
             SELECT
-                task_id, project_id, version_id, title, summary, description,
-                task_search_summary, task_context_digest, status, priority,
+                task_id, project_id, version_id, task_code, task_kind, title, summary, description,
+                task_search_summary, task_context_digest, latest_note_summary, knowledge_status, status, priority,
                 created_by, updated_by, created_at, updated_at, closed_at
             FROM tasks
             WHERE task_id = ?
@@ -130,8 +146,8 @@ impl SqliteStore {
         let row = query(
             r#"
             SELECT
-                task_id, project_id, version_id, title, summary, description,
-                task_search_summary, task_context_digest, status, priority,
+                task_id, project_id, version_id, task_code, task_kind, title, summary, description,
+                task_search_summary, task_context_digest, latest_note_summary, knowledge_status, status, priority,
                 created_by, updated_by, created_at, updated_at, closed_at
             FROM tasks
             WHERE task_id = ?
@@ -156,8 +172,8 @@ impl SqliteStore {
         let row = query(
             r#"
             SELECT
-                t.task_id, t.project_id, t.version_id, t.title, t.summary, t.description,
-                t.task_search_summary, t.task_context_digest, t.status, t.priority,
+                t.task_id, t.project_id, t.version_id, t.task_code, t.task_kind, t.title, t.summary, t.description,
+                t.task_search_summary, t.task_context_digest, t.latest_note_summary, t.knowledge_status, t.status, t.priority,
                 t.created_by, t.updated_by, t.created_at, t.updated_at, t.closed_at,
                 (
                     SELECT source_task_id
@@ -239,8 +255,8 @@ impl SqliteStore {
         let row = query(
             r#"
             SELECT
-                t.task_id, t.project_id, t.version_id, t.title, t.summary, t.description,
-                t.task_search_summary, t.task_context_digest, t.status, t.priority,
+                t.task_id, t.project_id, t.version_id, t.task_code, t.task_kind, t.title, t.summary, t.description,
+                t.task_search_summary, t.task_context_digest, t.latest_note_summary, t.knowledge_status, t.status, t.priority,
                 t.created_by, t.updated_by, t.created_at, t.updated_at, t.closed_at,
                 (
                     SELECT source_task_id
@@ -318,8 +334,8 @@ impl SqliteStore {
         let mut builder = QueryBuilder::<Sqlite>::new(
             r#"
             SELECT
-                task_id, project_id, version_id, title, summary, description,
-                task_search_summary, task_context_digest, status, priority,
+                task_id, project_id, version_id, task_code, task_kind, title, summary, description,
+                task_search_summary, task_context_digest, latest_note_summary, knowledge_status, status, priority,
                 created_by, updated_by, created_at, updated_at, closed_at
             FROM tasks
             WHERE 1 = 1
@@ -338,6 +354,21 @@ impl SqliteStore {
         if let Some(status) = filter.status {
             builder.push(" AND status = ").push_bind(status.to_string());
         }
+        if let Some(task_kind) = filter.task_kind {
+            builder
+                .push(" AND task_kind = ")
+                .push_bind(task_kind.to_string());
+        }
+        if let Some(task_code_prefix) = filter.task_code_prefix {
+            builder
+                .push(" AND task_code LIKE ")
+                .push_bind(format!("{task_code_prefix}%"));
+        }
+        if let Some(title_prefix) = filter.title_prefix {
+            builder
+                .push(" AND title LIKE ")
+                .push_bind(format!("{title_prefix}%"));
+        }
         builder.push(" ORDER BY created_at DESC, task_id DESC");
 
         let rows = builder.build().fetch_all(&self.pool).await?;
@@ -351,8 +382,8 @@ impl SqliteStore {
         let mut builder = QueryBuilder::<Sqlite>::new(
             r#"
             SELECT
-                t.task_id, t.project_id, t.version_id, t.title, t.summary, t.description,
-                t.task_search_summary, t.task_context_digest, t.status, t.priority,
+                t.task_id, t.project_id, t.version_id, t.task_code, t.task_kind, t.title, t.summary, t.description,
+                t.task_search_summary, t.task_context_digest, t.latest_note_summary, t.knowledge_status, t.status, t.priority,
                 t.created_by, t.updated_by, t.created_at, t.updated_at, t.closed_at,
                 (
                     SELECT source_task_id
@@ -479,6 +510,21 @@ impl SqliteStore {
                 .push(" AND t.status = ")
                 .push_bind(status.to_string());
         }
+        if let Some(task_kind) = filter.task_kind {
+            builder
+                .push(" AND t.task_kind = ")
+                .push_bind(task_kind.to_string());
+        }
+        if let Some(task_code_prefix) = filter.task_code_prefix {
+            builder
+                .push(" AND t.task_code LIKE ")
+                .push_bind(format!("{task_code_prefix}%"));
+        }
+        if let Some(title_prefix) = filter.title_prefix {
+            builder
+                .push(" AND t.title LIKE ")
+                .push_bind(format!("{title_prefix}%"));
+        }
         builder.push(" ORDER BY t.created_at DESC, t.task_id DESC");
 
         let rows = builder.build().fetch_all(&self.pool).await?;
@@ -491,11 +537,15 @@ impl SqliteStore {
             UPDATE tasks
             SET
                 version_id = ?,
+                task_code = ?,
+                task_kind = ?,
                 title = ?,
                 summary = ?,
                 description = ?,
                 task_search_summary = ?,
                 task_context_digest = ?,
+                latest_note_summary = ?,
+                knowledge_status = ?,
                 status = ?,
                 priority = ?,
                 updated_by = ?,
@@ -505,11 +555,15 @@ impl SqliteStore {
             "#,
         )
         .bind(task.version_id.map(|value| value.to_string()))
+        .bind(&task.task_code)
+        .bind(task.task_kind.to_string())
         .bind(&task.title)
         .bind(&task.summary)
         .bind(&task.description)
         .bind(&task.task_search_summary)
         .bind(&task.task_context_digest)
+        .bind(&task.latest_note_summary)
+        .bind(task.knowledge_status.to_string())
         .bind(task.status.to_string())
         .bind(task.priority.to_string())
         .bind(&task.updated_by)
@@ -531,11 +585,15 @@ impl SqliteStore {
             UPDATE tasks
             SET
                 version_id = ?,
+                task_code = ?,
+                task_kind = ?,
                 title = ?,
                 summary = ?,
                 description = ?,
                 task_search_summary = ?,
                 task_context_digest = ?,
+                latest_note_summary = ?,
+                knowledge_status = ?,
                 status = ?,
                 priority = ?,
                 updated_by = ?,
@@ -545,11 +603,15 @@ impl SqliteStore {
             "#,
         )
         .bind(task.version_id.map(|value| value.to_string()))
+        .bind(&task.task_code)
+        .bind(task.task_kind.to_string())
         .bind(&task.title)
         .bind(&task.summary)
         .bind(&task.description)
         .bind(&task.task_search_summary)
         .bind(&task.task_context_digest)
+        .bind(&task.latest_note_summary)
+        .bind(task.knowledge_status.to_string())
         .bind(task.status.to_string())
         .bind(task.priority.to_string())
         .bind(&task.updated_by)
@@ -575,6 +637,28 @@ impl SqliteStore {
             "#,
         )
         .bind(task_context_digest)
+        .bind(task_id.to_string())
+        .execute(&mut **tx)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn update_task_note_rollup_tx(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        task_id: Uuid,
+        latest_note_summary: Option<&str>,
+        knowledge_status: KnowledgeStatus,
+    ) -> AppResult<()> {
+        query(
+            r#"
+            UPDATE tasks
+            SET latest_note_summary = ?, knowledge_status = ?
+            WHERE task_id = ?
+            "#,
+        )
+        .bind(latest_note_summary)
+        .bind(knowledge_status.to_string())
         .bind(task_id.to_string())
         .execute(&mut **tx)
         .await?;
@@ -653,7 +737,15 @@ impl SqliteStore {
     pub async fn search(&self, query_text: &str, limit: usize) -> AppResult<SearchResponse> {
         let task_rows = query(
             r#"
-            SELECT t.task_id, t.title, t.status, t.priority, t.task_search_summary
+            SELECT
+                t.task_id,
+                t.task_code,
+                t.task_kind,
+                t.title,
+                t.status,
+                t.priority,
+                t.knowledge_status,
+                COALESCE(t.latest_note_summary, t.task_search_summary) AS task_summary
             FROM tasks_fts f
             JOIN tasks t ON t.rowid = f.rowid
             WHERE tasks_fts MATCH ?
@@ -684,10 +776,13 @@ impl SqliteStore {
             .into_iter()
             .map(|row| TaskSearchHit {
                 task_id: row.get::<String, _>("task_id"),
+                task_code: row.get::<Option<String>, _>("task_code"),
+                task_kind: row.get::<String, _>("task_kind"),
                 title: row.get::<String, _>("title"),
                 status: row.get::<String, _>("status"),
                 priority: row.get::<String, _>("priority"),
-                summary: row.get::<String, _>("task_search_summary"),
+                knowledge_status: row.get::<String, _>("knowledge_status"),
+                summary: row.get::<String, _>("task_summary"),
             })
             .collect();
         let activities = activity_rows
@@ -701,7 +796,7 @@ impl SqliteStore {
             .collect();
 
         Ok(SearchResponse {
-            query: query_text.to_string(),
+            query: Some(query_text.to_string()),
             tasks,
             activities,
         })

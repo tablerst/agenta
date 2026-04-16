@@ -178,6 +178,10 @@ struct TaskCreateArgs {
     project: String,
     #[arg(long)]
     version: Option<String>,
+    #[arg(long = "task-code")]
+    task_code: Option<String>,
+    #[arg(long = "task-kind")]
+    task_kind: Option<String>,
     #[arg(long)]
     title: String,
     #[arg(long)]
@@ -198,6 +202,10 @@ struct TaskCreateChildArgs {
     parent: String,
     #[arg(long)]
     version: Option<String>,
+    #[arg(long = "task-code")]
+    task_code: Option<String>,
+    #[arg(long = "task-kind")]
+    task_kind: Option<String>,
     #[arg(long)]
     title: String,
     #[arg(long)]
@@ -226,6 +234,16 @@ struct TaskListArgs {
     version: Option<String>,
     #[arg(long)]
     status: Option<String>,
+    #[arg(long = "kind")]
+    kind: Option<String>,
+    #[arg(long = "task-code-prefix")]
+    task_code_prefix: Option<String>,
+    #[arg(long = "title-prefix")]
+    title_prefix: Option<String>,
+    #[arg(long = "sort-by")]
+    sort_by: Option<String>,
+    #[arg(long = "sort-order")]
+    sort_order: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -234,6 +252,10 @@ struct TaskUpdateArgs {
     task: String,
     #[arg(long)]
     version: Option<String>,
+    #[arg(long = "task-code")]
+    task_code: Option<String>,
+    #[arg(long = "task-kind")]
+    task_kind: Option<String>,
     #[arg(long)]
     title: Option<String>,
     #[arg(long)]
@@ -296,6 +318,8 @@ struct NoteCreateArgs {
     task: String,
     #[arg(long)]
     content: String,
+    #[arg(long = "note-kind")]
+    note_kind: Option<String>,
     #[arg(long = "created-by")]
     created_by: Option<String>,
 }
@@ -323,7 +347,17 @@ struct AttachmentRefArgs {
 #[derive(Debug, Args)]
 struct SearchQueryArgs {
     #[arg(long = "text", alias = "query")]
-    text: String,
+    text: Option<String>,
+    #[arg(long)]
+    project: Option<String>,
+    #[arg(long)]
+    version: Option<String>,
+    #[arg(long = "task-kind")]
+    task_kind: Option<String>,
+    #[arg(long = "task-code-prefix")]
+    task_code_prefix: Option<String>,
+    #[arg(long = "title-prefix")]
+    title_prefix: Option<String>,
     #[arg(long)]
     limit: Option<usize>,
 }
@@ -482,6 +516,8 @@ async fn execute_task(app: AgentaApp, command: TaskCommand) -> AppResult<Success
                     CreateTaskInput {
                         project: args.project,
                         version: args.version,
+                        task_code: args.task_code,
+                        task_kind: parse_optional_enum(args.task_kind)?,
                         title: args.title,
                         summary: args.summary,
                         description: args.description,
@@ -505,6 +541,8 @@ async fn execute_task(app: AgentaApp, command: TaskCommand) -> AppResult<Success
                     CreateChildTaskInput {
                         parent: args.parent,
                         version: args.version,
+                        task_code: args.task_code,
+                        task_kind: parse_optional_enum(args.task_kind)?,
                         title: args.title,
                         summary: args.summary,
                         description: args.description,
@@ -531,6 +569,11 @@ async fn execute_task(app: AgentaApp, command: TaskCommand) -> AppResult<Success
                     project: args.project,
                     version: args.version,
                     status: parse_optional_enum(args.status)?,
+                    task_kind: parse_optional_enum(args.kind)?,
+                    task_code_prefix: args.task_code_prefix,
+                    title_prefix: args.title_prefix,
+                    sort_by: parse_optional_enum(args.sort_by)?,
+                    sort_order: parse_optional_enum(args.sort_order)?,
                 })
                 .await?;
             success(
@@ -547,6 +590,8 @@ async fn execute_task(app: AgentaApp, command: TaskCommand) -> AppResult<Success
                     &args.task,
                     UpdateTaskInput {
                         version: args.version,
+                        task_code: args.task_code,
+                        task_kind: parse_optional_enum(args.task_kind)?,
                         title: args.title,
                         summary: args.summary,
                         description: args.description,
@@ -632,6 +677,7 @@ async fn execute_note(app: AgentaApp, command: NoteCommand) -> AppResult<Success
                     CreateNoteInput {
                         task: args.task,
                         content: args.content,
+                        note_kind: parse_optional_enum(args.note_kind)?,
                         created_by: args.created_by,
                     },
                 )
@@ -692,6 +738,11 @@ async fn execute_search(app: AgentaApp, command: SearchCommand) -> AppResult<Suc
                 .service
                 .search(SearchInput {
                     text: args.text,
+                    project: args.project,
+                    version: args.version,
+                    task_kind: parse_optional_enum(args.task_kind)?,
+                    task_code_prefix: args.task_code_prefix,
+                    title_prefix: args.title_prefix,
                     limit: args.limit,
                 })
                 .await?;

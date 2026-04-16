@@ -7,12 +7,15 @@ use tokio::task::JoinSet;
 
 use agenta_lib::{
     app::{AppRuntime, BootstrapOptions},
-    domain::{TaskActivityKind, TaskPriority, TaskStatus, VersionStatus},
+    domain::{
+        KnowledgeStatus, NoteKind, TaskActivityKind, TaskKind, TaskPriority, TaskStatus,
+        VersionStatus,
+    },
     error::AppError,
     service::{
         CreateAttachmentInput, CreateNoteInput, CreateProjectInput, CreateTaskInput,
-        CreateVersionInput, PageRequest, TaskQuery, UpdateProjectInput, UpdateTaskInput,
-        UpdateVersionInput,
+        CreateVersionInput, PageRequest, SearchInput, SortOrder, TaskQuery, TaskSortBy,
+        UpdateProjectInput, UpdateTaskInput, UpdateVersionInput,
     },
 };
 
@@ -171,6 +174,8 @@ async fn workspace_flow_persists_updates_filters_and_paginates(
         .create_task(CreateTaskInput {
             project: alpha.slug.clone(),
             version: Some(alpha_v1.version_id.to_string()),
+            task_code: None,
+            task_kind: None,
             title: "Regression workspace task".to_string(),
             summary: Some("Track workspace regressions".to_string()),
             description: Some("Initial workspace task description".to_string()),
@@ -184,6 +189,8 @@ async fn workspace_flow_persists_updates_filters_and_paginates(
         .create_task(CreateTaskInput {
             project: alpha.slug.clone(),
             version: Some(alpha_v2.version_id.to_string()),
+            task_code: None,
+            task_kind: None,
             title: "Secondary task".to_string(),
             summary: Some("Helps verify pagination".to_string()),
             description: None,
@@ -198,6 +205,7 @@ async fn workspace_flow_persists_updates_filters_and_paginates(
         .create_note(CreateNoteInput {
             task: task.task_id.to_string(),
             content: "Workspace note payload".to_string(),
+            note_kind: None,
             created_by: Some("workspace-test".to_string()),
         })
         .await?;
@@ -287,6 +295,11 @@ async fn workspace_flow_persists_updates_filters_and_paginates(
                 project: Some(alpha.slug.clone()),
                 version: Some(alpha_v2.version_id.to_string()),
                 status: Some(TaskStatus::Done),
+                task_kind: None,
+                task_code_prefix: None,
+                title_prefix: None,
+                sort_by: None,
+                sort_order: None,
             },
             PageRequest {
                 limit: Some(10),
@@ -325,6 +338,177 @@ fn write_test_config(tempdir: &TempDir) -> Result<std::path::PathBuf, Box<dyn st
 
 fn normalize_path_for_yaml(path: &std::path::Path) -> String {
     path.to_string_lossy().replace('\\', "/")
+}
+
+#[tokio::test]
+async fn task_context_retrieval_fields_sort_summary_and_search(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let tempdir = TempDir::new()?;
+    let config_path = write_test_config(&tempdir)?;
+    let runtime = AppRuntime::bootstrap(BootstrapOptions {
+        config_path: Some(config_path),
+    })
+    .await?;
+
+    let project = runtime
+        .service
+        .create_project(CreateProjectInput {
+            slug: "context-flow".to_string(),
+            name: "Context Flow".to_string(),
+            description: None,
+        })
+        .await?;
+    let version = runtime
+        .service
+        .create_version(CreateVersionInput {
+            project: project.slug.clone(),
+            name: "workspace-baseline".to_string(),
+            description: None,
+            status: None,
+        })
+        .await?;
+
+    let ctx10 = runtime
+        .service
+        .create_task(CreateTaskInput {
+            project: project.slug.clone(),
+            version: Some(version.version_id.to_string()),
+            task_code: Some("InitCtx-10".to_string()),
+            task_kind: Some(TaskKind::Context),
+            title: "Context index tail".to_string(),
+            summary: None,
+            description: None,
+            status: Some(TaskStatus::Done),
+            priority: Some(TaskPriority::Normal),
+            created_by: Some("context-test".to_string()),
+        })
+        .await?;
+    let ctx1 = runtime
+        .service
+        .create_task(CreateTaskInput {
+            project: project.slug.clone(),
+            version: Some(version.version_id.to_string()),
+            task_code: Some("InitCtx-1".to_string()),
+            task_kind: Some(TaskKind::Context),
+            title: "Context index head".to_string(),
+            summary: None,
+            description: None,
+            status: Some(TaskStatus::Done),
+            priority: Some(TaskPriority::Normal),
+            created_by: Some("context-test".to_string()),
+        })
+        .await?;
+    let ctx2 = runtime
+        .service
+        .create_task(CreateTaskInput {
+            project: project.slug.clone(),
+            version: Some(version.version_id.to_string()),
+            task_code: Some("InitCtx-2".to_string()),
+            task_kind: Some(TaskKind::Context),
+            title: "Context reusable note".to_string(),
+            summary: None,
+            description: None,
+            status: Some(TaskStatus::Ready),
+            priority: Some(TaskPriority::Normal),
+            created_by: Some("context-test".to_string()),
+        })
+        .await?;
+
+    let listed = runtime
+        .service
+        .list_task_details_page(
+            TaskQuery {
+                project: Some(project.slug.clone()),
+                version: Some(version.version_id.to_string()),
+                status: None,
+                task_kind: Some(TaskKind::Context),
+                task_code_prefix: Some("InitCtx-".to_string()),
+                title_prefix: None,
+                sort_by: Some(TaskSortBy::TaskCode),
+                sort_order: Some(SortOrder::Asc),
+            },
+            PageRequest {
+                limit: None,
+                cursor: None,
+            },
+        )
+        .await?;
+    let codes = listed
+        .items
+        .iter()
+        .map(|detail| detail.task.task_code.as_deref().unwrap_or_default())
+        .collect::<Vec<_>>();
+    assert_eq!(codes, vec!["InitCtx-1", "InitCtx-2", "InitCtx-10"]);
+    assert_eq!(listed.summary.status_counts.done, 2);
+    assert_eq!(listed.summary.status_counts.ready, 1);
+    assert_eq!(listed.summary.kind_counts.context, 3);
+
+    runtime
+        .service
+        .create_note(CreateNoteInput {
+            task: ctx1.task_id.to_string(),
+            content: "Scratch context note".to_string(),
+            note_kind: Some(NoteKind::Scratch),
+            created_by: Some("context-test".to_string()),
+        })
+        .await?;
+    runtime
+        .service
+        .create_note(CreateNoteInput {
+            task: ctx2.task_id.to_string(),
+            content: "Reusable conclusion for InitCtx-2".to_string(),
+            note_kind: Some(NoteKind::Conclusion),
+            created_by: Some("context-test".to_string()),
+        })
+        .await?;
+    let reusable = runtime
+        .service
+        .get_task_detail(&ctx2.task_id.to_string())
+        .await?;
+    assert_eq!(reusable.task.knowledge_status, KnowledgeStatus::Reusable);
+    assert!(reusable
+        .task
+        .latest_note_summary
+        .as_deref()
+        .is_some_and(|summary| summary.contains("Reusable conclusion")));
+
+    let filtered_search = runtime
+        .service
+        .search(SearchInput {
+            text: None,
+            project: Some(project.slug.clone()),
+            version: Some(version.version_id.to_string()),
+            task_kind: Some(TaskKind::Context),
+            task_code_prefix: Some("InitCtx-".to_string()),
+            title_prefix: None,
+            limit: Some(10),
+        })
+        .await?;
+    assert_eq!(filtered_search.query, None);
+    assert_eq!(filtered_search.tasks.len(), 3);
+
+    let note_search = runtime
+        .service
+        .search(SearchInput {
+            text: Some("reusable conclusion".to_string()),
+            project: Some(project.slug),
+            version: Some(version.version_id.to_string()),
+            task_kind: None,
+            task_code_prefix: None,
+            title_prefix: None,
+            limit: Some(10),
+        })
+        .await?;
+    assert!(note_search
+        .tasks
+        .iter()
+        .any(|hit| hit.task_id == ctx2.task_id.to_string()));
+    assert!(note_search
+        .tasks
+        .iter()
+        .all(|hit| hit.task_id != ctx10.task_id.to_string()));
+
+    Ok(())
 }
 
 #[tokio::test]
@@ -367,6 +551,8 @@ async fn concurrent_writes_share_the_same_runtime_write_queue(
                 .create_task(CreateTaskInput {
                     project: project_slug,
                     version: Some(version_id),
+                    task_code: None,
+                    task_kind: None,
                     title: format!("Concurrent task {index}"),
                     summary: Some(format!("Concurrent summary {index}")),
                     description: Some(format!("Concurrent description {index}")),
@@ -394,6 +580,7 @@ async fn concurrent_writes_share_the_same_runtime_write_queue(
                 .create_note(CreateNoteInput {
                     task: note_task_id,
                     content: format!("Concurrent note {index}"),
+                    note_kind: None,
                     created_by: Some("queue-test".to_string()),
                 })
                 .await
@@ -505,6 +692,8 @@ async fn cross_connection_write_lock_returns_storage_busy() -> Result<(), Box<dy
         .create_task(CreateTaskInput {
             project: project.slug,
             version: None,
+            task_code: None,
+            task_kind: None,
             title: "Blocked by external write lock".to_string(),
             summary: Some("Should surface storage_busy".to_string()),
             description: None,

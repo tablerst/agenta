@@ -26,7 +26,7 @@ import {
   taskStatusOptions,
   type TaskDetailTab,
 } from "../lib/options";
-import type { TaskPriority, TaskStatus } from "../lib/types";
+import type { NoteKind, TaskKind, TaskPriority, TaskStatus } from "../lib/types";
 import { useApprovalsStore } from "../stores/approvals";
 import { useProjectsStore } from "../stores/projects";
 import { useShellStore } from "../stores/shell";
@@ -47,6 +47,8 @@ const createTaskTitleInput = ref<HTMLInputElement | null>(null);
 const taskCreateTrigger = ref<HTMLElement | null>(null);
 
 const createTaskForm = reactive({
+  task_code: "",
+  kind: "standard" as TaskKind,
   title: "",
   summary: "",
   description: "",
@@ -56,6 +58,8 @@ const createTaskForm = reactive({
 });
 
 const taskForm = reactive({
+  task_code: "",
+  kind: "standard" as TaskKind,
   title: "",
   summary: "",
   description: "",
@@ -66,6 +70,7 @@ const taskForm = reactive({
 
 const noteForm = reactive({
   content: "",
+  note_kind: "finding" as NoteKind,
 });
 
 const attachmentForm = reactive({
@@ -83,6 +88,19 @@ const selectedProjectSlug = computed(() => String(route.params.projectSlug ?? ""
 const selectedVersionId = computed(() => readRouteString(route.query.version) ?? "");
 const selectedTaskId = computed(() => readRouteString(route.query.task) ?? "");
 const selectedStatus = computed(() => readRouteString(route.query.status) ?? "");
+const selectedTaskKindFilter = ref("");
+const taskCodePrefixFilter = ref("");
+const selectedSortBy = ref("task_code");
+const selectedSortOrder = ref("asc");
+const taskKindOptions = ["standard", "context", "index"] as const;
+const noteKindOptions = ["scratch", "finding", "conclusion"] as const;
+const taskSortOptions = [
+  "task_code",
+  "title",
+  "latest_activity_at",
+  "updated_at",
+  "created_at",
+] as const;
 const selectedProject = computed(
   () => projectsStore.projects.find((item) => item.slug === selectedProjectSlug.value) ?? null,
 );
@@ -161,6 +179,8 @@ function focusTab(tab: TaskDetailTab) {
 }
 
 function resetCreateTaskForm() {
+  createTaskForm.task_code = "";
+  createTaskForm.kind = "standard";
   createTaskForm.title = "";
   createTaskForm.summary = "";
   createTaskForm.description = "";
@@ -247,6 +267,8 @@ watch(
   (task) => {
     if (!task) {
       taskForm.title = "";
+      taskForm.task_code = "";
+      taskForm.kind = "standard";
       taskForm.summary = "";
       taskForm.description = "";
       taskForm.status = "ready";
@@ -256,6 +278,8 @@ watch(
       return;
     }
 
+    taskForm.task_code = task.task_code ?? "";
+    taskForm.kind = task.task_kind;
     taskForm.title = task.title;
     taskForm.summary = task.summary ?? "";
     taskForm.description = task.description ?? "";
@@ -287,8 +311,17 @@ watch(
 );
 
 watch(
-  () => [selectedProjectSlug.value, selectedVersionId.value, selectedStatus.value] as const,
-  async ([projectSlug, version, status]) => {
+  () =>
+    [
+      selectedProjectSlug.value,
+      selectedVersionId.value,
+      selectedStatus.value,
+      selectedTaskKindFilter.value,
+      taskCodePrefixFilter.value,
+      selectedSortBy.value,
+      selectedSortOrder.value,
+    ] as const,
+  async ([projectSlug, version, status, kind, taskCodePrefix, sortBy, sortOrder]) => {
     if (!projectSlug) {
       tasksStore.tasks = [];
       tasksStore.clearTaskDetail();
@@ -297,7 +330,11 @@ watch(
 
     await tasksStore.loadTasks({
       project: projectSlug,
+      kind: kind || undefined,
       status: status || undefined,
+      task_code_prefix: taskCodePrefix || undefined,
+      sort_by: sortBy || undefined,
+      sort_order: sortOrder || undefined,
       version: version || undefined,
     });
   },
@@ -361,13 +398,19 @@ async function submitCreateTask() {
     const created = await tasksStore.createTask({
       ...createTaskForm,
       description: createTaskForm.description || null,
+      kind: createTaskForm.kind,
       project: selectedProject.value.slug,
       summary: createTaskForm.summary || null,
+      task_code: createTaskForm.task_code || null,
       version: selectedVersionId.value || undefined,
     });
     await tasksStore.loadTasks({
       project: selectedProject.value.slug,
+      kind: selectedTaskKindFilter.value || undefined,
       status: selectedStatus.value || undefined,
+      task_code_prefix: taskCodePrefixFilter.value || undefined,
+      sort_by: selectedSortBy.value || undefined,
+      sort_order: selectedSortOrder.value || undefined,
       version: selectedVersionId.value || undefined,
     });
     await approvalsStore.refreshPendingCount();
@@ -392,16 +435,22 @@ async function submitTaskUpdate() {
   try {
     await tasksStore.updateTask(selectedTask.value.task_id, {
       description: taskForm.description || null,
+      kind: taskForm.kind,
       priority: taskForm.priority,
       status: taskForm.status,
       summary: taskForm.summary || null,
+      task_code: taskForm.task_code || null,
       title: taskForm.title,
       updated_by: taskForm.updated_by,
       version: selectedVersionId.value || selectedTask.value.version_id || undefined,
     });
     await tasksStore.loadTasks({
       project: selectedProjectSlug.value || undefined,
+      kind: selectedTaskKindFilter.value || undefined,
       status: selectedStatus.value || undefined,
+      task_code_prefix: taskCodePrefixFilter.value || undefined,
+      sort_by: selectedSortBy.value || undefined,
+      sort_order: selectedSortOrder.value || undefined,
       version: selectedVersionId.value || undefined,
     });
     await approvalsStore.refreshPendingCount();
@@ -424,8 +473,10 @@ async function submitNote() {
     await tasksStore.createNote(selectedTask.value.task_id, {
       content: noteForm.content,
       created_by: "desktop",
+      note_kind: noteForm.note_kind,
     });
     noteForm.content = "";
+    noteForm.note_kind = "finding";
     shell.pushNotice("success", t("notices.noteAdded"));
   } catch (error) {
     if (await jumpToQueuedApproval(error)) {
@@ -469,7 +520,11 @@ async function openAttachment(path: string) {
 async function reloadVisibleTasks() {
   await tasksStore.loadTasks({
     project: selectedProjectSlug.value || undefined,
+    kind: selectedTaskKindFilter.value || undefined,
     status: selectedStatus.value || undefined,
+    task_code_prefix: taskCodePrefixFilter.value || undefined,
+    sort_by: selectedSortBy.value || undefined,
+    sort_order: selectedSortOrder.value || undefined,
     version: selectedVersionId.value || undefined,
   });
 }
@@ -588,6 +643,15 @@ async function jumpToQueuedApproval(error: unknown) {
             <div class="flex flex-wrap items-center gap-2">
               <span v-if="selectedProjectLabel" class="status-pill">{{ selectedProjectLabel }}</span>
               <span class="status-pill">{{ tasksStore.tasks.length }}</span>
+              <span v-if="tasksStore.taskSummary" class="status-pill">
+                {{ t("tasks.summaryReady", { count: tasksStore.taskSummary.status_counts.ready }) }}
+              </span>
+              <span v-if="tasksStore.taskSummary" class="status-pill">
+                {{ t("tasks.summaryDone", { count: tasksStore.taskSummary.status_counts.done }) }}
+              </span>
+              <span v-if="tasksStore.taskSummary" class="status-pill">
+                {{ t("tasks.summaryReusable", { count: tasksStore.taskSummary.knowledge_counts.reusable }) }}
+              </span>
             </div>
           </div>
           <div class="workspace-filter-toolbar">
@@ -621,6 +685,38 @@ async function jumpToQueuedApproval(error: unknown) {
                 </option>
               </select>
             </label>
+            <label class="compact-field">
+              <span class="field-label">{{ t("tasks.fields.taskKind") }}</span>
+              <select v-model="selectedTaskKindFilter" class="control-select compact-control">
+                <option value="">{{ t("tasks.allTaskKinds") }}</option>
+                <option v-for="kind in taskKindOptions" :key="kind" :value="kind">
+                  {{ t(`status.taskKind.${kind}`) }}
+                </option>
+              </select>
+            </label>
+            <label class="compact-field">
+              <span class="field-label">{{ t("tasks.fields.taskCode") }}</span>
+              <input
+                v-model="taskCodePrefixFilter"
+                class="control-input compact-control"
+                :placeholder="t('tasks.placeholders.taskCodePrefix')"
+              />
+            </label>
+            <label class="compact-field">
+              <span class="field-label">{{ t("tasks.fields.sortBy") }}</span>
+              <select v-model="selectedSortBy" class="control-select compact-control">
+                <option v-for="sortBy in taskSortOptions" :key="sortBy" :value="sortBy">
+                  {{ t(`tasks.sortBy.${sortBy}`) }}
+                </option>
+              </select>
+            </label>
+            <label class="compact-field">
+              <span class="field-label">{{ t("tasks.fields.sortOrder") }}</span>
+              <select v-model="selectedSortOrder" class="control-select compact-control">
+                <option value="asc">{{ t("tasks.sortOrder.asc") }}</option>
+                <option value="desc">{{ t("tasks.sortOrder.desc") }}</option>
+              </select>
+            </label>
             <button class="primary-action spotlight-surface" type="button" @click="openCreateTask($event)">
               <Plus :size="15" />
               {{ t("tasks.createTaskAction") }}
@@ -644,10 +740,18 @@ async function jumpToQueuedApproval(error: unknown) {
               <SquareKanban :size="16" />
               <div class="min-w-0 flex-1 space-y-2">
                 <div class="flex items-center justify-between gap-3">
-                  <p class="truncate text-sm font-medium text-[var(--text-main)]">{{ task.title }}</p>
-                  <span class="status-pill">{{ t(`status.task.${task.status}`) }}</span>
+                  <p class="truncate text-sm font-medium text-[var(--text-main)]">
+                    {{ task.task_code ? `${task.task_code} · ${task.title}` : task.title }}
+                  </p>
+                  <div class="flex flex-wrap items-center justify-end gap-2">
+                    <span class="status-pill">{{ t(`status.taskKind.${task.task_kind}`) }}</span>
+                    <span class="status-pill">{{ t(`status.knowledge.${task.knowledge_status}`) }}</span>
+                    <span class="status-pill">{{ t(`status.task.${task.status}`) }}</span>
+                  </div>
                 </div>
-                <p class="truncate text-xs text-[var(--text-muted)]">{{ task.summary || task.task_context_digest }}</p>
+                <p class="truncate text-xs text-[var(--text-muted)]">
+                  {{ task.latest_note_summary || task.summary || task.task_context_digest }}
+                </p>
               </div>
               <div class="list-row-meta">
                 <span>{{ t(`status.priority.${task.priority}`) }}</span>
@@ -668,7 +772,23 @@ async function jumpToQueuedApproval(error: unknown) {
             <p class="overview-editor-summary">{{ selectedProjectLabel }}</p>
           </div>
 
-          <div class="overview-field-grid">
+            <div class="overview-field-grid">
+            <label class="form-field">
+              <span class="field-label">{{ t("tasks.fields.taskCode") }}</span>
+              <input
+                v-model="createTaskForm.task_code"
+                class="quiet-control-input"
+                :placeholder="t('tasks.placeholders.taskCode')"
+              />
+            </label>
+            <label class="form-field">
+              <span class="field-label">{{ t("tasks.fields.taskKind") }}</span>
+              <select v-model="createTaskForm.kind" class="quiet-control-select">
+                <option v-for="kind in taskKindOptions" :key="kind" :value="kind">
+                  {{ t(`status.taskKind.${kind}`) }}
+                </option>
+              </select>
+            </label>
             <label class="form-field overview-field-wide">
               <span class="field-label">{{ t("tasks.fields.title") }}</span>
               <input
@@ -736,6 +856,9 @@ async function jumpToQueuedApproval(error: unknown) {
                 </p>
               </div>
               <div class="flex flex-wrap items-center gap-2">
+                <span v-if="selectedTask.task_code" class="status-pill">{{ selectedTask.task_code }}</span>
+                <span class="status-pill">{{ t(`status.taskKind.${selectedTask.task_kind}`) }}</span>
+                <span class="status-pill">{{ t(`status.knowledge.${selectedTask.knowledge_status}`) }}</span>
                 <span class="status-pill">{{ t(`status.task.${selectedTask.status}`) }}</span>
                 <span class="status-pill">{{ t(`status.priority.${selectedTask.priority}`) }}</span>
                 <span class="status-pill">
@@ -780,6 +903,16 @@ async function jumpToQueuedApproval(error: unknown) {
               <section class="panel-section">
                 <p class="section-label">{{ t("tasks.editTask") }}</p>
                 <div class="space-y-3">
+                  <input
+                    v-model="taskForm.task_code"
+                    class="control-input"
+                    :placeholder="t('tasks.placeholders.taskCode')"
+                  />
+                  <select v-model="taskForm.kind" class="control-select">
+                    <option v-for="kind in taskKindOptions" :key="kind" :value="kind">
+                      {{ t(`status.taskKind.${kind}`) }}
+                    </option>
+                  </select>
                   <input v-model="taskForm.title" class="control-input" />
                   <input v-model="taskForm.summary" class="control-input" />
                   <textarea v-model="taskForm.description" class="control-textarea" />
@@ -931,6 +1064,11 @@ async function jumpToQueuedApproval(error: unknown) {
           >
             <section class="panel-section">
               <p class="section-label">{{ t("tasks.addNote") }}</p>
+              <select v-model="noteForm.note_kind" class="control-select">
+                <option v-for="noteKind in noteKindOptions" :key="noteKind" :value="noteKind">
+                  {{ t(`status.noteKind.${noteKind}`) }}
+                </option>
+              </select>
               <textarea
                 v-model="noteForm.content"
                 class="control-textarea"
@@ -944,7 +1082,10 @@ async function jumpToQueuedApproval(error: unknown) {
             <section class="space-y-3">
               <article v-for="note in tasksStore.notes" :key="note.activity_id" class="panel-section">
                 <div class="mb-2 flex items-center justify-between">
-                  <span class="status-pill">{{ t(`activityKind.${note.kind}`) }}</span>
+                  <div class="flex items-center gap-2">
+                    <span class="status-pill">{{ t(`activityKind.${note.kind}`) }}</span>
+                    <span class="status-pill">{{ t(`status.noteKind.${note.note_kind || 'finding'}`) }}</span>
+                  </div>
                   <span class="text-xs text-[var(--text-muted)]">{{ formatDateTime(note.created_at) }}</span>
                 </div>
                 <p class="text-sm leading-6 text-[var(--text-main)]">{{ note.content }}</p>

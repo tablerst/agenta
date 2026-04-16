@@ -73,6 +73,8 @@ async fn service_flow_persists_and_searches() {
         .create_task(CreateTaskInput {
             project: project.slug.clone(),
             version: Some(version.version_id.to_string()),
+            task_code: None,
+            task_kind: None,
             title: "Investigate search indexing".to_string(),
             summary: Some("Make Alpha keyword searchable".to_string()),
             description: Some("Alpha search body".to_string()),
@@ -88,6 +90,7 @@ async fn service_flow_persists_and_searches() {
         .create_note(CreateNoteInput {
             task: task.task_id.to_string(),
             content: "Alpha note content".to_string(),
+            note_kind: None,
             created_by: Some("integration".to_string()),
         })
         .await
@@ -110,7 +113,12 @@ async fn service_flow_persists_and_searches() {
     let hits = app
         .service
         .search(SearchInput {
-            text: "Alpha".to_string(),
+            text: Some("Alpha".to_string()),
+            project: None,
+            version: None,
+            task_kind: None,
+            task_code_prefix: None,
+            title_prefix: None,
             limit: Some(10),
         })
         .await
@@ -144,7 +152,7 @@ async fn service_flow_persists_and_searches() {
     assert_eq!(attachment.attachment_id, attachments[0].attachment_id);
     assert_eq!(loaded_attachment.attachment_id, attachment.attachment_id);
     assert_eq!(activities.len(), 2);
-    assert_eq!(hits.query, "Alpha");
+    assert_eq!(hits.query.as_deref(), Some("Alpha"));
     assert!(!hits.tasks.is_empty() || !hits.activities.is_empty());
 }
 

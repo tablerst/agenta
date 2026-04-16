@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use sqlx::{Sqlite, Transaction};
+use sqlx::{Row, Sqlite, Transaction};
 use time::OffsetDateTime;
 use tokio::fs;
 use tokio::sync::Mutex;
@@ -13,10 +13,11 @@ use uuid::Uuid;
 
 use crate::app::{SyncConfig, SyncRemoteConfig, SyncRemoteKind};
 use crate::domain::{
-    ApprovalRequest, ApprovalRequestedVia, ApprovalStatus, Attachment, AttachmentKind, Project,
-    ProjectStatus, SyncCheckpointKind, SyncEntityKind, SyncMode, SyncOperation, SyncOutboxStatus,
-    Task, TaskActivity, TaskActivityKind, TaskPriority, TaskRelation, TaskRelationKind,
-    TaskRelationStatus, TaskStatus, Version, VersionStatus,
+    ApprovalRequest, ApprovalRequestedVia, ApprovalStatus, Attachment, AttachmentKind,
+    KnowledgeStatus, NoteKind, Project, ProjectStatus, SyncCheckpointKind, SyncEntityKind,
+    SyncMode, SyncOperation, SyncOutboxStatus, Task, TaskActivity, TaskActivityKind, TaskKind,
+    TaskPriority, TaskRelation, TaskRelationKind, TaskRelationStatus, TaskStatus, Version,
+    VersionStatus,
 };
 use crate::error::{AppError, AppResult};
 use crate::policy::{PolicyEngine, WriteDecision};
@@ -157,6 +158,8 @@ pub struct UpdateVersionInput {
 pub struct CreateTaskInput {
     pub project: String,
     pub version: Option<String>,
+    pub task_code: Option<String>,
+    pub task_kind: Option<TaskKind>,
     pub title: String,
     pub summary: Option<String>,
     pub description: Option<String>,
@@ -169,6 +172,8 @@ pub struct CreateTaskInput {
 pub struct CreateChildTaskInput {
     pub parent: String,
     pub version: Option<String>,
+    pub task_code: Option<String>,
+    pub task_kind: Option<TaskKind>,
     pub title: String,
     pub summary: Option<String>,
     pub description: Option<String>,
@@ -180,6 +185,8 @@ pub struct CreateChildTaskInput {
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct UpdateTaskInput {
     pub version: Option<String>,
+    pub task_code: Option<String>,
+    pub task_kind: Option<TaskKind>,
     pub title: Option<String>,
     pub summary: Option<String>,
     pub description: Option<String>,
@@ -221,6 +228,7 @@ pub struct ResolveTaskBlockerInput {
 pub struct CreateNoteInput {
     pub task: String,
     pub content: String,
+    pub note_kind: Option<NoteKind>,
     pub created_by: Option<String>,
 }
 
@@ -238,6 +246,88 @@ pub struct TaskQuery {
     pub project: Option<String>,
     pub version: Option<String>,
     pub status: Option<TaskStatus>,
+    pub task_kind: Option<TaskKind>,
+    pub task_code_prefix: Option<String>,
+    pub title_prefix: Option<String>,
+    pub sort_by: Option<TaskSortBy>,
+    pub sort_order: Option<SortOrder>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskSortBy {
+    CreatedAt,
+    UpdatedAt,
+    LatestActivityAt,
+    TaskCode,
+    Title,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SortOrder {
+    Asc,
+    Desc,
+}
+
+impl TaskSortBy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::CreatedAt => "created_at",
+            Self::UpdatedAt => "updated_at",
+            Self::LatestActivityAt => "latest_activity_at",
+            Self::TaskCode => "task_code",
+            Self::Title => "title",
+        }
+    }
+}
+
+impl std::fmt::Display for TaskSortBy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for TaskSortBy {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "created_at" => Ok(Self::CreatedAt),
+            "updated_at" => Ok(Self::UpdatedAt),
+            "latest_activity_at" => Ok(Self::LatestActivityAt),
+            "task_code" => Ok(Self::TaskCode),
+            "title" => Ok(Self::Title),
+            other => Err(format!("invalid TaskSortBy value: {other}")),
+        }
+    }
+}
+
+impl SortOrder {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Asc => "asc",
+            Self::Desc => "desc",
+        }
+    }
+}
+
+impl std::fmt::Display for SortOrder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for SortOrder {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "asc" => Ok(Self::Asc),
+            "desc" => Ok(Self::Desc),
+            other => Err(format!("invalid SortOrder value: {other}")),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -274,6 +364,50 @@ pub struct TaskDetail {
 }
 
 #[derive(Clone, Debug, Serialize)]
+pub struct TaskStatusCounts {
+    pub draft: usize,
+    pub ready: usize,
+    pub in_progress: usize,
+    pub blocked: usize,
+    pub done: usize,
+    pub cancelled: usize,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct TaskKnowledgeCounts {
+    pub empty: usize,
+    pub working: usize,
+    pub reusable: usize,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct TaskKindCounts {
+    pub standard: usize,
+    pub context: usize,
+    pub index: usize,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct TaskListSummary {
+    pub total: usize,
+    pub status_counts: TaskStatusCounts,
+    pub knowledge_counts: TaskKnowledgeCounts,
+    pub kind_counts: TaskKindCounts,
+    pub ready_to_start_count: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct TaskListPageResult {
+    pub items: Vec<TaskDetail>,
+    pub summary: TaskListSummary,
+    pub limit: Option<usize>,
+    pub next_cursor: Option<PageCursor>,
+    pub has_more: bool,
+    pub sort_by: TaskSortBy,
+    pub sort_order: SortOrder,
+}
+
+#[derive(Clone, Debug, Serialize)]
 pub struct TaskLink {
     pub relation_id: Uuid,
     pub task_id: Uuid,
@@ -297,7 +431,12 @@ pub struct TaskContext {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SearchInput {
-    pub text: String,
+    pub text: Option<String>,
+    pub project: Option<String>,
+    pub version: Option<String>,
+    pub task_kind: Option<TaskKind>,
+    pub task_code_prefix: Option<String>,
+    pub title_prefix: Option<String>,
     pub limit: Option<usize>,
 }
 
@@ -941,49 +1080,45 @@ impl AgentaService {
     }
 
     pub async fn list_tasks(&self, query: TaskQuery) -> AppResult<Vec<Task>> {
-        let filter = self.resolve_task_filter(&query).await?;
-        self.store.list_tasks(filter).await
+        let (details, _, _) = self.collect_sorted_task_details(query).await?;
+        Ok(details.into_iter().map(|detail| detail.task).collect())
     }
 
     pub async fn list_task_details(&self, query: TaskQuery) -> AppResult<Vec<TaskDetail>> {
-        let filter = self.resolve_task_filter(&query).await?;
-        self.store
-            .list_tasks_with_stats(filter)
-            .await?
-            .into_iter()
-            .map(
-                |(
-                    task,
-                    note_count,
-                    attachment_count,
-                    latest_activity_at,
-                    parent_task_id,
-                    child_count,
-                    open_blocker_count,
-                    blocking_count,
-                )| {
-                    Ok(task_detail_from_parts(
-                        task,
-                        note_count,
-                        attachment_count,
-                        latest_activity_at,
-                        parent_task_id,
-                        child_count,
-                        open_blocker_count,
-                        blocking_count,
-                    ))
-                },
-            )
-            .collect()
+        let (details, _, _) = self.collect_sorted_task_details(query).await?;
+        Ok(details)
     }
 
     pub async fn list_task_details_page(
         &self,
         query: TaskQuery,
         page: PageRequest,
-    ) -> AppResult<PageResult<TaskDetail>> {
+    ) -> AppResult<TaskListPageResult> {
+        let (details, sort_by, sort_order) = self.collect_sorted_task_details(query).await?;
+        let summary = build_task_list_summary(&details);
+        let page = paginate_presorted_by_cursor(
+            details,
+            page,
+            |detail| detail.task.created_at,
+            |detail| detail.task.task_id,
+        );
+        Ok(TaskListPageResult {
+            items: page.items,
+            summary,
+            limit: page.limit,
+            next_cursor: page.next_cursor,
+            has_more: page.has_more,
+            sort_by,
+            sort_order,
+        })
+    }
+
+    async fn collect_sorted_task_details(
+        &self,
+        query: TaskQuery,
+    ) -> AppResult<(Vec<TaskDetail>, TaskSortBy, SortOrder)> {
         let filter = self.resolve_task_filter(&query).await?;
-        let details = self
+        let mut details = self
             .store
             .list_tasks_with_stats(filter)
             .await?
@@ -1011,13 +1146,19 @@ impl AgentaService {
                     )
                 },
             )
-            .collect();
-        Ok(paginate_by_created_at(
-            details,
-            page,
-            |detail| detail.task.created_at,
-            |detail| detail.task.task_id,
-        ))
+            .collect::<Vec<_>>();
+        let sort_by = query
+            .sort_by
+            .unwrap_or_else(|| default_task_sort(query.version.as_deref(), &details));
+        let sort_order = query.sort_order.unwrap_or_else(|| {
+            if matches!(sort_by, TaskSortBy::TaskCode | TaskSortBy::Title) {
+                SortOrder::Asc
+            } else {
+                SortOrder::Desc
+            }
+        });
+        sort_task_details(&mut details, sort_by, sort_order);
+        Ok((details, sort_by, sort_order))
     }
 
     pub async fn update_task(&self, reference: &str, input: UpdateTaskInput) -> AppResult<Task> {
@@ -1393,9 +1534,68 @@ impl AgentaService {
     }
 
     pub async fn search(&self, input: SearchInput) -> AppResult<SearchResponse> {
-        let text = require_non_empty(input.text, "search text")?;
+        let query_text = input.text.and_then(|value| clean_optional(Some(value)));
+        if query_text.is_none()
+            && input.project.is_none()
+            && input.version.is_none()
+            && input.task_kind.is_none()
+            && input.task_code_prefix.is_none()
+            && input.title_prefix.is_none()
+        {
+            return Err(AppError::InvalidArguments(
+                "search requires query text or at least one structured filter".to_string(),
+            ));
+        }
+
         let limit = input.limit.unwrap_or(10).clamp(1, 50);
-        self.store.search(&text, limit).await
+        let query = TaskQuery {
+            project: input.project,
+            version: input.version,
+            status: None,
+            task_kind: input.task_kind,
+            task_code_prefix: input.task_code_prefix,
+            title_prefix: input.title_prefix,
+            sort_by: None,
+            sort_order: None,
+        };
+        let (details, _, _) = self.collect_sorted_task_details(query).await?;
+        let candidate_task_ids = details
+            .iter()
+            .map(|detail| detail.task.task_id.to_string())
+            .collect::<std::collections::HashSet<_>>();
+
+        let tasks = if let Some(query_text) = query_text.as_deref() {
+            rank_task_search_hits(&details, query_text)
+                .into_iter()
+                .take(limit)
+                .map(task_hit_from_detail)
+                .collect()
+        } else {
+            details
+                .iter()
+                .take(limit)
+                .map(task_hit_from_detail)
+                .collect()
+        };
+
+        let activities = if let Some(query_text) = query_text.as_deref() {
+            self.store
+                .search(query_text, limit.saturating_mul(5))
+                .await?
+                .activities
+                .into_iter()
+                .filter(|activity| candidate_task_ids.contains(&activity.task_id))
+                .take(limit)
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        Ok(SearchResponse {
+            query: query_text,
+            tasks,
+            activities,
+        })
     }
 
     pub async fn list_approval_requests(
@@ -1692,11 +1892,15 @@ impl AgentaService {
             task_id: Uuid::new_v4(),
             project_id: project.project_id,
             version_id,
+            task_code: clean_optional(input.task_code),
+            task_kind: input.task_kind.unwrap_or_default(),
             title: require_non_empty(input.title, "task title")?,
             summary: clean_optional(input.summary),
             description: clean_optional(input.description),
             task_search_summary: String::new(),
             task_context_digest: String::new(),
+            latest_note_summary: None,
+            knowledge_status: KnowledgeStatus::Empty,
             status: input.status.unwrap_or_default(),
             priority: input.priority.unwrap_or_default(),
             created_by: created_by.clone(),
@@ -1707,6 +1911,8 @@ impl AgentaService {
         };
         task.closed_at = closed_at_for_status(task.status, now);
         task.task_search_summary = build_task_search_summary(
+            task.task_code.as_deref(),
+            task.task_kind,
             &task.title,
             task.summary.as_deref(),
             task.description.as_deref(),
@@ -1747,6 +1953,12 @@ impl AgentaService {
         if let Some(title) = input.title {
             task.title = require_non_empty(title, "task title")?;
         }
+        if let Some(task_code) = input.task_code {
+            task.task_code = clean_optional(Some(task_code));
+        }
+        if let Some(task_kind) = input.task_kind {
+            task.task_kind = task_kind;
+        }
         if let Some(summary) = input.summary {
             task.summary = clean_optional(Some(summary));
         }
@@ -1766,6 +1978,8 @@ impl AgentaService {
         task.updated_at = OffsetDateTime::now_utc();
         task.closed_at = closed_at_for_status(task.status, task.updated_at);
         task.task_search_summary = build_task_search_summary(
+            task.task_code.as_deref(),
+            task.task_kind,
             &task.title,
             task.summary.as_deref(),
             task.description.as_deref(),
@@ -1835,11 +2049,15 @@ impl AgentaService {
             task_id: Uuid::new_v4(),
             project_id: parent.project_id,
             version_id,
+            task_code: clean_optional(input.task_code),
+            task_kind: input.task_kind.unwrap_or_default(),
             title: require_non_empty(input.title, "task title")?,
             summary: clean_optional(input.summary),
             description: clean_optional(input.description),
             task_search_summary: String::new(),
             task_context_digest: String::new(),
+            latest_note_summary: None,
+            knowledge_status: KnowledgeStatus::Empty,
             status: input.status.unwrap_or_default(),
             priority: input.priority.unwrap_or_default(),
             created_by: created_by.clone(),
@@ -1850,6 +2068,8 @@ impl AgentaService {
         };
         task.closed_at = closed_at_for_status(task.status, now);
         task.task_search_summary = build_task_search_summary(
+            task.task_code.as_deref(),
+            task.task_kind,
             &task.title,
             task.summary.as_deref(),
             task.description.as_deref(),
@@ -2368,6 +2588,7 @@ impl AgentaService {
         let task = self.store.get_task_by_ref_tx(&mut tx, &input.task).await?;
         let now = OffsetDateTime::now_utc();
         let content = require_non_empty(input.content, "note content")?;
+        let note_kind = input.note_kind.unwrap_or_default();
         let activity = TaskActivity {
             activity_id: Uuid::new_v4(),
             task_id: task.task_id,
@@ -2382,9 +2603,13 @@ impl AgentaService {
                 .filter(|value| !value.trim().is_empty())
                 .unwrap_or_else(|| "cli".to_string()),
             created_at: now,
-            metadata_json: json!({}),
+            metadata_json: json!({
+                "note_kind": note_kind,
+            }),
         };
         self.store.insert_activity_tx(&mut tx, &activity).await?;
+        self.refresh_task_note_rollup_tx(&mut tx, task.task_id)
+            .await?;
         self.enqueue_sync_mutation_tx(
             &mut tx,
             SyncEntityKind::Note,
@@ -2520,6 +2745,69 @@ impl AgentaService {
             .update_task_context_digest_tx(tx, task_id, &digest)
             .await?;
         Ok(digest)
+    }
+
+    async fn refresh_task_note_rollup_tx(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        task_id: Uuid,
+    ) -> AppResult<(Option<String>, KnowledgeStatus, String)> {
+        let row = sqlx::query(
+            r#"
+            SELECT
+                (
+                    SELECT ta.activity_search_summary
+                    FROM task_activities ta
+                    WHERE ta.task_id = ?
+                      AND ta.kind = ?
+                    ORDER BY ta.created_at DESC, ta.activity_id DESC
+                    LIMIT 1
+                ) AS latest_note_summary,
+                EXISTS(
+                    SELECT 1
+                    FROM task_activities ta
+                    WHERE ta.task_id = ?
+                      AND ta.kind = ?
+                ) AS has_note,
+                EXISTS(
+                    SELECT 1
+                    FROM task_activities ta
+                    WHERE ta.task_id = ?
+                      AND ta.kind = ?
+                      AND json_extract(ta.metadata_json, '$.note_kind') = ?
+                ) AS has_conclusion
+            "#,
+        )
+        .bind(task_id.to_string())
+        .bind(TaskActivityKind::Note.to_string())
+        .bind(task_id.to_string())
+        .bind(TaskActivityKind::Note.to_string())
+        .bind(task_id.to_string())
+        .bind(TaskActivityKind::Note.to_string())
+        .bind(NoteKind::Conclusion.to_string())
+        .fetch_one(&mut **tx)
+        .await?;
+
+        let latest_note_summary = row.get::<Option<String>, _>("latest_note_summary");
+        let has_note = row.get::<i64, _>("has_note") > 0;
+        let has_conclusion = row.get::<i64, _>("has_conclusion") > 0;
+        let knowledge_status = if has_conclusion {
+            KnowledgeStatus::Reusable
+        } else if has_note {
+            KnowledgeStatus::Working
+        } else {
+            KnowledgeStatus::Empty
+        };
+        self.store
+            .update_task_note_rollup_tx(
+                tx,
+                task_id,
+                latest_note_summary.as_deref(),
+                knowledge_status,
+            )
+            .await?;
+        let digest = self.refresh_task_context_digest_tx(tx, task_id).await?;
+        Ok((latest_note_summary, knowledge_status, digest))
     }
 
     async fn touch_task_for_relation_change_tx(
@@ -3246,6 +3534,8 @@ impl AgentaService {
                         self.store.insert_activity_tx(&mut tx, &activity).await?;
                     }
                 }
+                self.refresh_task_context_digest_tx(&mut tx, task.task_id)
+                    .await?;
 
                 self.store
                     .upsert_synced_entity_state_tx(
@@ -3369,6 +3659,8 @@ impl AgentaService {
                     .is_some();
                 if !exists {
                     self.store.insert_activity_tx(&mut tx, &activity).await?;
+                    self.refresh_task_note_rollup_tx(&mut tx, activity.task_id)
+                        .await?;
                 }
                 self.store
                     .upsert_synced_entity_state_tx(
@@ -3514,6 +3806,9 @@ impl AgentaService {
                 None => None,
             },
             status: query.status,
+            task_kind: query.task_kind,
+            task_code_prefix: query.task_code_prefix.clone(),
+            title_prefix: query.title_prefix.clone(),
         })
     }
 }
@@ -3593,9 +3888,13 @@ fn task_detail_from_parts(
 
 fn build_task_context_digest_from_detail(detail: &TaskDetail) -> String {
     let digest = format!(
-        "status={} priority={} ready_to_start={} parent_task_id={} child_count={} open_blocker_count={} blocking_count={} title={} summary={} description={}",
+        "status={} priority={} task_code={} task_kind={} knowledge_status={} latest_note_summary={} ready_to_start={} parent_task_id={} child_count={} open_blocker_count={} blocking_count={} title={} summary={} description={}",
         detail.task.status,
         detail.task.priority,
+        detail.task.task_code.as_deref().unwrap_or(""),
+        detail.task.task_kind,
+        detail.task.knowledge_status,
+        detail.task.latest_note_summary.as_deref().unwrap_or(""),
         detail.ready_to_start,
         detail
             .parent_task_id
@@ -3612,8 +3911,308 @@ fn build_task_context_digest_from_detail(detail: &TaskDetail) -> String {
         digest
     } else {
         let mut output = digest.chars().take(319).collect::<String>();
-        output.push('…');
+        output.push_str("...");
         output
+    }
+}
+
+fn build_task_list_summary(details: &[TaskDetail]) -> TaskListSummary {
+    let mut summary = TaskListSummary {
+        total: details.len(),
+        status_counts: TaskStatusCounts {
+            draft: 0,
+            ready: 0,
+            in_progress: 0,
+            blocked: 0,
+            done: 0,
+            cancelled: 0,
+        },
+        knowledge_counts: TaskKnowledgeCounts {
+            empty: 0,
+            working: 0,
+            reusable: 0,
+        },
+        kind_counts: TaskKindCounts {
+            standard: 0,
+            context: 0,
+            index: 0,
+        },
+        ready_to_start_count: 0,
+    };
+
+    for detail in details {
+        match detail.task.status {
+            TaskStatus::Draft => summary.status_counts.draft += 1,
+            TaskStatus::Ready => summary.status_counts.ready += 1,
+            TaskStatus::InProgress => summary.status_counts.in_progress += 1,
+            TaskStatus::Blocked => summary.status_counts.blocked += 1,
+            TaskStatus::Done => summary.status_counts.done += 1,
+            TaskStatus::Cancelled => summary.status_counts.cancelled += 1,
+        }
+        match detail.task.knowledge_status {
+            KnowledgeStatus::Empty => summary.knowledge_counts.empty += 1,
+            KnowledgeStatus::Working => summary.knowledge_counts.working += 1,
+            KnowledgeStatus::Reusable => summary.knowledge_counts.reusable += 1,
+        }
+        match detail.task.task_kind {
+            TaskKind::Standard => summary.kind_counts.standard += 1,
+            TaskKind::Context => summary.kind_counts.context += 1,
+            TaskKind::Index => summary.kind_counts.index += 1,
+        }
+        if detail.ready_to_start {
+            summary.ready_to_start_count += 1;
+        }
+    }
+
+    summary
+}
+
+fn default_task_sort(version_ref: Option<&str>, details: &[TaskDetail]) -> TaskSortBy {
+    if version_ref.is_some()
+        && details.iter().any(|detail| {
+            detail
+                .task
+                .task_code
+                .as_deref()
+                .is_some_and(|value| !value.is_empty())
+        })
+    {
+        TaskSortBy::TaskCode
+    } else {
+        TaskSortBy::CreatedAt
+    }
+}
+
+fn sort_task_details(details: &mut [TaskDetail], sort_by: TaskSortBy, sort_order: SortOrder) {
+    details.sort_by(|left, right| {
+        let ordering = match sort_by {
+            TaskSortBy::CreatedAt => left.task.created_at.cmp(&right.task.created_at),
+            TaskSortBy::UpdatedAt => left.task.updated_at.cmp(&right.task.updated_at),
+            TaskSortBy::LatestActivityAt => left.latest_activity_at.cmp(&right.latest_activity_at),
+            TaskSortBy::TaskCode => compare_task_code_fields(left, right),
+            TaskSortBy::Title => compare_text(
+                left.task.title.as_str(),
+                right.task.title.as_str(),
+                left.task.task_id,
+                right.task.task_id,
+            ),
+        };
+        match sort_order {
+            SortOrder::Asc => ordering,
+            SortOrder::Desc => ordering.reverse(),
+        }
+    });
+}
+
+fn compare_task_code_fields(left: &TaskDetail, right: &TaskDetail) -> std::cmp::Ordering {
+    let left_code = left.task.task_code.as_deref();
+    let right_code = right.task.task_code.as_deref();
+    match (left_code, right_code) {
+        (Some(left_code), Some(right_code)) => compare_task_codes(
+            left_code,
+            right_code,
+            left.task.title.as_str(),
+            right.task.title.as_str(),
+            left.task.task_id,
+            right.task.task_id,
+        ),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => compare_text(
+            left.task.title.as_str(),
+            right.task.title.as_str(),
+            left.task.task_id,
+            right.task.task_id,
+        ),
+    }
+}
+
+fn compare_task_codes(
+    left: &str,
+    right: &str,
+    left_title: &str,
+    right_title: &str,
+    left_id: Uuid,
+    right_id: Uuid,
+) -> std::cmp::Ordering {
+    let left_raw = left.trim().to_ascii_lowercase();
+    let right_raw = right.trim().to_ascii_lowercase();
+    let left_parts = task_code_parts(&left_raw);
+    let right_parts = task_code_parts(&right_raw);
+    left_parts
+        .0
+        .cmp(&right_parts.0)
+        .then_with(|| left_parts.1.cmp(&right_parts.1))
+        .then_with(|| left_raw.cmp(&right_raw))
+        .then_with(|| compare_text(left_title, right_title, left_id, right_id))
+}
+
+fn task_code_parts(value: &str) -> (String, u64) {
+    if let Some((prefix, suffix)) = value.rsplit_once('-') {
+        let prefix = prefix.trim();
+        let suffix = suffix.trim();
+        if !prefix.is_empty() && !suffix.is_empty() && suffix.chars().all(|ch| ch.is_ascii_digit())
+        {
+            return (
+                prefix.to_string(),
+                suffix.parse::<u64>().unwrap_or(u64::MAX),
+            );
+        }
+    }
+    (value.trim().to_string(), u64::MAX)
+}
+
+fn compare_text(left: &str, right: &str, left_id: Uuid, right_id: Uuid) -> std::cmp::Ordering {
+    left.trim()
+        .to_ascii_lowercase()
+        .cmp(&right.trim().to_ascii_lowercase())
+        .then_with(|| left_id.cmp(&right_id))
+}
+
+fn rank_task_search_hits<'a>(details: &'a [TaskDetail], query: &str) -> Vec<&'a TaskDetail> {
+    let query = query.trim().to_ascii_lowercase();
+    let mut matched = details
+        .iter()
+        .filter_map(|detail| {
+            let score = task_search_score(detail, &query);
+            (score > 0).then_some((score, detail))
+        })
+        .collect::<Vec<_>>();
+    matched.sort_by(|left, right| {
+        right
+            .0
+            .cmp(&left.0)
+            .then_with(|| right.1.latest_activity_at.cmp(&left.1.latest_activity_at))
+            .then_with(|| right.1.task.updated_at.cmp(&left.1.task.updated_at))
+            .then_with(|| left.1.task.task_id.cmp(&right.1.task.task_id))
+    });
+    matched.into_iter().map(|(_, detail)| detail).collect()
+}
+
+fn task_search_score(detail: &TaskDetail, query: &str) -> usize {
+    let mut score = 0;
+    score += field_score(detail.task.task_code.as_deref(), query, 500, 300, 120);
+    score += field_score(Some(detail.task.title.as_str()), query, 450, 240, 100);
+    score += field_score(
+        detail.task.latest_note_summary.as_deref(),
+        query,
+        300,
+        180,
+        80,
+    );
+    score += field_score(
+        Some(detail.task.task_search_summary.as_str()),
+        query,
+        200,
+        120,
+        40,
+    );
+    score += field_score(
+        Some(detail.task.task_context_digest.as_str()),
+        query,
+        160,
+        80,
+        20,
+    );
+    score
+}
+
+fn field_score(
+    value: Option<&str>,
+    query: &str,
+    exact: usize,
+    prefix: usize,
+    contains: usize,
+) -> usize {
+    let Some(value) = value else {
+        return 0;
+    };
+    let normalized = value.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        0
+    } else if normalized == query {
+        exact
+    } else if normalized.starts_with(query) {
+        prefix
+    } else if normalized.contains(query) {
+        contains
+    } else {
+        0
+    }
+}
+
+fn task_hit_from_detail(detail: &TaskDetail) -> crate::search::TaskSearchHit {
+    crate::search::TaskSearchHit {
+        task_id: detail.task.task_id.to_string(),
+        task_code: detail.task.task_code.clone(),
+        task_kind: detail.task.task_kind.to_string(),
+        title: detail.task.title.clone(),
+        status: detail.task.status.to_string(),
+        priority: detail.task.priority.to_string(),
+        knowledge_status: detail.task.knowledge_status.to_string(),
+        summary: detail
+            .task
+            .latest_note_summary
+            .clone()
+            .unwrap_or_else(|| detail.task.task_search_summary.clone()),
+    }
+}
+
+fn paginate_presorted_by_cursor<T, FCreatedAt, FId>(
+    items: Vec<T>,
+    page: PageRequest,
+    created_at: FCreatedAt,
+    id: FId,
+) -> PageResult<T>
+where
+    FCreatedAt: Fn(&T) -> OffsetDateTime,
+    FId: Fn(&T) -> Uuid,
+{
+    let start_index = page.cursor.and_then(|cursor| {
+        items
+            .iter()
+            .position(|item| created_at(item) == cursor.created_at && id(item) == cursor.id)
+            .map(|index| index + 1)
+    });
+    let mut items = if let Some(start_index) = start_index {
+        items.into_iter().skip(start_index).collect::<Vec<_>>()
+    } else {
+        items
+    };
+
+    let Some(limit) = page.limit.map(|value| value.clamp(1, 50)) else {
+        return PageResult {
+            items,
+            limit: None,
+            next_cursor: None,
+            has_more: false,
+        };
+    };
+
+    let has_more = items.len() > limit;
+    if has_more {
+        items.truncate(limit + 1);
+    }
+
+    let next_cursor = if has_more {
+        let last_visible = &items[limit - 1];
+        Some(PageCursor {
+            created_at: created_at(last_visible),
+            id: id(last_visible),
+        })
+    } else {
+        None
+    };
+
+    if has_more {
+        items.truncate(limit);
+    }
+
+    PageResult {
+        items,
+        limit: Some(limit),
+        next_cursor,
+        has_more,
     }
 }
 

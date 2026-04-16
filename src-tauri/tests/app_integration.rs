@@ -62,6 +62,8 @@ async fn runtime_service_flow_covers_core_objects_and_search(
         .create_task(CreateTaskInput {
             project: project.slug.clone(),
             version: Some(version.version_id.to_string()),
+            task_code: None,
+            task_kind: None,
             title: "Ship dashboard".to_string(),
             summary: Some("Build the first dashboard".to_string()),
             description: Some("The dashboard ships with CLI, MCP, and search".to_string()),
@@ -75,6 +77,7 @@ async fn runtime_service_flow_covers_core_objects_and_search(
         .create_note(CreateNoteInput {
             task: task.task_id.to_string(),
             content: "Dashboard copy finalized".to_string(),
+            note_kind: None,
             created_by: Some("integration-test".to_string()),
         })
         .await?;
@@ -94,7 +97,12 @@ async fn runtime_service_flow_covers_core_objects_and_search(
     let search = runtime
         .service
         .search(SearchInput {
-            text: "dashboard".to_string(),
+            text: Some("dashboard".to_string()),
+            project: None,
+            version: None,
+            task_kind: None,
+            task_code_prefix: None,
+            title_prefix: None,
             limit: Some(10),
         })
         .await?;
@@ -146,6 +154,8 @@ async fn task_relations_track_hierarchy_and_blockers() -> Result<(), Box<dyn std
         .create_task(CreateTaskInput {
             project: project.slug.clone(),
             version: None,
+            task_code: None,
+            task_kind: None,
             title: "Parent task".to_string(),
             summary: None,
             description: None,
@@ -159,6 +169,8 @@ async fn task_relations_track_hierarchy_and_blockers() -> Result<(), Box<dyn std
         .create_task(CreateTaskInput {
             project: project.slug.clone(),
             version: None,
+            task_code: None,
+            task_kind: None,
             title: "Other parent".to_string(),
             summary: None,
             description: None,
@@ -172,6 +184,8 @@ async fn task_relations_track_hierarchy_and_blockers() -> Result<(), Box<dyn std
         .create_child_task(CreateChildTaskInput {
             parent: parent.task_id.to_string(),
             version: None,
+            task_code: None,
+            task_kind: None,
             title: "Child task".to_string(),
             summary: None,
             description: None,
@@ -221,6 +235,8 @@ async fn task_relations_track_hierarchy_and_blockers() -> Result<(), Box<dyn std
         .create_task(CreateTaskInput {
             project: project.slug.clone(),
             version: None,
+            task_code: None,
+            task_kind: None,
             title: "Blocker task".to_string(),
             summary: None,
             description: None,
@@ -659,6 +675,8 @@ async fn shared_runtime_serializes_service_and_mcp_writes() -> Result<(), Box<dy
                 .create_task(CreateTaskInput {
                     project: project_slug,
                     version: None,
+                    task_code: None,
+                    task_kind: None,
                     title: format!("Desktop task {index}"),
                     summary: Some(format!("Desktop summary {index}")),
                     description: None,
@@ -679,6 +697,8 @@ async fn shared_runtime_serializes_service_and_mcp_writes() -> Result<(), Box<dy
                     agenta_lib::interface::mcp::TaskCreateToolInput {
                         project: project_slug,
                         version: None,
+                        task_code: None,
+                        task_kind: None,
                         title: format!("MCP task {index}"),
                         summary: Some(format!("MCP summary {index}")),
                         description: None,
@@ -1146,7 +1166,7 @@ async fn standalone_agenta_mcp_binary_exposes_explicit_tools_and_runs_smoke_flow
     );
     assert_eq!(
         search_payload["result"]["structuredContent"]["meta"]["task_sort"],
-        "bm25(tasks_fts) asc"
+        "prefix/exact matches first, then query score, then latest_activity_at desc"
     );
 
     child.kill()?;

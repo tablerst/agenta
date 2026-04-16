@@ -22,6 +22,7 @@ import type {
   Task,
   TaskActivity,
   TaskContextPayload,
+  TaskListPayload,
   TaskRelation,
   Version,
 } from "./types";
@@ -202,6 +203,10 @@ type RawTaskContextPayload = Omit<TaskContextPayload, "task"> & {
   task: Task | RawTaskDetail;
 };
 
+type RawTaskListPayload = Omit<TaskListPayload, "tasks"> & {
+  tasks: Array<Task | RawTaskDetail>;
+};
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
@@ -239,6 +244,14 @@ function normalizeTaskResult(value: unknown): unknown {
       ...context,
       task: flattenTaskDetail(context.task as RawTaskDetail),
     } satisfies TaskContextPayload;
+  }
+
+  if (isRecord(value) && Array.isArray(value.tasks) && "summary" in value && "page" in value) {
+    const payload = value as RawTaskListPayload;
+    return {
+      ...payload,
+      tasks: payload.tasks.map((item) => (isTaskDetail(item) ? flattenTaskDetail(item) : item)),
+    } satisfies TaskListPayload;
   }
 
   return value;
@@ -353,10 +366,10 @@ export const desktopBridge = {
   },
   task(input: Record<string, unknown>) {
     return resolveBridgeMode() === "desktop"
-      ? callDesktop<Task | Task[] | TaskActivity[] | TaskContextPayload | TaskRelation>("desktop_task", input).then(
+      ? callDesktop<Task | TaskListPayload | Task[] | TaskActivity[] | TaskContextPayload | TaskRelation>("desktop_task", input).then(
           normalizeTaskEnvelope,
         )
-      : callPreview<Task | Task[] | TaskActivity[] | TaskContextPayload | TaskRelation>(() =>
+      : callPreview<Task | TaskListPayload | Task[] | TaskActivity[] | TaskContextPayload | TaskRelation>(() =>
           mockDesktopBridge.task(input),
         ).then(normalizeTaskEnvelope);
   },

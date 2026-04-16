@@ -9,6 +9,7 @@ import type {
   McpLogSnapshot,
   McpLogLevel,
   McpRuntimeStatus,
+  NoteKind,
   Project,
   RuntimeStatus,
   SearchResponse,
@@ -22,13 +23,16 @@ import type {
   Task,
   TaskActivity,
   TaskContextPayload,
+  TaskKind,
   TaskLink,
+  TaskListPayload,
   TaskPriority,
   TaskRelation,
   TaskRelationStatus,
   TaskStatus,
   Version,
   VersionStatus,
+  KnowledgeStatus,
 } from "./types";
 
 type JsonMap = Record<string, unknown>;
@@ -643,8 +647,12 @@ refreshTasksDerivedFields(state.tasks.map((item) => item.task_id));
 function createTaskRecord(
   task: Omit<
     Task,
+    | "task_code"
+    | "task_kind"
     | "task_context_digest"
     | "task_search_summary"
+    | "latest_note_summary"
+    | "knowledge_status"
     | "note_count"
     | "attachment_count"
     | "latest_activity_at"
@@ -653,29 +661,52 @@ function createTaskRecord(
     | "open_blocker_count"
     | "blocking_count"
     | "ready_to_start"
-  >,
+  > & {
+    task_code?: string | null;
+    task_kind?: TaskKind;
+  },
 ): Task {
   return {
     ...task,
+    task_code: task.task_code ?? null,
+    task_kind: task.task_kind ?? "standard",
     attachment_count: 0,
     blocking_count: 0,
     child_count: 0,
     latest_activity_at: task.updated_at,
+    latest_note_summary: null,
+    knowledge_status: "empty",
     note_count: 0,
     open_blocker_count: 0,
     parent_task_id: null,
     ready_to_start: !matchesClosedTask(task.status),
     task_context_digest: buildTaskContextDigest(task),
-    task_search_summary: buildTaskSearchSummary(task.title, task.summary, task.description),
+    task_search_summary: buildTaskSearchSummary(
+      task.task_code ?? null,
+      task.task_kind ?? "standard",
+      task.title,
+      task.summary,
+      task.description,
+    ),
   };
 }
 
-function buildTaskSearchSummary(title: string, summary: string | null, description: string | null) {
-  return [title, summary, description].filter(Boolean).join(" | ");
+function buildTaskSearchSummary(
+  taskCode: string | null,
+  taskKind: TaskKind,
+  title: string,
+  summary: string | null,
+  description: string | null,
+) {
+  return [taskCode, taskKind, title, summary, description].filter(Boolean).join(" | ");
 }
 
 function buildTaskContextDigest(task: {
   description: string | null;
+  task_code?: string | null;
+  task_kind?: TaskKind;
+  latest_note_summary?: string | null;
+  knowledge_status?: KnowledgeStatus;
   open_blocker_count?: number;
   parent_task_id?: string | null;
   ready_to_start?: boolean;
@@ -686,7 +717,7 @@ function buildTaskContextDigest(task: {
   summary: string | null;
   title: string;
 }) {
-  return `status=${task.status} priority=${task.priority} ready_to_start=${task.ready_to_start ?? true} parent_task_id=${task.parent_task_id ?? ""} child_count=${task.child_count ?? 0} open_blocker_count=${task.open_blocker_count ?? 0} blocking_count=${task.blocking_count ?? 0} title=${task.title} summary=${task.summary ?? ""} description=${task.description ?? ""}`.trim();
+  return `status=${task.status} priority=${task.priority} task_code=${task.task_code ?? ""} task_kind=${task.task_kind ?? "standard"} knowledge_status=${task.knowledge_status ?? "empty"} latest_note_summary=${task.latest_note_summary ?? ""} ready_to_start=${task.ready_to_start ?? true} parent_task_id=${task.parent_task_id ?? ""} child_count=${task.child_count ?? 0} open_blocker_count=${task.open_blocker_count ?? 0} blocking_count=${task.blocking_count ?? 0} title=${task.title} summary=${task.summary ?? ""} description=${task.description ?? ""}`.trim();
 }
 
 function matchesClosedTask(status: TaskStatus) {
@@ -742,6 +773,14 @@ function openBlockerCount(taskId: string) {
   }).length;
 }
 
+function noteKindForActivity(activity: TaskActivity): NoteKind {
+  const noteKind =
+    activity.metadata_json && typeof activity.metadata_json.note_kind === "string"
+      ? activity.metadata_json.note_kind
+      : undefined;
+  return (noteKind ?? "finding") as NoteKind;
+}
+
 function refreshTaskDerivedFields(taskId: string) {
   const task = state.tasks.find((item) => item.task_id === taskId);
   if (!task) {
@@ -755,10 +794,23 @@ function refreshTaskDerivedFields(taskId: string) {
   task.note_count = state.taskActivities.filter((item) => item.task_id === taskId && item.kind === "note").length;
   task.attachment_count = state.attachments.filter((item) => item.task_id === taskId).length;
   const latestActivity = taskActivitiesFor(taskId)[0]?.created_at ?? task.updated_at;
+  const latestNote =
+    taskActivitiesFor(taskId).find((item) => item.kind === "note") ?? null;
+  const hasConclusion = state.taskActivities.some(
+    (item) => item.task_id === taskId && item.kind === "note" && noteKindForActivity(item) === "conclusion",
+  );
   task.latest_activity_at = latestActivity > task.updated_at ? latestActivity : task.updated_at;
+  task.latest_note_summary = latestNote?.activity_search_summary ?? null;
+  task.knowledge_status = hasConclusion ? "reusable" : task.note_count > 0 ? "working" : "empty";
   task.ready_to_start = !matchesClosedTask(task.status) && task.open_blocker_count === 0;
   task.task_context_digest = buildTaskContextDigest(task);
-  task.task_search_summary = buildTaskSearchSummary(task.title, task.summary, task.description);
+  task.task_search_summary = buildTaskSearchSummary(
+    task.task_code,
+    task.task_kind,
+    task.title,
+    task.summary,
+    task.description,
+  );
 }
 
 function refreshTasksDerivedFields(taskIds: string[]) {
@@ -878,11 +930,102 @@ function listVersions(projectReference?: unknown) {
   return sortByDateDesc(state.versions);
 }
 
-function listTasks(filters: JsonMap) {
+function taskCodeParts(value: string | null) {
+  if (!value) {
+    return { prefix: "", number: Number.MAX_SAFE_INTEGER, raw: "" };
+  }
+  const normalized = value.trim().toLowerCase();
+  const parts = normalized.match(/^(.*)-(\d+)$/);
+  if (!parts) {
+    return { prefix: normalized, number: Number.MAX_SAFE_INTEGER, raw: normalized };
+  }
+  return { prefix: parts[1], number: Number(parts[2]), raw: normalized };
+}
+
+function compareTasks(left: Task, right: Task, sortBy: string, sortOrder: "asc" | "desc") {
+  let ordering = 0;
+  switch (sortBy) {
+    case "updated_at":
+      ordering = left.updated_at.localeCompare(right.updated_at);
+      break;
+    case "latest_activity_at":
+      ordering = left.latest_activity_at.localeCompare(right.latest_activity_at);
+      break;
+    case "task_code": {
+      const leftParts = taskCodeParts(left.task_code);
+      const rightParts = taskCodeParts(right.task_code);
+      ordering =
+        left.task_code && !right.task_code
+          ? -1
+          : !left.task_code && right.task_code
+            ? 1
+            : leftParts.prefix.localeCompare(rightParts.prefix) ||
+              leftParts.number - rightParts.number ||
+              leftParts.raw.localeCompare(rightParts.raw) ||
+              left.title.localeCompare(right.title) ||
+              left.task_id.localeCompare(right.task_id);
+      break;
+    }
+    case "title":
+      ordering = left.title.localeCompare(right.title) || left.task_id.localeCompare(right.task_id);
+      break;
+    case "created_at":
+    default:
+      ordering = left.created_at.localeCompare(right.created_at);
+      break;
+  }
+  return sortOrder === "asc" ? ordering : -ordering;
+}
+
+function buildTaskSummary(tasks: Task[]) {
+  return tasks.reduce<TaskListPayload["summary"]>(
+    (summary, task) => {
+      summary.total += 1;
+      summary.status_counts[task.status] += 1;
+      summary.knowledge_counts[task.knowledge_status] += 1;
+      summary.kind_counts[task.task_kind] += 1;
+      if (task.ready_to_start) {
+        summary.ready_to_start_count += 1;
+      }
+      return summary;
+    },
+    {
+      total: 0,
+      status_counts: {
+        draft: 0,
+        ready: 0,
+        in_progress: 0,
+        blocked: 0,
+        done: 0,
+        cancelled: 0,
+      },
+      knowledge_counts: {
+        empty: 0,
+        working: 0,
+        reusable: 0,
+      },
+      kind_counts: {
+        standard: 0,
+        context: 0,
+        index: 0,
+      },
+      ready_to_start_count: 0,
+    },
+  );
+}
+
+function listTasks(filters: JsonMap): TaskListPayload {
   refreshTasksDerivedFields(state.tasks.map((item) => item.task_id));
   const projectReference = typeof filters.project === "string" ? filters.project.trim() : "";
   const versionReference = typeof filters.version === "string" ? filters.version.trim() : "";
   const status = typeof filters.status === "string" ? (filters.status.trim() as TaskStatus) : undefined;
+  const kind = typeof filters.kind === "string" ? (filters.kind.trim() as TaskKind) : undefined;
+  const taskCodePrefix =
+    typeof filters.task_code_prefix === "string" && filters.task_code_prefix.trim()
+      ? filters.task_code_prefix.trim()
+      : "";
+  const titlePrefix =
+    typeof filters.title_prefix === "string" && filters.title_prefix.trim() ? filters.title_prefix.trim() : "";
 
   let nextTasks = [...state.tasks];
   if (projectReference) {
@@ -895,7 +1038,42 @@ function listTasks(filters: JsonMap) {
   if (status) {
     nextTasks = nextTasks.filter((item) => item.status === status);
   }
-  return sortByDateDesc(nextTasks);
+  if (kind) {
+    nextTasks = nextTasks.filter((item) => item.task_kind === kind);
+  }
+  if (taskCodePrefix) {
+    nextTasks = nextTasks.filter((item) => (item.task_code ?? "").startsWith(taskCodePrefix));
+  }
+  if (titlePrefix) {
+    nextTasks = nextTasks.filter((item) => item.title.startsWith(titlePrefix));
+  }
+
+  const sortBy =
+    typeof filters.sort_by === "string" && filters.sort_by.trim()
+      ? filters.sort_by.trim()
+      : versionReference && nextTasks.some((item) => item.task_code)
+        ? "task_code"
+        : "created_at";
+  const sortOrder =
+    typeof filters.sort_order === "string" && filters.sort_order.trim()
+      ? (filters.sort_order.trim() as "asc" | "desc")
+      : sortBy === "task_code" || sortBy === "title"
+        ? "asc"
+        : "desc";
+
+  nextTasks.sort((left, right) => compareTasks(left, right, sortBy, sortOrder));
+
+  return {
+    tasks: nextTasks,
+    summary: buildTaskSummary(nextTasks),
+    page: {
+      limit: null,
+      next_cursor: null,
+      has_more: false,
+      sort_by: sortBy,
+      sort_order: sortOrder,
+    },
+  };
 }
 
 function taskActivitiesFor(taskId: string) {
@@ -1017,6 +1195,8 @@ function createTask(input: JsonMap) {
     task_id: crypto.randomUUID(),
     project_id: project.project_id,
     version_id: resolveTaskVersion(project.project_id, input.version),
+    task_code: typeof input.task_code === "string" && input.task_code.trim() ? input.task_code.trim() : null,
+    task_kind: typeof input.kind === "string" && input.kind.trim() ? (input.kind.trim() as TaskKind) : "standard",
     title: requireString(input.title, "title"),
     summary: typeof input.summary === "string" && input.summary.trim() ? input.summary.trim() : null,
     description: typeof input.description === "string" && input.description.trim() ? input.description.trim() : null,
@@ -1056,6 +1236,12 @@ function updateTask(input: JsonMap) {
   const task = findTask(requireString(input.task, "task"));
   if (typeof input.title === "string" && input.title.trim()) {
     task.title = input.title.trim();
+  }
+  if ("task_code" in input) {
+    task.task_code = typeof input.task_code === "string" && input.task_code.trim() ? input.task_code.trim() : null;
+  }
+  if (typeof input.kind === "string" && input.kind.trim()) {
+    task.task_kind = input.kind.trim() as TaskKind;
   }
   if ("summary" in input) {
     task.summary = typeof input.summary === "string" && input.summary.trim() ? input.summary.trim() : null;
@@ -1434,6 +1620,10 @@ function resolveBlocker(input: JsonMap): TaskRelation {
 function createNote(input: JsonMap) {
   const task = findTask(requireString(input.task, "task"));
   const content = requireString(input.content, "content");
+  const noteKind =
+    typeof input.note_kind === "string" && input.note_kind.trim()
+      ? (input.note_kind.trim() as NoteKind)
+      : "finding";
   const note: TaskActivity = {
     activity_id: crypto.randomUUID(),
     task_id: task.task_id,
@@ -1442,7 +1632,7 @@ function createNote(input: JsonMap) {
     activity_search_summary: `note: ${content.toLowerCase()}`,
     created_by: typeof input.created_by === "string" && input.created_by.trim() ? input.created_by.trim() : "desktop",
     created_at: new Date().toISOString(),
-    metadata_json: {},
+    metadata_json: { note_kind: noteKind },
   };
   state.taskActivities = [note, ...state.taskActivities];
   task.updated_at = note.created_at;
@@ -1533,27 +1723,52 @@ function reviewApproval(input: JsonMap, nextStatus: Extract<ApprovalStatus, "app
 }
 
 function runSearch(input: JsonMap) {
-  const query = requireString(input.query, "query").toLowerCase();
+  const query =
+    typeof input.query === "string" && input.query.trim()
+      ? input.query.trim().toLowerCase()
+      : typeof input.text === "string" && input.text.trim()
+        ? input.text.trim().toLowerCase()
+        : null;
   const limit = typeof input.limit === "number" ? Math.max(1, Math.min(20, input.limit)) : 8;
+  const filteredTasks = listTasks(input).tasks;
+  const taskIds = new Set(filteredTasks.map((item) => item.task_id));
 
-  const tasks = state.tasks
+  const tasks = filteredTasks
     .filter((item) =>
-      [item.title, item.summary ?? "", item.description ?? "", item.task_context_digest]
-        .join(" ")
-        .toLowerCase()
-        .includes(query),
+      !query
+        ? true
+        : [
+            item.task_code ?? "",
+            item.title,
+            item.summary ?? "",
+            item.description ?? "",
+            item.task_context_digest,
+            item.latest_note_summary ?? "",
+          ]
+            .join(" ")
+            .toLowerCase()
+            .includes(query),
     )
     .slice(0, limit)
     .map((item) => ({
+      task_code: item.task_code,
+      task_kind: item.task_kind,
+      knowledge_status: item.knowledge_status,
       priority: item.priority,
       status: item.status,
-      summary: item.task_search_summary,
+      summary: item.latest_note_summary ?? item.task_search_summary,
       task_id: item.task_id,
       title: item.title,
     }));
 
-  const activities = state.taskActivities
-    .filter((item) => `${item.activity_search_summary} ${item.content}`.toLowerCase().includes(query))
+  const activities = !query
+    ? []
+    : state.taskActivities
+    .filter(
+      (item) =>
+        taskIds.has(item.task_id) &&
+        `${item.activity_search_summary} ${item.content}`.toLowerCase().includes(query),
+    )
     .slice(0, limit)
     .map((item) => ({
       activity_id: item.activity_id,

@@ -76,6 +76,15 @@ disable-model-invocation: false
 - 测试入口与高风险回归点
 - 汇总型常驻上下文索引
 
+创建编号型或上下文型任务时，优先使用 Agenta 的一等字段，而不是只把语义塞进标题：
+
+- 编号任务显式填写 `task_code`，例如 `InitCtx-01`
+- 普通执行任务使用 `task_kind=standard`
+- 模块上下文任务使用 `task_kind=context`
+- 汇总、导航、常驻索引任务使用 `task_kind=index`
+- 恢复一批编号任务时，优先调用 `task_list(project, version, sort_by=task_code, sort_order=asc)` 或 `search_query(project, version, task_code_prefix=...)`
+- 如果只想拉取上下文任务，优先使用 `kind=context` 或 `task_kind=context` 过滤
+
 如果某轮工作只覆盖其中一部分，优先把已经完成的模块沉淀成独立任务笔记，而不是等全部完成后再一次性补。
 
 ### 4. 可并行的探索用子代理，但写入与收口要串行
@@ -98,6 +107,12 @@ disable-model-invocation: false
 
 给 Agenta 任务追加笔记时，优先写可复用内容，而不是聊天式流水账。
 
+写入 note 时显式标注 `note_kind`：
+
+- `scratch`：临时草稿或过程记录，不代表已形成沉淀
+- `finding`：已核实发现，默认选项
+- `conclusion`：可复用结论，会把任务提升为 `knowledge_status=reusable`
+
 推荐结构：
 
 1. **主题与日期**
@@ -112,6 +127,7 @@ disable-model-invocation: false
 - 结论优先，不要只贴文件名
 - 文件路径要能直接帮助后续定位
 - 风险要写“为什么危险”，不要只写标题
+- 如果任务已经形成可复用结论，使用 `note_kind=conclusion`
 - 如果任务已足够可复用，再更新状态为 `done`
 
 ## 决策规则
@@ -151,8 +167,11 @@ disable-model-invocation: false
 - 项目是否存在且 slug 正确
 - 默认版本是否已经设置
 - 新任务是否挂在正确版本下
-- 任务标题是否有一致的顺序或编号规则
-- 笔记是否是“可复用结论”，而不是即时聊天记录
+- 编号任务是否已经写入 `task_code`，而不是只靠标题猜
+- 上下文/索引任务是否已经写入正确的 `task_kind`
+- 笔记是否已经用 `note_kind` 标明草稿、发现或结论
+- `task_list.summary` 中的 `done/ready/in_progress/blocked` 数量是否符合真实完成度
+- `knowledge_status` 是否能区分“无沉淀 / 进行中 / 可复用”
 - 状态是否与真实完成度一致
 - 是否已经回读确认写入成功
 

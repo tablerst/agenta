@@ -2,10 +2,28 @@ import { ref } from "vue";
 import { defineStore } from "pinia";
 
 import { desktopBridge } from "../lib/desktop";
-import type { Attachment, Task, TaskActivity, TaskContextPayload, TaskLink } from "../lib/types";
+import type {
+  Attachment,
+  Task,
+  TaskActivity,
+  TaskContextPayload,
+  TaskLink,
+  TaskListPageInfo,
+  TaskListPayload,
+  TaskListSummary,
+} from "../lib/types";
+
+function extractTaskRecord(value: unknown): Task {
+  if (value && typeof value === "object" && "task" in value) {
+    return (value as { task: Task }).task;
+  }
+  return value as Task;
+}
 
 export const useTasksStore = defineStore("tasks", () => {
   const tasks = ref<Task[]>([]);
+  const taskSummary = ref<TaskListSummary | null>(null);
+  const taskPage = ref<TaskListPageInfo | null>(null);
   const currentTask = ref<Task | null>(null);
   const parentTask = ref<TaskLink | null>(null);
   const childTasks = ref<TaskLink[]>([]);
@@ -21,7 +39,10 @@ export const useTasksStore = defineStore("tasks", () => {
     loadingTasks.value = true;
     try {
       const envelope = await desktopBridge.task({ action: "list", ...filters });
-      tasks.value = envelope.result as Task[];
+      const payload = envelope.result as TaskListPayload;
+      tasks.value = payload.tasks;
+      taskSummary.value = payload.summary;
+      taskPage.value = payload.page;
       return tasks.value;
     } finally {
       loadingTasks.value = false;
@@ -30,7 +51,7 @@ export const useTasksStore = defineStore("tasks", () => {
 
   async function loadTask(task: string) {
     const envelope = await desktopBridge.task({ action: "get", task });
-    currentTask.value = envelope.result as Task;
+    currentTask.value = extractTaskRecord(envelope.result);
     return currentTask.value;
   }
 
@@ -55,18 +76,18 @@ export const useTasksStore = defineStore("tasks", () => {
 
   async function createTask(payload: Record<string, unknown>) {
     const envelope = await desktopBridge.task({ action: "create", ...payload });
-    return envelope.result as Task;
+    return extractTaskRecord(envelope.result);
   }
 
   async function updateTask(task: string, payload: Record<string, unknown>) {
     const envelope = await desktopBridge.task({ action: "update", task, ...payload });
-    currentTask.value = envelope.result as Task;
+    currentTask.value = extractTaskRecord(envelope.result);
     return currentTask.value;
   }
 
   async function createChildTask(payload: Record<string, unknown>) {
     const envelope = await desktopBridge.task({ action: "create_child", ...payload });
-    return envelope.result as Task;
+    return extractTaskRecord(envelope.result);
   }
 
   async function attachChild(parent: string, child: string, updated_by = "desktop") {
@@ -134,6 +155,8 @@ export const useTasksStore = defineStore("tasks", () => {
 
   function clearTaskDetail() {
     currentTask.value = null;
+    taskSummary.value = null;
+    taskPage.value = null;
     parentTask.value = null;
     childTasks.value = [];
     blockedByTasks.value = [];
@@ -167,6 +190,8 @@ export const useTasksStore = defineStore("tasks", () => {
     parentTask,
     resolveBlocker,
     tasks,
+    taskPage,
+    taskSummary,
     updateTask,
   };
 });

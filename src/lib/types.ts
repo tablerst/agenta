@@ -28,6 +28,9 @@ export type TaskStatus =
   | "done"
   | "cancelled";
 export type TaskPriority = "low" | "normal" | "high" | "critical";
+export type TaskKind = "standard" | "context" | "index";
+export type KnowledgeStatus = "empty" | "working" | "reusable";
+export type NoteKind = "scratch" | "finding" | "conclusion";
 export type TaskRelationKind = "parent_child" | "blocks";
 export type TaskRelationStatus = "active" | "resolved";
 export type AttachmentKind =
@@ -67,11 +70,15 @@ export interface Task {
   task_id: string;
   project_id: string;
   version_id: string | null;
+  task_code: string | null;
+  task_kind: TaskKind;
   title: string;
   summary: string | null;
   description: string | null;
   task_search_summary: string;
   task_context_digest: string;
+  latest_note_summary: string | null;
+  knowledge_status: KnowledgeStatus;
   status: TaskStatus;
   priority: TaskPriority;
   created_by: string;
@@ -93,6 +100,7 @@ export interface TaskActivity {
   activity_id: string;
   task_id: string;
   kind: "note" | "status_change" | "system" | "attachment_ref";
+  note_kind?: NoteKind;
   content: string;
   activity_search_summary: string;
   created_by: string;
@@ -131,6 +139,49 @@ export interface TaskContextPayload {
   children: TaskLink[];
   blocked_by: TaskLink[];
   blocking: TaskLink[];
+}
+
+export interface TaskStatusCounts {
+  draft: number;
+  ready: number;
+  in_progress: number;
+  blocked: number;
+  done: number;
+  cancelled: number;
+}
+
+export interface TaskKnowledgeCounts {
+  empty: number;
+  working: number;
+  reusable: number;
+}
+
+export interface TaskKindCounts {
+  standard: number;
+  context: number;
+  index: number;
+}
+
+export interface TaskListSummary {
+  total: number;
+  status_counts: TaskStatusCounts;
+  knowledge_counts: TaskKnowledgeCounts;
+  kind_counts: TaskKindCounts;
+  ready_to_start_count: number;
+}
+
+export interface TaskListPageInfo {
+  limit: number | null;
+  next_cursor: string | null;
+  has_more: boolean;
+  sort_by: string;
+  sort_order: "asc" | "desc";
+}
+
+export interface TaskListPayload {
+  tasks: Task[];
+  summary: TaskListSummary;
+  page: TaskListPageInfo;
 }
 
 export interface Attachment {
@@ -296,9 +347,12 @@ export interface SyncPullSummary {
 
 export interface SearchTaskHit {
   task_id: string;
+  task_code: string | null;
+  task_kind: TaskKind;
   title: string;
   status: TaskStatus;
   priority: TaskPriority;
+  knowledge_status: KnowledgeStatus;
   summary: string;
 }
 
@@ -310,7 +364,7 @@ export interface SearchActivityHit {
 }
 
 export interface SearchResponse {
-  query: string;
+  query: string | null;
   tasks: SearchTaskHit[];
   activities: SearchActivityHit[];
 }

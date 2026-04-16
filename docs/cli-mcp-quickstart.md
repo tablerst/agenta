@@ -131,21 +131,21 @@ Standalone `agenta-mcp` 默认走 `stdout` 日志；若显式配置 `mcp.log.des
 - `version_get`：读取版本
 - `version_list`：列出版本，可按项目过滤
 - `version_update`：更新版本
-- `task_create`：创建任务
+- `task_create`：创建任务，支持 `task_code`、`task_kind`
 - `task_create_child`：在父任务下创建子任务
 - `task_get`：读取任务
-- `task_list`：列出任务，可按项目、版本、状态过滤
-- `task_update`：更新任务
+- `task_list`：列出任务，支持 `project/version/status/kind/task_code_prefix/title_prefix` 过滤，以及 `sort_by/sort_order` 排序；返回 `summary`
+- `task_update`：更新任务，支持 `task_code`、`task_kind`
 - `task_attach_child`：把已有任务绑定为子任务
 - `task_detach_child`：解除父子任务关系
 - `task_add_blocker`：为任务添加 blocker
 - `task_resolve_blocker`：解除任务 blocker
-- `note_create`：为任务追加备注
+- `note_create`：为任务追加备注，支持 `note_kind=scratch|finding|conclusion`
 - `note_list`：列出任务备注
 - `attachment_create`：为任务添加附件
 - `attachment_get`：读取附件
 - `attachment_list`：列出任务附件
-- `search_query`：搜索本地任务与任务活动
+- `search_query`：用结构化过滤 + 可选 query 搜索任务与任务活动；支持 `project/version/task_kind/task_code_prefix/title_prefix`
 
 当前对外 contract 约束：
 
@@ -153,6 +153,13 @@ Standalone `agenta-mcp` 默认走 `stdout` 日志；若显式配置 `mcp.log.des
 - `tools/list` 中会直接暴露字段说明、必填约束与可用枚举值
 - `status` / `priority` / `kind` 等字段已直接进入 JSON Schema
 - `*_get` / `*_list` / `search_query` 显式标记为只读
+
+任务恢复相关的推荐调用：
+
+- 恢复某个版本下的编号任务组：`task_list(project=..., version=..., sort_by=task_code, sort_order=asc)`
+- 直接按编号前缀拉一组任务：`search_query(project=..., version=..., task_code_prefix="InitCtx-")`
+- 只看上下文任务：`task_list(..., kind=context)`
+- 判断沉淀状态时优先看：`task.latest_note_summary`、`task.knowledge_status`、`task_list.summary`
 
 接入建议：
 

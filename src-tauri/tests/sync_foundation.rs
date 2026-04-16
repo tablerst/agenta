@@ -168,6 +168,8 @@ async fn sync_core_writes_enqueue_outbox_and_cli_lists_recent_items(
         .create_task(CreateTaskInput {
             project: project.slug.clone(),
             version: Some(version.version_id.to_string()),
+            task_code: None,
+            task_kind: None,
             title: "Sync Task".to_string(),
             summary: Some("Sync task summary".to_string()),
             description: Some("Sync task description".to_string()),
@@ -181,6 +183,7 @@ async fn sync_core_writes_enqueue_outbox_and_cli_lists_recent_items(
         .create_note(CreateNoteInput {
             task: task.task_id.to_string(),
             content: "Sync note content".to_string(),
+            note_kind: None,
             created_by: Some("sync-test".to_string()),
         })
         .await?;
@@ -439,6 +442,8 @@ async fn forced_sync_outbox_failure_rolls_back_attachment_and_cleans_file(
         .create_task(CreateTaskInput {
             project: project.slug,
             version: None,
+            task_code: None,
+            task_kind: None,
             title: "Attachment rollback task".to_string(),
             summary: None,
             description: None,
@@ -536,6 +541,8 @@ async fn sync_backfill_enqueues_existing_local_data_idempotently(
         .create_task(CreateTaskInput {
             project: project.slug.clone(),
             version: Some(version.version_id.to_string()),
+            task_code: None,
+            task_kind: None,
             title: "Backfill Task".to_string(),
             summary: Some("Should be backfilled".to_string()),
             description: None,
@@ -549,6 +556,7 @@ async fn sync_backfill_enqueues_existing_local_data_idempotently(
         .create_note(CreateNoteInput {
             task: task.task_id.to_string(),
             content: "Backfill note".to_string(),
+            note_kind: None,
             created_by: Some("backfill".to_string()),
         })
         .await?;
@@ -676,6 +684,8 @@ async fn postgres_remote_round_trip_pushes_and_pulls_between_runtimes(
         .create_task(CreateTaskInput {
             project: slug.clone(),
             version: Some(version.version_id.to_string()),
+            task_code: None,
+            task_kind: None,
             title: "Remote Sync Task".to_string(),
             summary: Some("Roundtrip task".to_string()),
             description: Some("Task should roundtrip through postgres".to_string()),
@@ -689,6 +699,7 @@ async fn postgres_remote_round_trip_pushes_and_pulls_between_runtimes(
         .create_note(CreateNoteInput {
             task: task.task_id.to_string(),
             content: "Roundtrip note".to_string(),
+            note_kind: None,
             created_by: Some("sender".to_string()),
         })
         .await?;

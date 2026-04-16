@@ -66,6 +66,24 @@ string_enum!(TaskPriority {
     Critical => "critical",
 });
 
+string_enum!(TaskKind {
+    Standard => "standard",
+    Context => "context",
+    Index => "index",
+});
+
+string_enum!(KnowledgeStatus {
+    Empty => "empty",
+    Working => "working",
+    Reusable => "reusable",
+});
+
+string_enum!(NoteKind {
+    Scratch => "scratch",
+    Finding => "finding",
+    Conclusion => "conclusion",
+});
+
 string_enum!(TaskActivityKind {
     Note => "note",
     StatusChange => "status_change",
@@ -163,11 +181,19 @@ pub struct Task {
     pub task_id: Uuid,
     pub project_id: Uuid,
     pub version_id: Option<Uuid>,
+    #[serde(default)]
+    pub task_code: Option<String>,
+    #[serde(default)]
+    pub task_kind: TaskKind,
     pub title: String,
     pub summary: Option<String>,
     pub description: Option<String>,
     pub task_search_summary: String,
     pub task_context_digest: String,
+    #[serde(default)]
+    pub latest_note_summary: Option<String>,
+    #[serde(default)]
+    pub knowledge_status: KnowledgeStatus,
     pub status: TaskStatus,
     pub priority: TaskPriority,
     pub created_by: String,
@@ -309,6 +335,24 @@ impl Default for TaskStatus {
 impl Default for TaskPriority {
     fn default() -> Self {
         Self::Normal
+    }
+}
+
+impl Default for TaskKind {
+    fn default() -> Self {
+        Self::Standard
+    }
+}
+
+impl Default for KnowledgeStatus {
+    fn default() -> Self {
+        Self::Empty
+    }
+}
+
+impl Default for NoteKind {
+    fn default() -> Self {
+        Self::Finding
     }
 }
 

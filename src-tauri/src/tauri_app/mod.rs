@@ -16,8 +16,9 @@ use crate::interface::response::{error, success, ErrorEnvelope, SuccessEnvelope}
 use crate::service::{
     AddTaskBlockerInput, ApprovalQuery, AttachChildTaskInput, CreateAttachmentInput,
     CreateChildTaskInput, CreateNoteInput, CreateProjectInput, CreateTaskInput, CreateVersionInput,
-    DetachChildTaskInput, RequestOrigin, ResolveTaskBlockerInput, ReviewApprovalInput, SearchInput,
-    TaskQuery, UpdateProjectInput, UpdateTaskInput, UpdateVersionInput,
+    DetachChildTaskInput, PageRequest, RequestOrigin, ResolveTaskBlockerInput, ReviewApprovalInput,
+    SearchInput, SortOrder, TaskQuery, TaskSortBy, UpdateProjectInput, UpdateTaskInput,
+    UpdateVersionInput,
 };
 
 #[derive(Debug, Serialize)]
@@ -105,6 +106,12 @@ struct DesktopTaskInput {
     task: Option<String>,
     project: Option<String>,
     version: Option<String>,
+    kind: Option<String>,
+    task_code: Option<String>,
+    task_code_prefix: Option<String>,
+    title_prefix: Option<String>,
+    sort_by: Option<String>,
+    sort_order: Option<String>,
     parent: Option<String>,
     child: Option<String>,
     blocker: Option<String>,
@@ -124,6 +131,7 @@ struct DesktopNoteInput {
     action: String,
     task: Option<String>,
     content: Option<String>,
+    note_kind: Option<String>,
     created_by: Option<String>,
 }
 
@@ -143,6 +151,11 @@ struct DesktopSearchInput {
     action: String,
     text: Option<String>,
     query: Option<String>,
+    project: Option<String>,
+    version: Option<String>,
+    task_kind: Option<String>,
+    task_code_prefix: Option<String>,
+    title_prefix: Option<String>,
     limit: Option<usize>,
 }
 
@@ -154,6 +167,22 @@ struct DesktopApprovalInput {
     status: Option<String>,
     reviewed_by: Option<String>,
     review_note: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct DesktopPageInfo {
+    limit: Option<usize>,
+    next_cursor: Option<String>,
+    has_more: bool,
+    sort_by: String,
+    sort_order: String,
+}
+
+#[derive(Debug, Serialize)]
+struct DesktopTaskListResult {
+    tasks: Vec<crate::service::TaskDetail>,
+    summary: crate::service::TaskListSummary,
+    page: DesktopPageInfo,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -376,6 +405,8 @@ async fn desktop_task(
                         CreateTaskInput {
                             project: required(input.project, "project")?,
                             version: input.version,
+                            task_code: input.task_code,
+                            task_kind: parse_optional_enum(input.kind)?,
                             title: required(input.title, "title")?,
                             summary: input.summary,
                             description: input.description,
@@ -398,6 +429,8 @@ async fn desktop_task(
                         CreateChildTaskInput {
                             parent: required(input.parent, "parent")?,
                             version: input.version,
+                            task_code: input.task_code,
+                            task_kind: parse_optional_enum(input.kind)?,
                             title: required(input.title, "title")?,
                             summary: input.summary,
                             description: input.description,
@@ -429,16 +462,35 @@ async fn desktop_task(
             ),
             "list" => {
                 let items = service
-                    .list_task_details(TaskQuery {
-                        project: input.project,
-                        version: input.version,
-                        status: parse_optional_enum(input.status)?,
-                    })
+                    .list_task_details_page(
+                        TaskQuery {
+                            project: input.project,
+                            version: input.version,
+                            status: parse_optional_enum(input.status)?,
+                            task_kind: parse_optional_enum(input.kind)?,
+                            task_code_prefix: input.task_code_prefix,
+                            title_prefix: input.title_prefix,
+                            sort_by: parse_optional_enum::<TaskSortBy>(input.sort_by)?,
+                            sort_order: parse_optional_enum::<SortOrder>(input.sort_order)?,
+                        },
+                        PageRequest::default(),
+                    )
                     .await?;
+                let total = items.summary.total;
                 success(
                     "task.list",
-                    &items,
-                    format!("Listed {} task(s)", items.len()),
+                    DesktopTaskListResult {
+                        tasks: items.items,
+                        summary: items.summary,
+                        page: DesktopPageInfo {
+                            limit: items.limit,
+                            next_cursor: None,
+                            has_more: items.has_more,
+                            sort_by: items.sort_by.to_string(),
+                            sort_order: items.sort_order.to_string(),
+                        },
+                    },
+                    format!("Listed {total} task(s)"),
                 )
             }
             "update" => {
@@ -448,6 +500,8 @@ async fn desktop_task(
                         &required(input.task, "task")?,
                         UpdateTaskInput {
                             version: input.version,
+                            task_code: input.task_code,
+                            task_kind: parse_optional_enum(input.kind)?,
                             title: input.title,
                             summary: input.summary,
                             description: input.description,
@@ -556,6 +610,7 @@ async fn desktop_note(
                         CreateNoteInput {
                             task: required(input.task, "task")?,
                             content: required(input.content, "content")?,
+                            note_kind: parse_optional_enum(input.note_kind)?,
                             created_by: input.created_by,
                         },
                     )
@@ -643,7 +698,12 @@ async fn desktop_search(
                 state
                     .service
                     .search(SearchInput {
-                        text: search_text(input.text, input.query)?,
+                        text: optional_search_text(input.text, input.query),
+                        project: input.project,
+                        version: input.version,
+                        task_kind: parse_optional_enum(input.task_kind)?,
+                        task_code_prefix: input.task_code_prefix,
+                        title_prefix: input.title_prefix,
                         limit: input.limit,
                     })
                     .await?,
@@ -975,12 +1035,10 @@ fn project_reference(project: Option<String>, slug: Option<String>) -> Result<St
     }
 }
 
-fn search_text(text: Option<String>, query: Option<String>) -> Result<String, AppError> {
+fn optional_search_text(text: Option<String>, query: Option<String>) -> Option<String> {
     match (text, query) {
-        (Some(text), _) if !text.trim().is_empty() => Ok(text.trim().to_string()),
-        (None, Some(query)) if !query.trim().is_empty() => Ok(query.trim().to_string()),
-        _ => Err(AppError::InvalidArguments(
-            "missing required field: text or query".to_string(),
-        )),
+        (Some(text), _) if !text.trim().is_empty() => Some(text.trim().to_string()),
+        (None, Some(query)) if !query.trim().is_empty() => Some(query.trim().to_string()),
+        _ => None,
     }
 }

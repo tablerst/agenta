@@ -15,8 +15,9 @@ use uuid::Uuid;
 
 use crate::app::McpSessionLogger;
 use crate::domain::{
-    Attachment, AttachmentKind, Project, ProjectStatus, Task, TaskActivity, TaskActivityKind,
-    TaskPriority, TaskRelationKind, TaskRelationStatus, TaskStatus, Version, VersionStatus,
+    Attachment, AttachmentKind, KnowledgeStatus, NoteKind, Project, ProjectStatus, Task,
+    TaskActivity, TaskActivityKind, TaskKind, TaskPriority, TaskRelationKind, TaskRelationStatus,
+    TaskStatus, Version, VersionStatus,
 };
 use crate::interface::response::error_to_rmcp;
 use crate::search::SearchResponse;
@@ -24,8 +25,8 @@ use crate::service::{
     AddTaskBlockerInput, AgentaService, AttachChildTaskInput, CreateAttachmentInput,
     CreateChildTaskInput, CreateNoteInput, CreateProjectInput, CreateTaskInput, CreateVersionInput,
     DetachChildTaskInput, PageCursor, PageRequest, PageResult, RequestOrigin,
-    ResolveTaskBlockerInput, SearchInput, TaskDetail, TaskLink, TaskQuery, UpdateProjectInput,
-    UpdateTaskInput, UpdateVersionInput,
+    ResolveTaskBlockerInput, SearchInput, SortOrder, TaskDetail, TaskLink, TaskListPageResult,
+    TaskQuery, TaskSortBy, UpdateProjectInput, UpdateTaskInput, UpdateVersionInput,
 };
 
 #[derive(Clone)]
@@ -111,7 +112,7 @@ pub struct PageInfo {
     pub has_more: bool,
     /// Stable sort key used to produce the page.
     pub sort_by: String,
-    /// Stable sort order used to produce the page. Always `desc` for list tools.
+    /// Stable sort order used to produce the page.
     pub sort_order: String,
 }
 
@@ -119,6 +120,8 @@ pub struct PageInfo {
 struct CursorPayload {
     created_at: String,
     id: String,
+    sort_by: Option<String>,
+    sort_order: Option<String>,
 }
 
 /// Create a new project.
@@ -348,6 +351,10 @@ pub struct TaskCreateToolInput {
         description = "Optional linked version reference. Supported values: version_id UUID only."
     )]
     pub version: Option<String>,
+    /// Optional stable task code used for grouped task flows such as `InitCtx-01`.
+    pub task_code: Option<String>,
+    /// Optional task role used during context recovery. Allowed values: `standard`, `context`, `index`.
+    pub task_kind: Option<TaskKind>,
     /// Task title shown in task lists.
     pub title: String,
     /// Optional short summary used in overviews.
@@ -402,6 +409,16 @@ pub struct TaskListToolInput {
         description = "Optional task lifecycle status filter. Allowed values: `draft`, `ready`, `in_progress`, `blocked`, `done`, `cancelled`."
     )]
     pub status: Option<TaskStatus>,
+    /// Optional task role filter. Allowed values: `standard`, `context`, `index`.
+    pub kind: Option<TaskKind>,
+    /// Optional task code prefix filter such as `InitCtx-`.
+    pub task_code_prefix: Option<String>,
+    /// Optional title prefix filter.
+    pub title_prefix: Option<String>,
+    /// Optional sort key. Allowed values: `created_at`, `updated_at`, `latest_activity_at`, `task_code`, `title`.
+    pub sort_by: Option<String>,
+    /// Optional sort order. Allowed values: `asc`, `desc`.
+    pub sort_order: Option<String>,
     /// Optional maximum number of tasks to return when paginating. Clamped to the server range when provided.
     pub limit: Option<usize>,
     /// Opaque cursor returned by a previous `task_list` call. Requires `limit` when provided.
@@ -421,6 +438,10 @@ pub struct TaskUpdateToolInput {
         description = "Replace the linked version reference. Supported values: version_id UUID only."
     )]
     pub version: Option<String>,
+    /// Replace the stable task code used for grouped flows.
+    pub task_code: Option<String>,
+    /// Replace the task role. Allowed values: `standard`, `context`, `index`.
+    pub task_kind: Option<TaskKind>,
     /// Replace the task title.
     pub title: Option<String>,
     /// Replace the short summary.
@@ -452,6 +473,10 @@ pub struct TaskCreateChildToolInput {
         description = "Optional linked version reference. Supported values: version_id UUID only. Defaults to the parent task version when omitted."
     )]
     pub version: Option<String>,
+    /// Optional stable task code used for grouped task flows such as `InitCtx-01`.
+    pub task_code: Option<String>,
+    /// Optional task role used during context recovery. Allowed values: `standard`, `context`, `index`.
+    pub task_kind: Option<TaskKind>,
     /// Child task title shown in task lists.
     pub title: String,
     /// Optional short summary used in overviews.
@@ -527,12 +552,20 @@ pub struct TaskRecord {
     pub project_id: String,
     /// Linked version UUID when one exists.
     pub version_id: Option<String>,
+    /// Optional stable task code used for grouped flows such as `InitCtx-01`.
+    pub task_code: Option<String>,
+    /// Context recovery role for the task.
+    pub task_kind: TaskKind,
     /// Task title shown in task lists.
     pub title: String,
     /// Optional short summary used in overviews.
     pub summary: Option<String>,
     /// Optional long-form description.
     pub description: Option<String>,
+    /// Search-friendly summary of the latest note when one exists.
+    pub latest_note_summary: Option<String>,
+    /// Rollup showing whether the task has reusable knowledge.
+    pub knowledge_status: KnowledgeStatus,
     /// Current lifecycle status.
     pub status: TaskStatus,
     /// Current task priority.
@@ -615,8 +648,43 @@ pub struct TaskToolOutput {
 pub struct TaskListToolOutput {
     /// Tasks visible to the MCP caller.
     pub tasks: Vec<TaskRecord>,
+    /// Summary counts computed from the filtered task set before pagination.
+    pub summary: TaskListSummaryRecord,
     /// Pagination metadata for the list.
     pub page: PageInfo,
+}
+
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+pub struct TaskStatusCountsRecord {
+    pub draft: usize,
+    pub ready: usize,
+    pub in_progress: usize,
+    pub blocked: usize,
+    pub done: usize,
+    pub cancelled: usize,
+}
+
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+pub struct TaskKnowledgeCountsRecord {
+    pub empty: usize,
+    pub working: usize,
+    pub reusable: usize,
+}
+
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+pub struct TaskKindCountsRecord {
+    pub standard: usize,
+    pub context: usize,
+    pub index: usize,
+}
+
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+pub struct TaskListSummaryRecord {
+    pub total: usize,
+    pub status_counts: TaskStatusCountsRecord,
+    pub knowledge_counts: TaskKnowledgeCountsRecord,
+    pub kind_counts: TaskKindCountsRecord,
+    pub ready_to_start_count: usize,
 }
 
 /// Result returned by task_context_get.
@@ -653,9 +721,13 @@ impl From<Task> for TaskRecord {
             task_id: task.task_id.to_string(),
             project_id: task.project_id.to_string(),
             version_id: task.version_id.map(|value| value.to_string()),
+            task_code: task.task_code,
+            task_kind: task.task_kind,
             title: task.title,
             summary: task.summary,
             description: task.description,
+            latest_note_summary: task.latest_note_summary,
+            knowledge_status: task.knowledge_status,
             status: task.status,
             priority: task.priority,
             created_by: task.created_by,
@@ -693,9 +765,13 @@ impl From<TaskDetail> for TaskRecord {
             task_id: task.task_id.to_string(),
             project_id: task.project_id.to_string(),
             version_id: task.version_id.map(|value| value.to_string()),
+            task_code: task.task_code,
+            task_kind: task.task_kind,
             title: task.title,
             summary: task.summary,
             description: task.description,
+            latest_note_summary: task.latest_note_summary,
+            knowledge_status: task.knowledge_status,
             status: task.status,
             priority: task.priority,
             created_by: task.created_by,
@@ -757,6 +833,8 @@ pub struct NoteCreateToolInput {
     pub task: String,
     /// Raw note content to append to the audit-friendly task activity stream.
     pub content: String,
+    /// Optional note semantic role. Allowed values: `scratch`, `finding`, `conclusion`. Defaults to `finding`.
+    pub note_kind: Option<NoteKind>,
     /// Actor name to record as the note author. Falls back to the MCP origin actor when omitted.
     pub created_by: Option<String>,
 }
@@ -794,6 +872,8 @@ pub struct NoteRecord {
     pub task_id: String,
     /// Activity kind for the record. Notes should always use `note`.
     pub kind: TaskActivityKind,
+    /// Semantic role for the note.
+    pub note_kind: NoteKind,
     /// Original note content.
     pub content: String,
     /// Search-oriented summary derived from the note content.
@@ -856,6 +936,7 @@ impl From<TaskActivity> for NoteRecord {
             activity_id: activity.activity_id.to_string(),
             task_id: activity.task_id.to_string(),
             kind: activity.kind,
+            note_kind: note_kind_for_activity(&activity),
             content: activity.content,
             summary: activity.activity_search_summary,
             created_by: activity.created_by,
@@ -984,8 +1065,18 @@ impl From<Attachment> for AttachmentRecord {
 /// Run a local full-text search across tasks and related activities.
 #[derive(Debug, Deserialize, JsonSchema, Default)]
 pub struct SearchQueryToolInput {
-    /// Search text to run against the local task FTS index. Agenta indexes task `title`, `task_search_summary`, and activity `activity_search_summary`.
-    pub query: String,
+    /// Optional search text. When omitted, Agenta falls back to structured task filtering only.
+    pub query: Option<String>,
+    /// Optional project filter. Supported values: project_id UUID or slug.
+    pub project: Option<String>,
+    /// Optional version filter. Supported values: version_id UUID only.
+    pub version: Option<String>,
+    /// Optional task role filter. Allowed values: `standard`, `context`, `index`.
+    pub task_kind: Option<TaskKind>,
+    /// Optional task code prefix filter such as `InitCtx-`.
+    pub task_code_prefix: Option<String>,
+    /// Optional title prefix filter.
+    pub title_prefix: Option<String>,
     /// Optional maximum number of matches to return per result bucket. Defaults to 10 and is clamped to the server range.
     pub limit: Option<usize>,
 }
@@ -995,12 +1086,18 @@ pub struct SearchQueryToolInput {
 pub struct SearchTaskHitRecord {
     /// Stable task UUID for the hit.
     pub task_id: String,
+    /// Optional stable task code for grouped flows.
+    pub task_code: Option<String>,
+    /// Task context role.
+    pub task_kind: String,
     /// Task title.
     pub title: String,
     /// Task lifecycle status as stored by the search index.
     pub status: String,
     /// Task priority as stored by the search index.
     pub priority: String,
+    /// Knowledge rollup as stored by the search index.
+    pub knowledge_status: String,
     /// Search-oriented task summary.
     pub summary: String,
 }
@@ -1052,7 +1149,7 @@ pub struct SearchMetaRecord {
 #[derive(Clone, Debug, Serialize, JsonSchema)]
 pub struct SearchQueryToolOutput {
     /// Original normalized search query.
-    pub query: String,
+    pub query: Option<String>,
     /// Task matches.
     pub tasks: Vec<SearchTaskHitRecord>,
     /// Activity matches.
@@ -1070,9 +1167,12 @@ impl SearchQueryToolOutput {
                 .into_iter()
                 .map(|task| SearchTaskHitRecord {
                     task_id: task.task_id,
+                    task_code: task.task_code,
+                    task_kind: task.task_kind,
                     title: task.title,
                     status: task.status,
                     priority: task.priority,
+                    knowledge_status: task.knowledge_status,
                     summary: task.summary,
                 })
                 .collect(),
@@ -1088,11 +1188,20 @@ impl SearchQueryToolOutput {
                 .collect(),
             meta: SearchMetaRecord {
                 indexed_fields: SearchIndexedFieldsRecord {
-                    tasks: vec!["title".to_string(), "task_search_summary".to_string()],
+                    tasks: vec![
+                        "title".to_string(),
+                        "task_code".to_string(),
+                        "task_kind".to_string(),
+                        "task_search_summary".to_string(),
+                        "task_context_digest".to_string(),
+                        "latest_note_summary".to_string(),
+                    ],
                     activities: vec!["activity_search_summary".to_string()],
                 },
-                task_sort: "bm25(tasks_fts) asc".to_string(),
-                activity_sort: "bm25(task_activities_fts) asc".to_string(),
+                task_sort:
+                    "prefix/exact matches first, then query score, then latest_activity_at desc"
+                        .to_string(),
+                activity_sort: "query match order with structured task filters applied".to_string(),
                 limit_applies_per_bucket: true,
                 task_limit_applied: applied_limit,
                 activity_limit_applied: applied_limit,
@@ -1103,10 +1212,46 @@ impl SearchQueryToolOutput {
     }
 }
 
+impl From<crate::service::TaskListSummary> for TaskListSummaryRecord {
+    fn from(summary: crate::service::TaskListSummary) -> Self {
+        Self {
+            total: summary.total,
+            status_counts: TaskStatusCountsRecord {
+                draft: summary.status_counts.draft,
+                ready: summary.status_counts.ready,
+                in_progress: summary.status_counts.in_progress,
+                blocked: summary.status_counts.blocked,
+                done: summary.status_counts.done,
+                cancelled: summary.status_counts.cancelled,
+            },
+            knowledge_counts: TaskKnowledgeCountsRecord {
+                empty: summary.knowledge_counts.empty,
+                working: summary.knowledge_counts.working,
+                reusable: summary.knowledge_counts.reusable,
+            },
+            kind_counts: TaskKindCountsRecord {
+                standard: summary.kind_counts.standard,
+                context: summary.kind_counts.context,
+                index: summary.kind_counts.index,
+            },
+            ready_to_start_count: summary.ready_to_start_count,
+        }
+    }
+}
+
 fn format_timestamp(value: OffsetDateTime) -> String {
     value
         .format(&Rfc3339)
         .unwrap_or_else(|_| value.unix_timestamp().to_string())
+}
+
+fn note_kind_for_activity(activity: &TaskActivity) -> NoteKind {
+    activity
+        .metadata_json
+        .get("note_kind")
+        .and_then(Value::as_str)
+        .and_then(|value| value.parse::<NoteKind>().ok())
+        .unwrap_or_default()
 }
 
 #[tool_router(router = tool_router)]
@@ -1432,6 +1577,8 @@ impl AgentaMcpServer {
                     CreateTaskInput {
                         project: required_text(params.project, "project")?,
                         version: optional_trimmed(params.version),
+                        task_code: optional_trimmed(params.task_code),
+                        task_kind: params.task_kind,
                         title: required_text(params.title, "title")?,
                         summary: optional_trimmed(params.summary),
                         description: optional_trimmed(params.description),
@@ -1575,12 +1722,18 @@ impl AgentaMcpServer {
                     project: optional_trimmed(params.project),
                     version: optional_trimmed(params.version),
                     status: params.status,
+                    task_kind: params.kind,
+                    task_code_prefix: optional_trimmed(params.task_code_prefix),
+                    title_prefix: optional_trimmed(params.title_prefix),
+                    sort_by: parse_task_sort_by(params.sort_by)?,
+                    sort_order: parse_sort_order(params.sort_order)?,
                 },
                 page_request,
             )
             .await
             .map(|tasks| TaskListToolOutput {
-                page: page_info(&tasks, "created_at,task_id"),
+                page: task_page_info(&tasks),
+                summary: TaskListSummaryRecord::from(tasks.summary),
                 tasks: tasks.items.into_iter().map(TaskRecord::from).collect(),
             })
             .map_err(error_to_rmcp);
@@ -1616,6 +1769,8 @@ impl AgentaMcpServer {
                     &reference,
                     UpdateTaskInput {
                         version: optional_trimmed(params.version),
+                        task_code: optional_trimmed(params.task_code),
+                        task_kind: params.task_kind,
                         title: optional_trimmed(params.title),
                         summary: optional_trimmed(params.summary),
                         description: optional_trimmed(params.description),
@@ -1667,6 +1822,8 @@ impl AgentaMcpServer {
                     CreateChildTaskInput {
                         parent: required_text(params.parent, "parent")?,
                         version: optional_trimmed(params.version),
+                        task_code: optional_trimmed(params.task_code),
+                        task_kind: params.task_kind,
                         title: required_text(params.title, "title")?,
                         summary: optional_trimmed(params.summary),
                         description: optional_trimmed(params.description),
@@ -1885,6 +2042,7 @@ impl AgentaMcpServer {
                 CreateNoteInput {
                     task: required_text(params.task, "task")?,
                     content: required_text(params.content, "content")?,
+                    note_kind: params.note_kind,
                     created_by: optional_trimmed(params.created_by),
                 },
             )
@@ -2079,7 +2237,7 @@ impl AgentaMcpServer {
 
     #[tool(
         name = "search_query",
-        description = "Search the local FTS index over task titles, task_search_summary, and activity_search_summary. Returns separate task and activity buckets sorted independently by bm25 ascending; limit applies per bucket.",
+        description = "Search tasks and related activities using structured filters plus optional query text. Task matches favor grouped task flow prefixes and reusable note summaries.",
         annotations(
             title = "Search Query",
             read_only_hint = true,
@@ -2098,7 +2256,12 @@ impl AgentaMcpServer {
         let result = self
             .service
             .search(SearchInput {
-                text: required_text(params.query, "query")?,
+                text: optional_trimmed(params.query),
+                project: optional_trimmed(params.project),
+                version: optional_trimmed(params.version),
+                task_kind: params.task_kind,
+                task_code_prefix: optional_trimmed(params.task_code_prefix),
+                title_prefix: optional_trimmed(params.title_prefix),
                 limit: params.limit,
             })
             .await
@@ -2164,10 +2327,26 @@ fn page_request(limit: Option<usize>, cursor: Option<String>) -> Result<PageRequ
 fn page_info<T>(page: &PageResult<T>, sort_by: &str) -> PageInfo {
     PageInfo {
         limit: page.limit,
-        next_cursor: page.next_cursor.as_ref().map(encode_cursor),
+        next_cursor: page
+            .next_cursor
+            .as_ref()
+            .map(|cursor| encode_cursor(cursor, None, None)),
         has_more: page.has_more,
         sort_by: sort_by.to_string(),
         sort_order: "desc".to_string(),
+    }
+}
+
+fn task_page_info(page: &TaskListPageResult) -> PageInfo {
+    PageInfo {
+        limit: page.limit,
+        next_cursor: page
+            .next_cursor
+            .as_ref()
+            .map(|cursor| encode_cursor(cursor, Some(page.sort_by), Some(page.sort_order))),
+        has_more: page.has_more,
+        sort_by: page.sort_by.to_string(),
+        sort_order: page.sort_order.to_string(),
     }
 }
 
@@ -2186,13 +2365,39 @@ fn decode_cursor(cursor: String) -> Result<PageCursor, ErrorData> {
     Ok(PageCursor { created_at, id })
 }
 
-fn encode_cursor(cursor: &PageCursor) -> String {
+fn encode_cursor(
+    cursor: &PageCursor,
+    sort_by: Option<TaskSortBy>,
+    sort_order: Option<SortOrder>,
+) -> String {
     let payload = CursorPayload {
         created_at: format_timestamp(cursor.created_at),
         id: cursor.id.to_string(),
+        sort_by: sort_by.map(|value| value.to_string()),
+        sort_order: sort_order.map(|value| value.to_string()),
     };
     let bytes = serde_json::to_vec(&payload).expect("cursor payload json");
     URL_SAFE_NO_PAD.encode(bytes)
+}
+
+fn parse_task_sort_by(value: Option<String>) -> Result<Option<TaskSortBy>, ErrorData> {
+    value
+        .map(|value| {
+            value
+                .parse::<TaskSortBy>()
+                .map_err(|error| ErrorData::invalid_params(error, None))
+        })
+        .transpose()
+}
+
+fn parse_sort_order(value: Option<String>) -> Result<Option<SortOrder>, ErrorData> {
+    value
+        .map(|value| {
+            value
+                .parse::<SortOrder>()
+                .map_err(|error| ErrorData::invalid_params(error, None))
+        })
+        .transpose()
 }
 
 #[cfg(test)]

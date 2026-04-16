@@ -48,11 +48,15 @@ pub(crate) fn map_task(row: SqliteRow) -> AppResult<Task> {
             .get::<Option<String>, _>("version_id")
             .map(|value| parse_uuid(value, "version_id"))
             .transpose()?,
+        task_code: row.get("task_code"),
+        task_kind: parse_enum(row.get("task_kind"), "task_kind")?,
         title: row.get("title"),
         summary: row.get("summary"),
         description: row.get("description"),
         task_search_summary: row.get("task_search_summary"),
         task_context_digest: row.get("task_context_digest"),
+        latest_note_summary: row.get("latest_note_summary"),
+        knowledge_status: parse_enum(row.get("knowledge_status"), "knowledge_status")?,
         status: parse_enum(row.get("status"), "status")?,
         priority: parse_enum(row.get("priority"), "priority")?,
         created_by: row.get("created_by"),

@@ -102,6 +102,8 @@ async fn deny_does_not_create_approval_request() -> Result<(), Box<dyn std::erro
             CreateTaskInput {
                 project: project.slug,
                 version: None,
+                task_code: None,
+                task_kind: None,
                 title: "Denied write".to_string(),
                 summary: None,
                 description: None,
@@ -155,6 +157,8 @@ async fn failed_replay_marks_request_failed() -> Result<(), Box<dyn std::error::
         .create_task(CreateTaskInput {
             project: project.slug,
             version: None,
+            task_code: None,
+            task_kind: None,
             title: "Queued attachment".to_string(),
             summary: None,
             description: None,
