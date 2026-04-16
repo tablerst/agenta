@@ -8,8 +8,9 @@ import {
   Paperclip,
   Plus,
   SquareKanban,
+  X,
 } from "@lucide/vue";
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { computed, nextTick, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 
@@ -41,6 +42,9 @@ const { t } = useI18n({ useScope: "global" });
 
 const detailTab = ref<TaskDetailTab>("overview");
 const tabRefs = new Map<TaskDetailTab, HTMLButtonElement>();
+const isCreatingTask = ref(false);
+const createTaskTitleInput = ref<HTMLInputElement | null>(null);
+const taskCreateTrigger = ref<HTMLElement | null>(null);
 
 const createTaskForm = reactive({
   title: "",
@@ -87,6 +91,7 @@ const selectedTask = computed(() => {
     (tasksStore.currentTask?.task_id === selectedTaskId.value ? tasksStore.currentTask : null)
   );
 });
+const selectedProjectLabel = computed(() => selectedProject.value?.name || selectedProjectSlug.value);
 
 function queryValue(
   overrides: Record<"status" | "task" | "version", string | undefined>,
@@ -150,6 +155,55 @@ function focusTab(tab: TaskDetailTab) {
   tabRefs.get(tab)?.focus();
 }
 
+function resetCreateTaskForm() {
+  createTaskForm.title = "";
+  createTaskForm.summary = "";
+  createTaskForm.description = "";
+  createTaskForm.status = "ready";
+  createTaskForm.priority = "normal";
+}
+
+function focusCreateTaskField() {
+  void nextTick(() => {
+    createTaskTitleInput.value?.focus();
+  });
+}
+
+function restoreTaskCreateFocus() {
+  void nextTick(() => {
+    taskCreateTrigger.value?.focus();
+  });
+}
+
+function openCreateTask(event?: Event) {
+  if (event?.currentTarget instanceof HTMLElement) {
+    taskCreateTrigger.value = event.currentTarget;
+  }
+  isCreatingTask.value = true;
+  focusCreateTaskField();
+}
+
+function cancelCreateTask() {
+  resetCreateTaskForm();
+  isCreatingTask.value = false;
+  restoreTaskCreateFocus();
+}
+
+async function selectTask(taskId: string) {
+  isCreatingTask.value = false;
+  await updateQuery({ task: taskId });
+}
+
+async function updateVersionFilter(version: string) {
+  isCreatingTask.value = false;
+  await updateQuery({ version: version || undefined, task: undefined });
+}
+
+async function updateStatusFilter(status: string) {
+  isCreatingTask.value = false;
+  await updateQuery({ status: status || undefined, task: undefined });
+}
+
 function handleTabKeydown(event: KeyboardEvent, tab: TaskDetailTab) {
   const index = taskDetailTabOptions.indexOf(tab);
 
@@ -202,6 +256,13 @@ watch(
     taskForm.priority = task.priority;
   },
   { immediate: true },
+);
+
+watch(
+  selectedProjectSlug,
+  () => {
+    cancelCreateTask();
+  },
 );
 
 watch(
@@ -302,9 +363,8 @@ async function submitCreateTask() {
     });
     await approvalsStore.refreshPendingCount();
     shell.pushNotice("success", t("notices.taskSubmitted"));
-    createTaskForm.title = "";
-    createTaskForm.summary = "";
-    createTaskForm.description = "";
+    resetCreateTaskForm();
+    isCreatingTask.value = false;
     await updateQuery({ task: created.task_id });
   } catch (error) {
     if (await jumpToQueuedApproval(error)) {
@@ -425,26 +485,28 @@ async function jumpToQueuedApproval(error: unknown) {
   <section class="workspace-section-grid">
     <aside class="workspace-list-pane">
       <div class="workspace-pane-stack">
-        <section class="panel-section">
-          <div class="mb-3 flex items-center gap-2 text-[var(--text-muted)]">
-            <ListFilter :size="14" />
-            <p class="section-label !mb-0">{{ t("tasks.filters") }}</p>
+        <section class="workspace-list-toolbar">
+          <div class="workspace-list-toolbar-head">
+            <div>
+              <p class="section-label">{{ t("tasks.listKicker") }}</p>
+              <h2 class="text-lg font-semibold text-[var(--text-main)]">{{ t("tasks.listTitle") }}</h2>
+            </div>
+            <div class="flex flex-wrap items-center gap-2">
+              <span v-if="selectedProjectLabel" class="status-pill">{{ selectedProjectLabel }}</span>
+              <span class="status-pill">{{ tasksStore.tasks.length }}</span>
+            </div>
           </div>
-          <div class="space-y-3">
-            <label class="form-field">
-              <span class="field-label">{{ t("tasks.currentProject") }}</span>
-              <input
-                class="control-input"
-                :value="selectedProject?.name || selectedProjectSlug"
-                disabled
-              />
-            </label>
-            <label class="form-field">
+          <div class="workspace-filter-toolbar">
+            <div class="workspace-filter-title">
+              <ListFilter :size="14" />
+              <span>{{ t("tasks.filters") }}</span>
+            </div>
+            <label class="compact-field">
               <span class="field-label">{{ t("routes.projects.sections.versions") }}</span>
               <select
-                class="control-select"
+                class="control-select compact-control"
                 :value="selectedVersionId"
-                @change="updateQuery({ version: ($event.target as HTMLSelectElement).value || undefined, task: undefined })"
+                @change="updateVersionFilter(($event.target as HTMLSelectElement).value)"
               >
                 <option value="">{{ t("tasks.allVersions") }}</option>
                 <option v-for="version in projectsStore.versions" :key="version.version_id" :value="version.version_id">
@@ -452,12 +514,12 @@ async function jumpToQueuedApproval(error: unknown) {
                 </option>
               </select>
             </label>
-            <label class="form-field">
+            <label class="compact-field">
               <span class="field-label">{{ t("common.status") }}</span>
               <select
-                class="control-select"
+                class="control-select compact-control"
                 :value="selectedStatus"
-                @change="updateQuery({ status: ($event.target as HTMLSelectElement).value || undefined, task: undefined })"
+                @change="updateStatusFilter(($event.target as HTMLSelectElement).value)"
               >
                 <option value="">{{ t("tasks.allStatuses") }}</option>
                 <option v-for="status in taskStatusOptions" :key="status" :value="status">
@@ -465,75 +527,37 @@ async function jumpToQueuedApproval(error: unknown) {
                 </option>
               </select>
             </label>
-          </div>
-        </section>
-
-        <section class="panel-section">
-          <p class="section-label">{{ t("tasks.createTask") }}</p>
-          <div class="space-y-3">
-            <input
-              v-model="createTaskForm.title"
-              class="control-input"
-              :placeholder="t('tasks.placeholders.title')"
-            />
-            <input
-              v-model="createTaskForm.summary"
-              class="control-input"
-              :placeholder="t('tasks.placeholders.summary')"
-            />
-            <textarea
-              v-model="createTaskForm.description"
-              class="control-textarea"
-              :placeholder="t('tasks.placeholders.executionContext')"
-            />
-            <div class="grid gap-3 md:grid-cols-2">
-              <select v-model="createTaskForm.status" class="control-select">
-                <option v-for="status in taskStatusOptions" :key="status" :value="status">
-                  {{ t(`status.task.${status}`) }}
-                </option>
-              </select>
-              <select v-model="createTaskForm.priority" class="control-select">
-                <option v-for="priority in taskPriorityOptions" :key="priority" :value="priority">
-                  {{ t(`status.priority.${priority}`) }}
-                </option>
-              </select>
-            </div>
-            <button class="primary-action spotlight-surface" @click="submitCreateTask">
+            <button class="primary-action spotlight-surface" type="button" @click="openCreateTask($event)">
               <Plus :size="15" />
               {{ t("tasks.createTaskAction") }}
             </button>
           </div>
         </section>
 
-        <section class="glass-panel p-5">
-          <div class="mb-4 flex items-center justify-between gap-3">
-            <div>
-              <p class="section-label">{{ t("tasks.listKicker") }}</p>
-              <h2 class="text-lg font-semibold text-[var(--text-main)]">{{ t("tasks.listTitle") }}</h2>
-            </div>
-            <span class="status-pill">{{ tasksStore.tasks.length }}</span>
-          </div>
-
+        <section class="workspace-list-region">
           <div v-if="tasksStore.tasks.length === 0" class="empty-state">
             {{ t("tasks.noMatches") }}
           </div>
-          <div v-else class="workspace-list-stack">
+          <div v-else class="workspace-row-list">
             <button
               v-for="task in tasksStore.tasks"
               :key="task.task_id"
               v-spotlight
               class="list-row spotlight-surface"
               :class="{ 'list-row-active': selectedTask?.task_id === task.task_id }"
-              @click="updateQuery({ task: task.task_id })"
+              @click="selectTask(task.task_id)"
             >
               <SquareKanban :size="16" />
-              <div class="min-w-0 flex-1">
-                <p class="truncate text-sm font-medium text-[var(--text-main)]">{{ task.title }}</p>
+              <div class="min-w-0 flex-1 space-y-2">
+                <div class="flex items-center justify-between gap-3">
+                  <p class="truncate text-sm font-medium text-[var(--text-main)]">{{ task.title }}</p>
+                  <span class="status-pill">{{ t(`status.task.${task.status}`) }}</span>
+                </div>
                 <p class="truncate text-xs text-[var(--text-muted)]">{{ task.summary || task.task_context_digest }}</p>
               </div>
-              <div class="flex flex-col items-end gap-1">
-                <span class="status-pill">{{ t(`status.task.${task.status}`) }}</span>
-                <span class="text-[11px] text-[var(--text-muted)]">{{ t(`status.priority.${task.priority}`) }}</span>
+              <div class="list-row-meta">
+                <span>{{ t(`status.priority.${task.priority}`) }}</span>
+                <span>{{ formatDateTime(task.updated_at) }}</span>
               </div>
             </button>
           </div>
@@ -542,7 +566,72 @@ async function jumpToQueuedApproval(error: unknown) {
     </aside>
 
     <div class="workspace-inspector-pane">
-      <div v-if="selectedTask" class="workspace-pane-stack">
+      <div v-if="isCreatingTask" class="workspace-pane-stack">
+        <section class="overview-editor">
+          <div class="overview-editor-copy">
+            <p class="section-label">{{ t("tasks.createTask") }}</p>
+            <h2 class="overview-editor-title">{{ t("tasks.createTask") }}</h2>
+            <p class="overview-editor-summary">{{ selectedProjectLabel }}</p>
+          </div>
+
+          <div class="overview-field-grid">
+            <label class="form-field overview-field-wide">
+              <span class="field-label">{{ t("tasks.fields.title") }}</span>
+              <input
+                ref="createTaskTitleInput"
+                v-model="createTaskForm.title"
+                class="quiet-control-input"
+                :placeholder="t('tasks.placeholders.title')"
+              />
+            </label>
+            <label class="form-field">
+              <span class="field-label">{{ t("tasks.fields.summary") }}</span>
+              <input
+                v-model="createTaskForm.summary"
+                class="quiet-control-input"
+                :placeholder="t('tasks.placeholders.summary')"
+              />
+            </label>
+            <label class="form-field">
+              <span class="field-label">{{ t("common.status") }}</span>
+              <select v-model="createTaskForm.status" class="quiet-control-select">
+                <option v-for="status in taskStatusOptions" :key="status" :value="status">
+                  {{ t(`status.task.${status}`) }}
+                </option>
+              </select>
+            </label>
+            <label class="form-field overview-field-wide">
+              <span class="field-label">{{ t("tasks.fields.description") }}</span>
+              <textarea
+                v-model="createTaskForm.description"
+                class="quiet-control-textarea"
+                :placeholder="t('tasks.placeholders.executionContext')"
+              />
+            </label>
+            <label class="form-field">
+              <span class="field-label">{{ t("tasks.fields.priority") }}</span>
+              <select v-model="createTaskForm.priority" class="quiet-control-select">
+                <option v-for="priority in taskPriorityOptions" :key="priority" :value="priority">
+                  {{ t(`status.priority.${priority}`) }}
+                </option>
+              </select>
+            </label>
+          </div>
+
+          <div class="overview-editor-actions gap-2">
+            <button class="secondary-action spotlight-surface" type="button" @click="cancelCreateTask">
+              <X :size="15" />
+              {{ t("common.cancel") }}
+            </button>
+            <button class="primary-action spotlight-surface" type="button" @click="submitCreateTask">
+              <Plus :size="15" />
+              {{ t("tasks.createTaskAction") }}
+            </button>
+          </div>
+        </section>
+      </div>
+
+      <div v-else-if="selectedTask" class="workspace-pane-stack">
         <section class="glass-panel p-5">
           <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
             <div>

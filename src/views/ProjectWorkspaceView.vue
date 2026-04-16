@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Folder, Plus } from "@lucide/vue";
-import { computed, onMounted, reactive, watch } from "vue";
+import { computed, nextTick, onMounted, reactive, ref, watch } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 
@@ -30,6 +30,9 @@ const createProjectForm = reactive({
   name: "",
   slug: "",
 });
+const isCreatingProject = ref(false);
+const createProjectSlugInput = ref<HTMLInputElement | null>(null);
+const projectCreateTrigger = ref<HTMLElement | null>(null);
 
 const projectSlug = computed(() => readRouteString(route.params.projectSlug));
 const legacyProjectQuery = computed(() => readRouteString(route.query.project));
@@ -45,13 +48,16 @@ const navItems = computed(() =>
     label: t(`routes.projects.sections.${section}`),
   })),
 );
-const workspaceTitle = computed(
-  () =>
-    selectedProject.value?.name ??
-    projectSlug.value ??
-    t("projects.workspaceEmptyTitle"),
-);
+const workspaceTitle = computed(() => {
+  if (isCreatingProject.value) {
+    return t("projects.createProject");
+  }
+  return selectedProject.value?.name ?? projectSlug.value ?? t("projects.workspaceEmptyTitle");
+});
 const workspaceSummary = computed(() => {
+  if (isCreatingProject.value) {
+    return t("projects.createProjectSummary");
+  }
   if (selectedProject.value?.description) {
     return selectedProject.value.description;
   }
@@ -72,6 +78,24 @@ function normalizeProjectSlug(value: string) {
     .replace(/[\s_]+/g, "-")
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "");
+}
+
+function resetCreateProjectForm() {
+  createProjectForm.description = "";
+  createProjectForm.name = "";
+  createProjectForm.slug = "";
+}
+
+function focusCreateProjectField() {
+  void nextTick(() => {
+    createProjectSlugInput.value?.focus();
+  });
+}
+
+function restoreProjectCreateFocus() {
+  void nextTick(() => {
+    projectCreateTrigger.value?.focus();
+  });
 }
 
 watch(
@@ -115,6 +139,18 @@ onMounted(async () => {
   }
 });
 
+watch(
+  () => route.fullPath,
+  () => {
+    if (!route.meta.workspaceSection) {
+      return;
+    }
+    if (isCreatingProject.value && currentSection.value !== "overview") {
+      isCreatingProject.value = false;
+    }
+  },
+);
+
 function sectionLocation(section: ProjectWorkspaceSection) {
   const targetSlug = selectedProjectSlug.value ?? projectsStore.projects[0]?.slug;
   if (!targetSlug) {
@@ -128,10 +164,25 @@ function sectionLocation(section: ProjectWorkspaceSection) {
 }
 
 async function selectProject(project: string) {
+  isCreatingProject.value = false;
   await router.push({
     path: buildProjectWorkspacePath(project, currentSection.value),
     query: sanitizeProjectSwitchQuery(currentSection.value, route.query),
   });
+}
+
+function openProjectCreate(event?: Event) {
+  if (event?.currentTarget instanceof HTMLElement) {
+    projectCreateTrigger.value = event.currentTarget;
+  }
+  isCreatingProject.value = true;
+  focusCreateProjectField();
+}
+
+function cancelProjectCreate() {
+  resetCreateProjectForm();
+  isCreatingProject.value = false;
+  restoreProjectCreateFocus();
 }
 
 async function submitCreateProject() {
@@ -142,9 +193,8 @@ async function submitCreateProject() {
       slug: createProjectForm.slug,
     });
     shell.pushNotice("success", t("notices.projectCreated"));
-    createProjectForm.description = "";
-    createProjectForm.name = "";
-    createProjectForm.slug = "";
+    resetCreateProjectForm();
+    isCreatingProject.value = false;
     await router.push({
       path: buildProjectWorkspacePath(created.slug, "overview"),
     });
@@ -168,6 +218,7 @@ async function jumpToQueuedApproval(error: unknown, slugHint?: string) {
     const targetSlug = (slugHint ? normalizeProjectSlug(slugHint) : undefined) || selectedProjectSlug.value;
 
     shell.pushNotice("info", t("notices.requestQueued"));
+    isCreatingProject.value = false;
 
     if (targetSlug) {
       await router.push({
@@ -202,46 +253,26 @@ async function jumpToQueuedApproval(error: unknown, slugHint?: string) {
           <p class="section-label">{{ t("projects.listKicker") }}</p>
           <h1 class="text-lg font-semibold text-[var(--text-main)]">{{ t("projects.listTitle") }}</h1>
         </div>
-        <span class="status-pill">{{ projectsStore.projects.length }}</span>
+        <div class="flex items-center gap-2">
+          <span class="status-pill">{{ projectsStore.projects.length }}</span>
+          <button
+            class="icon-button spotlight-surface"
+            type="button"
+            :aria-label="t('projects.createProjectAction')"
+            @click="openProjectCreate($event)"
+          >
+            <Plus :size="15" />
+          </button>
+        </div>
       </div>
 
-      <section class="panel-section">
-        <p class="section-label">{{ t("projects.createProject") }}</p>
-        <div class="space-y-3">
-          <label class="form-field">
-            <span class="field-label">{{ t("projects.fields.slug") }}</span>
-            <input
-              v-model="createProjectForm.slug"
-              class="control-input"
-              :placeholder="t('projects.placeholders.slug')"
-            />
-          </label>
-          <label class="form-field">
-            <span class="field-label">{{ t("projects.fields.name") }}</span>
-            <input
-              v-model="createProjectForm.name"
-              class="control-input"
-              :placeholder="t('projects.placeholders.projectName')"
-            />
-          </label>
-          <label class="form-field">
-            <span class="field-label">{{ t("projects.fields.description") }}</span>
-            <textarea
-              v-model="createProjectForm.description"
-              class="control-textarea"
-              :placeholder="t('projects.placeholders.projectDescription')"
-            />
-          </label>
-          <button class="primary-action spotlight-surface" @click="submitCreateProject">
+      <div class="workspace-pane-scroll">
+        <div v-if="projectsStore.projects.length === 0" class="empty-state flex flex-col items-center gap-4">
+          <p>{{ t("projects.workspaceEmptySummary") }}</p>
+          <button class="secondary-action spotlight-surface" type="button" @click="openProjectCreate($event)">
             <Plus :size="15" />
             {{ t("projects.createProjectAction") }}
           </button>
-        </div>
-      </section>
-
-      <div class="workspace-pane-scroll">
-        <div v-if="projectsStore.projects.length === 0" class="empty-state">
-          {{ t("projects.workspaceEmptySummary") }}
         </div>
         <button
           v-for="project in projectsStore.projects"
@@ -252,11 +283,13 @@ async function jumpToQueuedApproval(error: unknown, slugHint?: string) {
           @click="selectProject(project.slug)"
         >
           <Folder :size="16" />
-          <div class="min-w-0 flex-1">
-            <p class="truncate text-sm font-medium text-[var(--text-main)]">{{ project.name }}</p>
-            <p class="truncate text-xs text-[var(--text-muted)]">{{ project.slug }}</p>
+            <div class="min-w-0 flex-1">
+              <p class="truncate text-sm font-medium text-[var(--text-main)]">{{ project.name }}</p>
+              <p class="truncate text-xs text-[var(--text-muted)]">{{ project.slug }}</p>
+            </div>
+          <div class="flex items-center gap-2">
+            <span class="status-pill">{{ t(`status.project.${project.status}`) }}</span>
           </div>
-          <span class="status-pill">{{ t(`status.project.${project.status}`) }}</span>
         </button>
       </div>
     </aside>
@@ -271,19 +304,19 @@ async function jumpToQueuedApproval(error: unknown, slugHint?: string) {
               <p class="workspace-summary">{{ workspaceSummary }}</p>
             </div>
             <div class="flex flex-wrap items-center gap-2">
-              <span v-if="selectedProject" class="status-pill">{{ t(`status.project.${selectedProject.status}`) }}</span>
-              <span v-else-if="projectSlug" class="status-pill status-pill-warning">
+              <span v-if="!isCreatingProject && selectedProject" class="status-pill">{{ t(`status.project.${selectedProject.status}`) }}</span>
+              <span v-else-if="!isCreatingProject && projectSlug" class="status-pill status-pill-warning">
                 {{ t("projects.pendingProject") }}
               </span>
-              <span v-if="selectedProjectSlug" class="status-pill">{{ selectedProjectSlug }}</span>
-              <span v-if="selectedProject" class="status-pill">
+              <span v-if="!isCreatingProject && selectedProjectSlug" class="status-pill">{{ selectedProjectSlug }}</span>
+              <span v-if="!isCreatingProject && selectedProject" class="status-pill">
                 {{ t("projects.updated") }} {{ formatDateTime(selectedProject.updated_at) }}
               </span>
             </div>
           </div>
         </div>
 
-        <nav class="workspace-secondary-nav" :aria-label="t('projects.workspaceNavigation')">
+        <nav v-if="!isCreatingProject" class="workspace-secondary-nav" :aria-label="t('projects.workspaceNavigation')">
           <RouterLink
             v-for="item in navItems"
             :key="item.key"
@@ -305,7 +338,54 @@ async function jumpToQueuedApproval(error: unknown, slugHint?: string) {
       </header>
 
       <div class="workspace-content">
-        <RouterView v-if="route.meta.workspaceSection" />
+        <div v-if="isCreatingProject" class="workspace-section-scroll overview-editor-pane">
+          <section class="overview-editor">
+            <div class="overview-editor-copy">
+              <p class="section-label">{{ t("projects.createProject") }}</p>
+              <h2 class="overview-editor-title">{{ t("projects.createProject") }}</h2>
+              <p class="overview-editor-summary">{{ t("projects.createProjectSummary") }}</p>
+            </div>
+
+            <div class="overview-field-grid">
+              <label class="form-field">
+                <span class="field-label">{{ t("projects.fields.slug") }}</span>
+                <input
+                  ref="createProjectSlugInput"
+                  v-model="createProjectForm.slug"
+                  class="quiet-control-input"
+                  :placeholder="t('projects.placeholders.slug')"
+                />
+              </label>
+              <label class="form-field">
+                <span class="field-label">{{ t("projects.fields.name") }}</span>
+                <input
+                  v-model="createProjectForm.name"
+                  class="quiet-control-input"
+                  :placeholder="t('projects.placeholders.projectName')"
+                />
+              </label>
+              <label class="form-field overview-field-wide">
+                <span class="field-label">{{ t("projects.fields.description") }}</span>
+                <textarea
+                  v-model="createProjectForm.description"
+                  class="quiet-control-textarea"
+                  :placeholder="t('projects.placeholders.projectDescription')"
+                />
+              </label>
+            </div>
+
+            <div class="overview-editor-actions gap-2">
+              <button class="secondary-action spotlight-surface" type="button" @click="cancelProjectCreate">
+                {{ t("common.cancel") }}
+              </button>
+              <button class="primary-action spotlight-surface" type="button" @click="submitCreateProject">
+                <Plus :size="15" />
+                {{ t("projects.createProjectAction") }}
+              </button>
+            </div>
+          </section>
+        </div>
+        <RouterView v-else-if="route.meta.workspaceSection" />
         <div v-else class="workspace-empty-state">
           <div class="workspace-empty-copy">
             <p class="section-label">{{ t("projects.workspaceKicker") }}</p>

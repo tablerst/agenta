@@ -54,6 +54,7 @@ const baseMessages = {
     },
     common: {
       all: "All",
+      cancel: "Cancel",
       na: "N/A",
       redirecting: "Redirecting",
       resource: "resource",
@@ -80,6 +81,7 @@ const baseMessages = {
       addVersion: "Add version",
       createProject: "Create Project",
       createProjectAction: "Create project",
+      createProjectSummary: "Open a new project shell without crowding the registry list.",
       createVersion: "Create Version",
       created: "Created",
       defaultVersion: "Default Version",
@@ -159,7 +161,9 @@ const baseMessages = {
       filters: "Filters",
       fields: {
         attachmentPath: "Source path",
+        description: "Execution context",
         note: "Note",
+        priority: "Priority",
         summary: "Summary",
         title: "Task title",
       },
@@ -381,6 +385,7 @@ const baseMessages = {
     },
     common: {
       all: "全部",
+      cancel: "取消",
       na: "暂无",
       redirecting: "正在跳转",
       resource: "资源",
@@ -407,6 +412,7 @@ const baseMessages = {
       addVersion: "添加版本",
       createProject: "创建项目",
       createProjectAction: "创建项目",
+      createProjectSummary: "在不挤占注册表浏览空间的前提下创建新项目工作区。",
       createVersion: "创建版本",
       created: "创建时间",
       defaultVersion: "默认版本",
@@ -486,7 +492,9 @@ const baseMessages = {
       filters: "筛选",
       fields: {
         attachmentPath: "源路径",
+        description: "执行上下文",
         note: "备注内容",
+        priority: "优先级",
         summary: "摘要",
         title: "任务标题",
       },
