@@ -21,7 +21,11 @@ import type {
   SyncStatusSummary,
   Task,
   TaskActivity,
+  TaskContextPayload,
+  TaskLink,
   TaskPriority,
+  TaskRelation,
+  TaskRelationStatus,
   TaskStatus,
   Version,
   VersionStatus,
@@ -35,6 +39,7 @@ interface MockState {
   projects: Project[];
   tasks: Task[];
   taskActivities: TaskActivity[];
+  taskRelations: TaskRelation[];
   versions: Version[];
 }
 
@@ -184,7 +189,9 @@ function createPreviewSyncStatus(): SyncStatusSummary {
   };
 }
 
-function syncEntityKindFor(value: Project | Version | Task | TaskActivity | Attachment): SyncEntityKind {
+function syncEntityKindFor(
+  value: Project | Version | Task | TaskActivity | Attachment | TaskRelation,
+): SyncEntityKind {
   if ("project_id" in value && "slug" in value) {
     return "project";
   }
@@ -194,13 +201,18 @@ function syncEntityKindFor(value: Project | Version | Task | TaskActivity | Atta
   if ("task_id" in value && "title" in value) {
     return "task";
   }
+  if ("relation_id" in value) {
+    return "task_relation";
+  }
   if ("attachment_id" in value) {
     return "attachment";
   }
   return "note";
 }
 
-function syncLocalIdFor(value: Project | Version | Task | TaskActivity | Attachment): string {
+function syncLocalIdFor(
+  value: Project | Version | Task | TaskActivity | Attachment | TaskRelation,
+): string {
   if ("project_id" in value && "slug" in value) {
     return value.project_id;
   }
@@ -210,6 +222,9 @@ function syncLocalIdFor(value: Project | Version | Task | TaskActivity | Attachm
   if ("task_id" in value && "title" in value) {
     return value.task_id;
   }
+  if ("relation_id" in value) {
+    return value.relation_id;
+  }
   if ("attachment_id" in value) {
     return value.attachment_id;
   }
@@ -217,7 +232,7 @@ function syncLocalIdFor(value: Project | Version | Task | TaskActivity | Attachm
 }
 
 function enqueuePreviewMutation(
-  value: Project | Version | Task | TaskActivity | Attachment,
+  value: Project | Version | Task | TaskActivity | Attachment | TaskRelation,
   operation: "create" | "update" = "create",
 ) {
   const entity_kind = syncEntityKindFor(value);
@@ -617,15 +632,39 @@ function createSeedState(): MockState {
     projects: [projectAlpha, projectBeta],
     tasks,
     taskActivities,
+    taskRelations: [],
     versions,
   };
 }
 
 let state = createSeedState();
+refreshTasksDerivedFields(state.tasks.map((item) => item.task_id));
 
-function createTaskRecord(task: Omit<Task, "task_context_digest" | "task_search_summary">): Task {
+function createTaskRecord(
+  task: Omit<
+    Task,
+    | "task_context_digest"
+    | "task_search_summary"
+    | "note_count"
+    | "attachment_count"
+    | "latest_activity_at"
+    | "parent_task_id"
+    | "child_count"
+    | "open_blocker_count"
+    | "blocking_count"
+    | "ready_to_start"
+  >,
+): Task {
   return {
     ...task,
+    attachment_count: 0,
+    blocking_count: 0,
+    child_count: 0,
+    latest_activity_at: task.updated_at,
+    note_count: 0,
+    open_blocker_count: 0,
+    parent_task_id: null,
+    ready_to_start: !matchesClosedTask(task.status),
     task_context_digest: buildTaskContextDigest(task),
     task_search_summary: buildTaskSearchSummary(task.title, task.summary, task.description),
   };
@@ -637,12 +676,124 @@ function buildTaskSearchSummary(title: string, summary: string | null, descripti
 
 function buildTaskContextDigest(task: {
   description: string | null;
+  open_blocker_count?: number;
+  parent_task_id?: string | null;
+  ready_to_start?: boolean;
+  blocking_count?: number;
+  child_count?: number;
   priority: TaskPriority;
   status: TaskStatus;
   summary: string | null;
   title: string;
 }) {
-  return `status=${task.status} priority=${task.priority} title=${task.title} summary=${task.summary ?? ""} description=${task.description ?? ""}`.trim();
+  return `status=${task.status} priority=${task.priority} ready_to_start=${task.ready_to_start ?? true} parent_task_id=${task.parent_task_id ?? ""} child_count=${task.child_count ?? 0} open_blocker_count=${task.open_blocker_count ?? 0} blocking_count=${task.blocking_count ?? 0} title=${task.title} summary=${task.summary ?? ""} description=${task.description ?? ""}`.trim();
+}
+
+function matchesClosedTask(status: TaskStatus) {
+  return status === "done" || status === "cancelled";
+}
+
+function activeRelationStatus(status: TaskRelationStatus) {
+  return status === "active";
+}
+
+function activeParentRelation(taskId: string) {
+  return (
+    state.taskRelations.find(
+      (relation) =>
+        relation.kind === "parent_child" &&
+        activeRelationStatus(relation.status) &&
+        relation.target_task_id === taskId,
+    ) ?? null
+  );
+}
+
+function activeChildRelations(taskId: string) {
+  return state.taskRelations.filter(
+    (relation) =>
+      relation.kind === "parent_child" &&
+      activeRelationStatus(relation.status) &&
+      relation.source_task_id === taskId,
+  );
+}
+
+function activeBlockerRelations(taskId: string) {
+  return state.taskRelations.filter(
+    (relation) =>
+      relation.kind === "blocks" &&
+      activeRelationStatus(relation.status) &&
+      relation.target_task_id === taskId,
+  );
+}
+
+function activeBlockingRelations(taskId: string) {
+  return state.taskRelations.filter(
+    (relation) =>
+      relation.kind === "blocks" &&
+      activeRelationStatus(relation.status) &&
+      relation.source_task_id === taskId,
+  );
+}
+
+function openBlockerCount(taskId: string) {
+  return activeBlockerRelations(taskId).filter((relation) => {
+    const blocker = state.tasks.find((item) => item.task_id === relation.source_task_id);
+    return blocker ? !matchesClosedTask(blocker.status) : false;
+  }).length;
+}
+
+function refreshTaskDerivedFields(taskId: string) {
+  const task = state.tasks.find((item) => item.task_id === taskId);
+  if (!task) {
+    return;
+  }
+  const parentRelation = activeParentRelation(taskId);
+  task.parent_task_id = parentRelation?.source_task_id ?? null;
+  task.child_count = activeChildRelations(taskId).length;
+  task.open_blocker_count = openBlockerCount(taskId);
+  task.blocking_count = activeBlockingRelations(taskId).length;
+  task.note_count = state.taskActivities.filter((item) => item.task_id === taskId && item.kind === "note").length;
+  task.attachment_count = state.attachments.filter((item) => item.task_id === taskId).length;
+  const latestActivity = taskActivitiesFor(taskId)[0]?.created_at ?? task.updated_at;
+  task.latest_activity_at = latestActivity > task.updated_at ? latestActivity : task.updated_at;
+  task.ready_to_start = !matchesClosedTask(task.status) && task.open_blocker_count === 0;
+  task.task_context_digest = buildTaskContextDigest(task);
+  task.task_search_summary = buildTaskSearchSummary(task.title, task.summary, task.description);
+}
+
+function refreshTasksDerivedFields(taskIds: string[]) {
+  const unique = [...new Set(taskIds)];
+  for (const taskId of unique) {
+    refreshTaskDerivedFields(taskId);
+  }
+}
+
+function buildTaskLink(relation: TaskRelation, taskId: string): TaskLink {
+  const task = findTask(taskId);
+  return {
+    relation_id: relation.relation_id,
+    task_id: task.task_id,
+    title: task.title,
+    status: task.status,
+    priority: task.priority,
+    ready_to_start: task.ready_to_start,
+  };
+}
+
+function getTaskContext(taskId: string): TaskContextPayload {
+  const task = findTask(taskId);
+  refreshTaskDerivedFields(taskId);
+  const parentRelation = activeParentRelation(taskId);
+  return {
+    task,
+    notes: listNotes(taskId),
+    attachments: listAttachments(taskId),
+    recent_activities: taskActivitiesFor(taskId),
+    parent: parentRelation ? buildTaskLink(parentRelation, parentRelation.source_task_id) : null,
+    children: activeChildRelations(taskId).map((relation) => buildTaskLink(relation, relation.target_task_id)),
+    blocked_by: activeBlockerRelations(taskId).map((relation) => buildTaskLink(relation, relation.source_task_id)),
+    blocking: activeBlockingRelations(taskId).map((relation) => buildTaskLink(relation, relation.target_task_id)),
+  };
 }
 
 function envelope<T>(action: string, result: T, summary: string): SuccessEnvelope<T> {
@@ -728,6 +879,7 @@ function listVersions(projectReference?: unknown) {
 }
 
 function listTasks(filters: JsonMap) {
+  refreshTasksDerivedFields(state.tasks.map((item) => item.task_id));
   const projectReference = typeof filters.project === "string" ? filters.project.trim() : "";
   const versionReference = typeof filters.version === "string" ? filters.version.trim() : "";
   const status = typeof filters.status === "string" ? (filters.status.trim() as TaskStatus) : undefined;
@@ -877,7 +1029,26 @@ function createTask(input: JsonMap) {
     closed_at: null,
   });
   state.tasks = [task, ...state.tasks];
+  refreshTaskDerivedFields(task.task_id);
   enqueuePreviewMutation(task, "create");
+  return task;
+}
+
+function createChildTask(input: JsonMap) {
+  const parent = findTask(requireString(input.parent, "parent"));
+  const task = createTask({
+    ...input,
+    project: parent.project_id,
+    version: typeof input.version === "string" && input.version.trim() ? input.version.trim() : parent.version_id,
+  });
+  const relation = attachChild({
+    child: task.task_id,
+    parent: parent.task_id,
+    updated_by:
+      typeof input.created_by === "string" && input.created_by.trim() ? input.created_by.trim() : "desktop",
+  });
+  enqueuePreviewMutation(relation, "create");
+  refreshTasksDerivedFields([parent.task_id, task.task_id]);
   return task;
 }
 
@@ -907,10 +1078,357 @@ function updateTask(input: JsonMap) {
     task.updated_by = input.updated_by.trim();
   }
   task.updated_at = new Date().toISOString();
-  task.task_search_summary = buildTaskSearchSummary(task.title, task.summary, task.description);
-  task.task_context_digest = buildTaskContextDigest(task);
+  refreshTaskDerivedFields(task.task_id);
   enqueuePreviewMutation(task, "update");
   return task;
+}
+
+function ensureSameProject(leftTaskId: string, rightTaskId: string) {
+  const left = findTask(leftTaskId);
+  const right = findTask(rightTaskId);
+  if (left.project_id !== right.project_id) {
+    bridgeError("conflict", "Tasks must belong to the same project", {
+      left_task_id: left.task_id,
+      right_task_id: right.task_id,
+    });
+  }
+  return { left, right };
+}
+
+function hasParentCycle(parentId: string, childId: string): boolean {
+  const visited = new Set<string>();
+  const queue = [childId];
+  while (queue.length > 0) {
+    const current = queue.shift() ?? "";
+    if (!current || visited.has(current)) {
+      continue;
+    }
+    visited.add(current);
+    if (current === parentId) {
+      return true;
+    }
+    for (const relation of activeChildRelations(current)) {
+      queue.push(relation.target_task_id);
+    }
+  }
+  return false;
+}
+
+function attachChild(input: JsonMap): TaskRelation {
+  const parentId = requireString(input.parent, "parent");
+  const childId = requireString(input.child, "child");
+  if (parentId === childId) {
+    bridgeError("conflict", "Parent and child task must be different", { parent: parentId, child: childId });
+  }
+  const { left: parent, right: child } = ensureSameProject(parentId, childId);
+  if (activeParentRelation(child.task_id)) {
+    bridgeError("conflict", "Child task already has an active parent", { child: child.task_id });
+  }
+  if (
+    state.taskRelations.some(
+      (relation) =>
+        relation.kind === "parent_child" &&
+        relation.source_task_id === parent.task_id &&
+        relation.target_task_id === child.task_id &&
+        activeRelationStatus(relation.status),
+    )
+  ) {
+    bridgeError("conflict", "Child task is already attached to this parent", {
+      parent: parent.task_id,
+      child: child.task_id,
+    });
+  }
+  if (hasParentCycle(parent.task_id, child.task_id)) {
+    bridgeError("conflict", "Attaching this child would create a parent cycle", {
+      parent: parent.task_id,
+      child: child.task_id,
+    });
+  }
+  const now = new Date().toISOString();
+  const actor =
+    typeof input.updated_by === "string" && input.updated_by.trim() ? input.updated_by.trim() : "desktop";
+  const relation: TaskRelation = {
+    relation_id: crypto.randomUUID(),
+    kind: "parent_child",
+    source_task_id: parent.task_id,
+    target_task_id: child.task_id,
+    status: "active",
+    created_by: actor,
+    updated_by: actor,
+    created_at: now,
+    updated_at: now,
+    resolved_at: null,
+  };
+  state.taskRelations = [relation, ...state.taskRelations];
+  parent.updated_at = now;
+  parent.updated_by = actor;
+  child.updated_at = now;
+  child.updated_by = actor;
+  state.taskActivities = [
+    {
+      activity_id: crypto.randomUUID(),
+      task_id: parent.task_id,
+      kind: "system",
+      content: `Attached child task ${child.title}.`,
+      activity_search_summary: `system: attached child task ${child.title.toLowerCase()}`,
+      created_by: actor,
+      created_at: now,
+      metadata_json: { relation_id: relation.relation_id, child_task_id: child.task_id },
+    },
+    {
+      activity_id: crypto.randomUUID(),
+      task_id: child.task_id,
+      kind: "system",
+      content: `Attached to parent task ${parent.title}.`,
+      activity_search_summary: `system: attached to parent task ${parent.title.toLowerCase()}`,
+      created_by: actor,
+      created_at: now,
+      metadata_json: { relation_id: relation.relation_id, parent_task_id: parent.task_id },
+    },
+    ...state.taskActivities,
+  ];
+  refreshTasksDerivedFields([parent.task_id, child.task_id]);
+  enqueuePreviewMutation(parent, "update");
+  enqueuePreviewMutation(child, "update");
+  enqueuePreviewMutation(relation, "create");
+  return relation;
+}
+
+function detachChild(input: JsonMap): TaskRelation {
+  const parentId = requireString(input.parent, "parent");
+  const childId = requireString(input.child, "child");
+  const parent = findTask(parentId);
+  const child = findTask(childId);
+  const relation = state.taskRelations.find(
+    (item) =>
+      item.kind === "parent_child" &&
+      item.source_task_id === parent.task_id &&
+      item.target_task_id === child.task_id &&
+      activeRelationStatus(item.status),
+  );
+  if (!relation) {
+    bridgeError("not_found", "Active parent-child relation not found", { parent: parentId, child: childId });
+  }
+  const now = new Date().toISOString();
+  const actor =
+    typeof input.updated_by === "string" && input.updated_by.trim() ? input.updated_by.trim() : "desktop";
+  relation.status = "resolved";
+  relation.updated_at = now;
+  relation.updated_by = actor;
+  relation.resolved_at = now;
+  parent.updated_at = now;
+  parent.updated_by = actor;
+  child.updated_at = now;
+  child.updated_by = actor;
+  state.taskActivities = [
+    {
+      activity_id: crypto.randomUUID(),
+      task_id: parent.task_id,
+      kind: "system",
+      content: `Detached child task ${child.title}.`,
+      activity_search_summary: `system: detached child task ${child.title.toLowerCase()}`,
+      created_by: actor,
+      created_at: now,
+      metadata_json: { relation_id: relation.relation_id, child_task_id: child.task_id, status: relation.status },
+    },
+    {
+      activity_id: crypto.randomUUID(),
+      task_id: child.task_id,
+      kind: "system",
+      content: `Detached from parent task ${parent.title}.`,
+      activity_search_summary: `system: detached from parent task ${parent.title.toLowerCase()}`,
+      created_by: actor,
+      created_at: now,
+      metadata_json: { relation_id: relation.relation_id, parent_task_id: parent.task_id, status: relation.status },
+    },
+    ...state.taskActivities,
+  ];
+  refreshTasksDerivedFields([parent.task_id, child.task_id]);
+  enqueuePreviewMutation(parent, "update");
+  enqueuePreviewMutation(child, "update");
+  enqueuePreviewMutation(relation, "update");
+  return relation;
+}
+
+function addBlocker(input: JsonMap): TaskRelation {
+  const blockerId = requireString(input.blocker, "blocker");
+  const blockedId = requireString(input.task ?? input.blocked, "task");
+  if (blockerId === blockedId) {
+    bridgeError("conflict", "Blocker and blocked task must be different", {
+      blocker: blockerId,
+      blocked: blockedId,
+    });
+  }
+  const { left: blocker, right: blocked } = ensureSameProject(blockerId, blockedId);
+  if (
+    state.taskRelations.some(
+      (relation) =>
+        relation.kind === "blocks" &&
+        relation.source_task_id === blocker.task_id &&
+        relation.target_task_id === blocked.task_id &&
+        activeRelationStatus(relation.status),
+    )
+  ) {
+    bridgeError("conflict", "This blocker relation already exists", {
+      blocker: blocker.task_id,
+      blocked: blocked.task_id,
+    });
+  }
+  const now = new Date().toISOString();
+  const actor =
+    typeof input.updated_by === "string" && input.updated_by.trim() ? input.updated_by.trim() : "desktop";
+  const relation: TaskRelation = {
+    relation_id: crypto.randomUUID(),
+    kind: "blocks",
+    source_task_id: blocker.task_id,
+    target_task_id: blocked.task_id,
+    status: "active",
+    created_by: actor,
+    updated_by: actor,
+    created_at: now,
+    updated_at: now,
+    resolved_at: null,
+  };
+  state.taskRelations = [relation, ...state.taskRelations];
+  blocker.updated_at = now;
+  blocker.updated_by = actor;
+  blocked.updated_at = now;
+  blocked.updated_by = actor;
+  if (!matchesClosedTask(blocked.status)) {
+    const previousStatus = blocked.status;
+    blocked.status = "blocked";
+    blocked.closed_at = null;
+    if (previousStatus !== blocked.status) {
+      state.taskActivities = [
+        {
+          activity_id: crypto.randomUUID(),
+          task_id: blocked.task_id,
+          kind: "status_change",
+          content: `Status changed from ${previousStatus} to ${blocked.status}.`,
+          activity_search_summary: `status_change: status changed from ${previousStatus} to ${blocked.status}`,
+          created_by: actor,
+          created_at: now,
+          metadata_json: { from_status: previousStatus, to_status: blocked.status },
+        },
+        ...state.taskActivities,
+      ];
+    }
+  }
+  state.taskActivities = [
+    {
+      activity_id: crypto.randomUUID(),
+      task_id: blocker.task_id,
+      kind: "system",
+      content: `Task ${blocked.title} is now blocked by this task.`,
+      activity_search_summary: `system: task ${blocked.title.toLowerCase()} is now blocked by this task`,
+      created_by: actor,
+      created_at: now,
+      metadata_json: { relation_id: relation.relation_id, blocked_task_id: blocked.task_id },
+    },
+    {
+      activity_id: crypto.randomUUID(),
+      task_id: blocked.task_id,
+      kind: "system",
+      content: `Blocked by task ${blocker.title}.`,
+      activity_search_summary: `system: blocked by task ${blocker.title.toLowerCase()}`,
+      created_by: actor,
+      created_at: now,
+      metadata_json: { relation_id: relation.relation_id, blocker_task_id: blocker.task_id },
+    },
+    ...state.taskActivities,
+  ];
+  refreshTasksDerivedFields([blocker.task_id, blocked.task_id]);
+  enqueuePreviewMutation(blocker, "update");
+  enqueuePreviewMutation(blocked, "update");
+  enqueuePreviewMutation(relation, "create");
+  return relation;
+}
+
+function resolveBlocker(input: JsonMap): TaskRelation {
+  const taskId = requireString(input.task, "task");
+  const blocked = findTask(taskId);
+  const relationId = typeof input.relation_id === "string" ? input.relation_id.trim() : "";
+  const blockerRef = typeof input.blocker === "string" ? input.blocker.trim() : "";
+  let relation =
+    relationId
+      ? state.taskRelations.find((item) => item.relation_id === relationId)
+      : null;
+  if (!relation && blockerRef) {
+    relation =
+      state.taskRelations.find(
+        (item) =>
+          item.kind === "blocks" &&
+          item.source_task_id === blockerRef &&
+          item.target_task_id === blocked.task_id &&
+          activeRelationStatus(item.status),
+      ) ?? null;
+  }
+  if (!relation || relation.kind !== "blocks" || relation.target_task_id !== blocked.task_id) {
+    bridgeError("not_found", "Active blocker relation not found", {
+      task: blocked.task_id,
+      blocker: input.blocker,
+      relation_id: input.relation_id,
+    });
+  }
+  const blocker = findTask(relation.source_task_id);
+  const now = new Date().toISOString();
+  const actor =
+    typeof input.updated_by === "string" && input.updated_by.trim() ? input.updated_by.trim() : "desktop";
+  relation.status = "resolved";
+  relation.updated_at = now;
+  relation.updated_by = actor;
+  relation.resolved_at = now;
+  blocker.updated_at = now;
+  blocker.updated_by = actor;
+  blocked.updated_at = now;
+  blocked.updated_by = actor;
+  refreshTasksDerivedFields([blocker.task_id, blocked.task_id]);
+  if (blocked.status === "blocked" && blocked.open_blocker_count === 0) {
+    const previousStatus = blocked.status;
+    blocked.status = "ready";
+    blocked.closed_at = null;
+    state.taskActivities = [
+      {
+        activity_id: crypto.randomUUID(),
+        task_id: blocked.task_id,
+        kind: "status_change",
+        content: `Status changed from ${previousStatus} to ${blocked.status}.`,
+        activity_search_summary: `status_change: status changed from ${previousStatus} to ${blocked.status}`,
+        created_by: actor,
+        created_at: now,
+        metadata_json: { from_status: previousStatus, to_status: blocked.status },
+      },
+      ...state.taskActivities,
+    ];
+  }
+  state.taskActivities = [
+    {
+      activity_id: crypto.randomUUID(),
+      task_id: blocker.task_id,
+      kind: "system",
+      content: `Resolved blocker for task ${blocked.title}.`,
+      activity_search_summary: `system: resolved blocker for task ${blocked.title.toLowerCase()}`,
+      created_by: actor,
+      created_at: now,
+      metadata_json: { relation_id: relation.relation_id, blocked_task_id: blocked.task_id, status: relation.status },
+    },
+    {
+      activity_id: crypto.randomUUID(),
+      task_id: blocked.task_id,
+      kind: "system",
+      content: `Unblocked from task ${blocker.title}.`,
+      activity_search_summary: `system: unblocked from task ${blocker.title.toLowerCase()}`,
+      created_by: actor,
+      created_at: now,
+      metadata_json: { relation_id: relation.relation_id, blocker_task_id: blocker.task_id, status: relation.status },
+    },
+    ...state.taskActivities,
+  ];
+  refreshTasksDerivedFields([blocker.task_id, blocked.task_id]);
+  enqueuePreviewMutation(blocker, "update");
+  enqueuePreviewMutation(blocked, "update");
+  enqueuePreviewMutation(relation, "update");
+  return relation;
 }
 
 function createNote(input: JsonMap) {
@@ -927,7 +1445,10 @@ function createNote(input: JsonMap) {
     metadata_json: {},
   };
   state.taskActivities = [note, ...state.taskActivities];
+  task.updated_at = note.created_at;
   enqueuePreviewMutation(note, "create");
+  enqueuePreviewMutation(task, "update");
+  refreshTaskDerivedFields(task.task_id);
   return note;
 }
 
@@ -967,7 +1488,10 @@ function createAttachment(input: JsonMap) {
   };
   state.attachments = [attachment, ...state.attachments];
   state.taskActivities = [activity, ...state.taskActivities];
+  task.updated_at = attachment.created_at;
+  refreshTaskDerivedFields(task.task_id);
   enqueuePreviewMutation(attachment, "create");
+  enqueuePreviewMutation(task, "update");
   return attachment;
 }
 
@@ -1150,10 +1674,30 @@ export const mockDesktopBridge = {
         return Promise.resolve(
           envelope("desktop_task", findTask(requireString(input.task, "task")), "Loaded preview task."),
         );
+      case "get_context":
+        return Promise.resolve(
+          envelope(
+            "desktop_task",
+            getTaskContext(requireString(input.task, "task")),
+            "Loaded preview task context.",
+          ),
+        );
       case "create":
         return Promise.resolve(envelope("desktop_task", createTask(input), "Created preview task."));
+      case "create_child":
+        return Promise.resolve(envelope("desktop_task", createChildTask(input), "Created preview child task."));
       case "update":
         return Promise.resolve(envelope("desktop_task", updateTask(input), "Updated preview task."));
+      case "attach_child":
+        return Promise.resolve(envelope("desktop_task", attachChild(input), "Attached preview child task."));
+      case "detach_child":
+        return Promise.resolve(envelope("desktop_task", detachChild(input), "Detached preview child task."));
+      case "add_blocker":
+        return Promise.resolve(envelope("desktop_task", addBlocker(input), "Added preview blocker."));
+      case "resolve_blocker":
+        return Promise.resolve(
+          envelope("desktop_task", resolveBlocker(input), "Resolved preview blocker."),
+        );
       case "activity_list":
         return Promise.resolve(
           envelope(

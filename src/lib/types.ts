@@ -28,6 +28,8 @@ export type TaskStatus =
   | "done"
   | "cancelled";
 export type TaskPriority = "low" | "normal" | "high" | "critical";
+export type TaskRelationKind = "parent_child" | "blocks";
+export type TaskRelationStatus = "active" | "resolved";
 export type AttachmentKind =
   | "screenshot"
   | "image"
@@ -77,6 +79,14 @@ export interface Task {
   created_at: string;
   updated_at: string;
   closed_at: string | null;
+  note_count: number;
+  attachment_count: number;
+  latest_activity_at: string;
+  parent_task_id: string | null;
+  child_count: number;
+  open_blocker_count: number;
+  blocking_count: number;
+  ready_to_start: boolean;
 }
 
 export interface TaskActivity {
@@ -88,6 +98,39 @@ export interface TaskActivity {
   created_by: string;
   created_at: string;
   metadata_json: Record<string, unknown>;
+}
+
+export interface TaskRelation {
+  relation_id: string;
+  kind: TaskRelationKind;
+  source_task_id: string;
+  target_task_id: string;
+  status: TaskRelationStatus;
+  created_by: string;
+  updated_by: string;
+  created_at: string;
+  updated_at: string;
+  resolved_at: string | null;
+}
+
+export interface TaskLink {
+  relation_id: string;
+  task_id: string;
+  title: string;
+  status: TaskStatus;
+  priority: TaskPriority;
+  ready_to_start: boolean;
+}
+
+export interface TaskContextPayload {
+  task: Task;
+  notes: TaskActivity[];
+  attachments: Attachment[];
+  recent_activities: TaskActivity[];
+  parent: TaskLink | null;
+  children: TaskLink[];
+  blocked_by: TaskLink[];
+  blocking: TaskLink[];
 }
 
 export interface Attachment {
@@ -143,7 +186,7 @@ export type McpLogDestination = "ui" | "stdout" | "file";
 export type SyncMode = "manual_bidirectional";
 export type SyncRemoteKind = "postgres";
 export type SyncOutboxStatus = "pending" | "acked" | "failed";
-export type SyncEntityKind = "project" | "version" | "task" | "note" | "attachment";
+export type SyncEntityKind = "project" | "version" | "task" | "task_relation" | "note" | "attachment";
 export type SyncOperation = "create" | "update";
 
 export interface McpRuntimeStatus {

@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::domain::{
     ApprovalRequest, Attachment, Project, SyncCheckpoint, SyncEntityState, SyncOutboxEntry,
-    SyncTombstone, Task, TaskActivity, Version,
+    SyncTombstone, Task, TaskActivity, TaskRelation, Version,
 };
 use crate::error::{AppError, AppResult};
 
@@ -79,6 +79,24 @@ pub(crate) fn map_activity(row: SqliteRow) -> AppResult<TaskActivity> {
         metadata_json: serde_json::from_str(&metadata_json).map_err(|error| {
             AppError::Storage(format!("invalid activity metadata_json: {error}"))
         })?,
+    })
+}
+
+pub(crate) fn map_task_relation(row: SqliteRow) -> AppResult<TaskRelation> {
+    Ok(TaskRelation {
+        relation_id: parse_uuid(row.get("relation_id"), "relation_id")?,
+        kind: parse_enum(row.get("kind"), "kind")?,
+        source_task_id: parse_uuid(row.get("source_task_id"), "source_task_id")?,
+        target_task_id: parse_uuid(row.get("target_task_id"), "target_task_id")?,
+        status: parse_enum(row.get("status"), "status")?,
+        created_by: row.get("created_by"),
+        updated_by: row.get("updated_by"),
+        created_at: parse_time(row.get("created_at"), "created_at")?,
+        updated_at: parse_time(row.get("updated_at"), "updated_at")?,
+        resolved_at: row
+            .get::<Option<String>, _>("resolved_at")
+            .map(|value| parse_time(value, "resolved_at"))
+            .transpose()?,
     })
 }
 

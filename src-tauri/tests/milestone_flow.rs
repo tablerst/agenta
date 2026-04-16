@@ -242,6 +242,11 @@ async fn mcp_streamable_http_lists_tools_and_calls_project_tool() {
     assert!(tools.iter().any(|tool| tool.name == "task_context_get"));
     assert!(tools.iter().any(|tool| tool.name == "task_list"));
     assert!(tools.iter().any(|tool| tool.name == "task_update"));
+    assert!(tools.iter().any(|tool| tool.name == "task_create_child"));
+    assert!(tools.iter().any(|tool| tool.name == "task_attach_child"));
+    assert!(tools.iter().any(|tool| tool.name == "task_detach_child"));
+    assert!(tools.iter().any(|tool| tool.name == "task_add_blocker"));
+    assert!(tools.iter().any(|tool| tool.name == "task_resolve_blocker"));
     assert!(tools.iter().any(|tool| tool.name == "note_create"));
     assert!(tools.iter().any(|tool| tool.name == "note_list"));
     assert!(tools.iter().any(|tool| tool.name == "activity_list"));

@@ -2,6 +2,7 @@ mod approvals;
 mod attachments;
 mod mapping;
 mod projects;
+mod relations;
 mod sync;
 mod tasks;
 

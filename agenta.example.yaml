@@ -37,6 +37,11 @@ policy:
     version.create: auto
     version.update: auto
     task.create: auto
+    task.create_child: auto
+    task.attach_child: auto
+    task.detach_child: auto
+    task.add_blocker: auto
+    task.resolve_blocker: auto
     task.update: auto
     note.create: auto
     attachment.create: auto

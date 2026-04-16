@@ -14,9 +14,10 @@ use crate::domain::ApprovalStatus;
 use crate::error::AppError;
 use crate::interface::response::{error, success, ErrorEnvelope, SuccessEnvelope};
 use crate::service::{
-    ApprovalQuery, CreateAttachmentInput, CreateNoteInput, CreateProjectInput, CreateTaskInput,
-    CreateVersionInput, RequestOrigin, ReviewApprovalInput, SearchInput, TaskQuery,
-    UpdateProjectInput, UpdateTaskInput, UpdateVersionInput,
+    AddTaskBlockerInput, ApprovalQuery, AttachChildTaskInput, CreateAttachmentInput,
+    CreateChildTaskInput, CreateNoteInput, CreateProjectInput, CreateTaskInput, CreateVersionInput,
+    DetachChildTaskInput, RequestOrigin, ResolveTaskBlockerInput, ReviewApprovalInput, SearchInput,
+    TaskQuery, UpdateProjectInput, UpdateTaskInput, UpdateVersionInput,
 };
 
 #[derive(Debug, Serialize)]
@@ -104,6 +105,10 @@ struct DesktopTaskInput {
     task: Option<String>,
     project: Option<String>,
     version: Option<String>,
+    parent: Option<String>,
+    child: Option<String>,
+    blocker: Option<String>,
+    relation_id: Option<String>,
     title: Option<String>,
     summary: Option<String>,
     description: Option<String>,
@@ -111,6 +116,7 @@ struct DesktopTaskInput {
     priority: Option<String>,
     created_by: Option<String>,
     updated_by: Option<String>,
+    recent_activity_limit: Option<usize>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -363,9 +369,8 @@ async fn desktop_task(
     let result: Result<SuccessEnvelope, AppError> = async {
         let service = &state.service;
         match input.action.as_str() {
-            "create" => success(
-                "task.create",
-                service
+            "create" => {
+                let task = service
                     .create_task_from(
                         RequestOrigin::Desktop,
                         CreateTaskInput {
@@ -379,17 +384,52 @@ async fn desktop_task(
                             created_by: input.created_by,
                         },
                     )
-                    .await?,
-                "Created task",
-            ),
+                    .await?;
+                success(
+                    "task.create",
+                    service.get_task_detail(&task.task_id.to_string()).await?,
+                    "Created task",
+                )
+            }
+            "create_child" => {
+                let task = service
+                    .create_child_task_from(
+                        RequestOrigin::Desktop,
+                        CreateChildTaskInput {
+                            parent: required(input.parent, "parent")?,
+                            version: input.version,
+                            title: required(input.title, "title")?,
+                            summary: input.summary,
+                            description: input.description,
+                            status: parse_optional_enum(input.status)?,
+                            priority: parse_optional_enum(input.priority)?,
+                            created_by: input.created_by,
+                        },
+                    )
+                    .await?;
+                success(
+                    "task.create_child",
+                    service.get_task_detail(&task.task_id.to_string()).await?,
+                    "Created child task",
+                )
+            }
             "get" => success(
                 "task.get",
-                service.get_task(&required(input.task, "task")?).await?,
+                service
+                    .get_task_detail(&required(input.task, "task")?)
+                    .await?,
                 "Loaded task",
+            ),
+            "get_context" => success(
+                "task.get_context",
+                service
+                    .get_task_context(&required(input.task, "task")?, input.recent_activity_limit)
+                    .await?,
+                "Loaded task context",
             ),
             "list" => {
                 let items = service
-                    .list_tasks(TaskQuery {
+                    .list_task_details(TaskQuery {
                         project: input.project,
                         version: input.version,
                         status: parse_optional_enum(input.status)?,
@@ -401,9 +441,8 @@ async fn desktop_task(
                     format!("Listed {} task(s)", items.len()),
                 )
             }
-            "update" => success(
-                "task.update",
-                service
+            "update" => {
+                let task = service
                     .update_task_from(
                         RequestOrigin::Desktop,
                         &required(input.task, "task")?,
@@ -417,8 +456,69 @@ async fn desktop_task(
                             updated_by: input.updated_by,
                         },
                     )
+                    .await?;
+                success(
+                    "task.update",
+                    service.get_task_detail(&task.task_id.to_string()).await?,
+                    "Updated task",
+                )
+            }
+            "attach_child" => success(
+                "task.attach_child",
+                service
+                    .attach_child_task_from(
+                        RequestOrigin::Desktop,
+                        AttachChildTaskInput {
+                            parent: required(input.parent, "parent")?,
+                            child: required(input.child, "child")?,
+                            updated_by: input.updated_by,
+                        },
+                    )
                     .await?,
-                "Updated task",
+                "Attached child task",
+            ),
+            "detach_child" => success(
+                "task.detach_child",
+                service
+                    .detach_child_task_from(
+                        RequestOrigin::Desktop,
+                        DetachChildTaskInput {
+                            parent: required(input.parent, "parent")?,
+                            child: required(input.child, "child")?,
+                            updated_by: input.updated_by,
+                        },
+                    )
+                    .await?,
+                "Detached child task",
+            ),
+            "add_blocker" => success(
+                "task.add_blocker",
+                service
+                    .add_task_blocker_from(
+                        RequestOrigin::Desktop,
+                        AddTaskBlockerInput {
+                            blocker: required(input.blocker, "blocker")?,
+                            blocked: required(input.task, "task")?,
+                            updated_by: input.updated_by,
+                        },
+                    )
+                    .await?,
+                "Added task blocker",
+            ),
+            "resolve_blocker" => success(
+                "task.resolve_blocker",
+                service
+                    .resolve_task_blocker_from(
+                        RequestOrigin::Desktop,
+                        ResolveTaskBlockerInput {
+                            task: required(input.task, "task")?,
+                            blocker: input.blocker,
+                            relation_id: input.relation_id,
+                            updated_by: input.updated_by,
+                        },
+                    )
+                    .await?,
+                "Resolved task blocker",
             ),
             "activity_list" => {
                 let items = service

@@ -132,9 +132,14 @@ Standalone `agenta-mcp` 默认走 `stdout` 日志；若显式配置 `mcp.log.des
 - `version_list`：列出版本，可按项目过滤
 - `version_update`：更新版本
 - `task_create`：创建任务
+- `task_create_child`：在父任务下创建子任务
 - `task_get`：读取任务
 - `task_list`：列出任务，可按项目、版本、状态过滤
 - `task_update`：更新任务
+- `task_attach_child`：把已有任务绑定为子任务
+- `task_detach_child`：解除父子任务关系
+- `task_add_blocker`：为任务添加 blocker
+- `task_resolve_blocker`：解除任务 blocker
 - `note_create`：为任务追加备注
 - `note_list`：列出任务备注
 - `attachment_create`：为任务添加附件

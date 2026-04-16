@@ -73,6 +73,16 @@ string_enum!(TaskActivityKind {
     AttachmentRef => "attachment_ref",
 });
 
+string_enum!(TaskRelationKind {
+    ParentChild => "parent_child",
+    Blocks => "blocks",
+});
+
+string_enum!(TaskRelationStatus {
+    Active => "active",
+    Resolved => "resolved",
+});
+
 string_enum!(AttachmentKind {
     Screenshot => "screenshot",
     Image => "image",
@@ -104,6 +114,7 @@ string_enum!(SyncEntityKind {
     Project => "project",
     Version => "version",
     Task => "task",
+    TaskRelation => "task_relation",
     Note => "note",
     Attachment => "attachment",
 });
@@ -176,6 +187,20 @@ pub struct TaskActivity {
     pub created_by: String,
     pub created_at: OffsetDateTime,
     pub metadata_json: serde_json::Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TaskRelation {
+    pub relation_id: Uuid,
+    pub kind: TaskRelationKind,
+    pub source_task_id: Uuid,
+    pub target_task_id: Uuid,
+    pub status: TaskRelationStatus,
+    pub created_by: String,
+    pub updated_by: String,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+    pub resolved_at: Option<OffsetDateTime>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -302,6 +327,12 @@ impl Default for ApprovalStatus {
 impl Default for SyncMode {
     fn default() -> Self {
         Self::ManualBidirectional
+    }
+}
+
+impl Default for TaskRelationStatus {
+    fn default() -> Self {
+        Self::Active
     }
 }
 

@@ -22,8 +22,9 @@ use agenta_lib::{
     domain::{TaskPriority, TaskStatus},
     interface::mcp::AgentaMcpServer,
     service::{
-        CreateAttachmentInput, CreateNoteInput, CreateProjectInput, CreateTaskInput,
-        CreateVersionInput, SearchInput,
+        AddTaskBlockerInput, AttachChildTaskInput, CreateAttachmentInput, CreateChildTaskInput,
+        CreateNoteInput, CreateProjectInput, CreateTaskInput, CreateVersionInput,
+        ResolveTaskBlockerInput, SearchInput,
     },
 };
 
@@ -119,6 +120,147 @@ async fn runtime_service_flow_covers_core_objects_and_search(
         .attachments_dir
         .join(&attachment.storage_path)
         .exists());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn task_relations_track_hierarchy_and_blockers() -> Result<(), Box<dyn std::error::Error>> {
+    let tempdir = TempDir::new()?;
+    let config_path = write_test_config(&tempdir)?;
+    let runtime = AppRuntime::bootstrap(BootstrapOptions {
+        config_path: Some(config_path),
+    })
+    .await?;
+
+    let project = runtime
+        .service
+        .create_project(CreateProjectInput {
+            slug: "relations".to_string(),
+            name: "Relations".to_string(),
+            description: None,
+        })
+        .await?;
+    let parent = runtime
+        .service
+        .create_task(CreateTaskInput {
+            project: project.slug.clone(),
+            version: None,
+            title: "Parent task".to_string(),
+            summary: None,
+            description: None,
+            status: None,
+            priority: None,
+            created_by: Some("relations-test".to_string()),
+        })
+        .await?;
+    let other_parent = runtime
+        .service
+        .create_task(CreateTaskInput {
+            project: project.slug.clone(),
+            version: None,
+            title: "Other parent".to_string(),
+            summary: None,
+            description: None,
+            status: None,
+            priority: None,
+            created_by: Some("relations-test".to_string()),
+        })
+        .await?;
+    let child = runtime
+        .service
+        .create_child_task(CreateChildTaskInput {
+            parent: parent.task_id.to_string(),
+            version: None,
+            title: "Child task".to_string(),
+            summary: None,
+            description: None,
+            status: None,
+            priority: None,
+            created_by: Some("relations-test".to_string()),
+        })
+        .await?;
+
+    let parent_context = runtime
+        .service
+        .get_task_context(&parent.task_id.to_string(), Some(10))
+        .await?;
+    let child_detail = runtime
+        .service
+        .get_task_detail(&child.task_id.to_string())
+        .await?;
+    assert_eq!(parent_context.children.len(), 1);
+    assert_eq!(parent_context.children[0].task_id, child.task_id);
+    assert_eq!(child_detail.parent_task_id, Some(parent.task_id));
+
+    let second_parent = runtime
+        .service
+        .attach_child_task(AttachChildTaskInput {
+            parent: other_parent.task_id.to_string(),
+            child: child.task_id.to_string(),
+            updated_by: Some("relations-test".to_string()),
+        })
+        .await;
+    assert!(
+        second_parent.is_err(),
+        "child can only have one active parent"
+    );
+
+    let cycle = runtime
+        .service
+        .attach_child_task(AttachChildTaskInput {
+            parent: child.task_id.to_string(),
+            child: parent.task_id.to_string(),
+            updated_by: Some("relations-test".to_string()),
+        })
+        .await;
+    assert!(cycle.is_err(), "parent_child cycles must be rejected");
+
+    let blocker = runtime
+        .service
+        .create_task(CreateTaskInput {
+            project: project.slug.clone(),
+            version: None,
+            title: "Blocker task".to_string(),
+            summary: None,
+            description: None,
+            status: None,
+            priority: None,
+            created_by: Some("relations-test".to_string()),
+        })
+        .await?;
+    let relation = runtime
+        .service
+        .add_task_blocker(AddTaskBlockerInput {
+            blocker: blocker.task_id.to_string(),
+            blocked: child.task_id.to_string(),
+            updated_by: Some("relations-test".to_string()),
+        })
+        .await?;
+    let blocked_detail = runtime
+        .service
+        .get_task_detail(&child.task_id.to_string())
+        .await?;
+    assert_eq!(blocked_detail.task.status, TaskStatus::Blocked);
+    assert_eq!(blocked_detail.open_blocker_count, 1);
+    assert!(!blocked_detail.ready_to_start);
+
+    runtime
+        .service
+        .resolve_task_blocker(ResolveTaskBlockerInput {
+            task: child.task_id.to_string(),
+            blocker: None,
+            relation_id: Some(relation.relation_id.to_string()),
+            updated_by: Some("relations-test".to_string()),
+        })
+        .await?;
+    let unblocked_detail = runtime
+        .service
+        .get_task_detail(&child.task_id.to_string())
+        .await?;
+    assert_eq!(unblocked_detail.task.status, TaskStatus::Ready);
+    assert_eq!(unblocked_detail.open_blocker_count, 0);
+    assert!(unblocked_detail.ready_to_start);
 
     Ok(())
 }
@@ -311,6 +453,13 @@ async fn mcp_streamable_http_tool_call_returns_structured_content(
     assert!(tools.iter().any(|tool| tool["name"] == "task_context_get"));
     assert!(tools.iter().any(|tool| tool["name"] == "task_list"));
     assert!(tools.iter().any(|tool| tool["name"] == "task_update"));
+    assert!(tools.iter().any(|tool| tool["name"] == "task_create_child"));
+    assert!(tools.iter().any(|tool| tool["name"] == "task_attach_child"));
+    assert!(tools.iter().any(|tool| tool["name"] == "task_detach_child"));
+    assert!(tools.iter().any(|tool| tool["name"] == "task_add_blocker"));
+    assert!(tools
+        .iter()
+        .any(|tool| tool["name"] == "task_resolve_blocker"));
     assert!(tools.iter().any(|tool| tool["name"] == "note_create"));
     assert!(tools.iter().any(|tool| tool["name"] == "note_list"));
     assert!(tools.iter().any(|tool| tool["name"] == "activity_list"));
@@ -376,6 +525,9 @@ async fn mcp_streamable_http_tool_call_returns_structured_content(
     assert!(task_get_output_schema.contains("\"note_count\""));
     assert!(task_get_output_schema.contains("\"attachment_count\""));
     assert!(task_get_output_schema.contains("\"latest_activity_at\""));
+    assert!(task_get_output_schema.contains("\"parent_task_id\""));
+    assert!(task_get_output_schema.contains("\"open_blocker_count\""));
+    assert!(task_get_output_schema.contains("\"ready_to_start\""));
 
     let task_context_get_tool = tools
         .iter()
@@ -385,6 +537,9 @@ async fn mcp_streamable_http_tool_call_returns_structured_content(
     assert!(task_context_output_schema.contains("\"notes\""));
     assert!(task_context_output_schema.contains("\"attachments\""));
     assert!(task_context_output_schema.contains("\"recent_activities\""));
+    assert!(task_context_output_schema.contains("\"blocked_by\""));
+    assert!(task_context_output_schema.contains("\"blocking\""));
+    assert!(task_context_output_schema.contains("\"children\""));
 
     let attachment_create_tool = tools
         .iter()
@@ -623,6 +778,11 @@ async fn standalone_agenta_mcp_binary_exposes_explicit_tools_and_runs_smoke_flow
         "task_context_get",
         "task_list",
         "task_update",
+        "task_create_child",
+        "task_attach_child",
+        "task_detach_child",
+        "task_add_blocker",
+        "task_resolve_blocker",
         "note_create",
         "note_list",
         "activity_list",

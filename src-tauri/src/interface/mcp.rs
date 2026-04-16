@@ -16,14 +16,16 @@ use uuid::Uuid;
 use crate::app::McpSessionLogger;
 use crate::domain::{
     Attachment, AttachmentKind, Project, ProjectStatus, Task, TaskActivity, TaskActivityKind,
-    TaskPriority, TaskStatus, Version, VersionStatus,
+    TaskPriority, TaskRelationKind, TaskRelationStatus, TaskStatus, Version, VersionStatus,
 };
 use crate::interface::response::error_to_rmcp;
 use crate::search::SearchResponse;
 use crate::service::{
-    AgentaService, CreateAttachmentInput, CreateNoteInput, CreateProjectInput, CreateTaskInput,
-    CreateVersionInput, PageCursor, PageRequest, PageResult, RequestOrigin, SearchInput,
-    TaskDetail, TaskQuery, UpdateProjectInput, UpdateTaskInput, UpdateVersionInput,
+    AddTaskBlockerInput, AgentaService, AttachChildTaskInput, CreateAttachmentInput,
+    CreateChildTaskInput, CreateNoteInput, CreateProjectInput, CreateTaskInput, CreateVersionInput,
+    DetachChildTaskInput, PageCursor, PageRequest, PageResult, RequestOrigin,
+    ResolveTaskBlockerInput, SearchInput, TaskDetail, TaskLink, TaskQuery, UpdateProjectInput,
+    UpdateTaskInput, UpdateVersionInput,
 };
 
 #[derive(Clone)]
@@ -439,6 +441,83 @@ pub struct TaskUpdateToolInput {
     pub updated_by: Option<String>,
 }
 
+/// Create a child task under an existing parent task.
+#[derive(Debug, Deserialize, JsonSchema, Default)]
+pub struct TaskCreateChildToolInput {
+    /// Stable parent task reference. Supported values: task_id UUID only.
+    #[schemars(description = "Stable parent task reference. Supported values: task_id UUID only.")]
+    pub parent: String,
+    /// Optional linked version reference. Defaults to the parent task version when omitted.
+    #[schemars(
+        description = "Optional linked version reference. Supported values: version_id UUID only. Defaults to the parent task version when omitted."
+    )]
+    pub version: Option<String>,
+    /// Child task title shown in task lists.
+    pub title: String,
+    /// Optional short summary used in overviews.
+    pub summary: Option<String>,
+    /// Optional long-form description for the child task.
+    pub description: Option<String>,
+    /// Task lifecycle status. Allowed values: `draft`, `ready`, `in_progress`, `blocked`, `done`, `cancelled`. New tasks default to `ready`.
+    #[schemars(
+        description = "Task lifecycle status. Allowed values: `draft`, `ready`, `in_progress`, `blocked`, `done`, `cancelled`. New child tasks default to `ready`."
+    )]
+    pub status: Option<TaskStatus>,
+    /// Task priority. Allowed values: `low`, `normal`, `high`, `critical`. New tasks default to `normal`.
+    #[schemars(
+        description = "Task priority. Allowed values: `low`, `normal`, `high`, `critical`. New child tasks default to `normal`."
+    )]
+    pub priority: Option<TaskPriority>,
+    /// Actor name to record as the creator. Falls back to the MCP origin actor when omitted.
+    pub created_by: Option<String>,
+}
+
+/// Attach an existing child task to a parent task.
+#[derive(Debug, Deserialize, JsonSchema, Default)]
+pub struct TaskAttachChildToolInput {
+    /// Stable parent task reference. Supported values: task_id UUID only.
+    pub parent: String,
+    /// Stable child task reference. Supported values: task_id UUID only.
+    pub child: String,
+    /// Actor name to record as the updater. Falls back to the MCP origin actor when omitted.
+    pub updated_by: Option<String>,
+}
+
+/// Detach an active child task relation.
+#[derive(Debug, Deserialize, JsonSchema, Default)]
+pub struct TaskDetachChildToolInput {
+    /// Stable parent task reference. Supported values: task_id UUID only.
+    pub parent: String,
+    /// Stable child task reference. Supported values: task_id UUID only.
+    pub child: String,
+    /// Actor name to record as the updater. Falls back to the MCP origin actor when omitted.
+    pub updated_by: Option<String>,
+}
+
+/// Add a blocker relation between two tasks.
+#[derive(Debug, Deserialize, JsonSchema, Default)]
+pub struct TaskAddBlockerToolInput {
+    /// Stable blocker task reference. Supported values: task_id UUID only.
+    pub blocker: String,
+    /// Stable blocked task reference. Supported values: task_id UUID only.
+    pub blocked: String,
+    /// Actor name to record as the updater. Falls back to the MCP origin actor when omitted.
+    pub updated_by: Option<String>,
+}
+
+/// Resolve a blocker relation for a task.
+#[derive(Debug, Deserialize, JsonSchema, Default)]
+pub struct TaskResolveBlockerToolInput {
+    /// Stable blocked task reference. Supported values: task_id UUID only.
+    pub task: String,
+    /// Optional blocker task reference. Provide either `blocker` or `relation_id`.
+    pub blocker: Option<String>,
+    /// Optional relation UUID to resolve directly. Provide either `blocker` or `relation_id`.
+    pub relation_id: Option<String>,
+    /// Actor name to record as the updater. Falls back to the MCP origin actor when omitted.
+    pub updated_by: Option<String>,
+}
+
 /// Structured MCP representation of a task.
 #[derive(Clone, Debug, Serialize, JsonSchema)]
 pub struct TaskRecord {
@@ -474,6 +553,54 @@ pub struct TaskRecord {
     pub attachment_count: i64,
     /// RFC 3339 timestamp for the most recent task change or appended activity.
     pub latest_activity_at: String,
+    /// Active parent task UUID when one exists.
+    pub parent_task_id: Option<String>,
+    /// Number of active child task relations.
+    pub child_count: i64,
+    /// Number of currently open blockers.
+    pub open_blocker_count: i64,
+    /// Number of tasks currently blocked by this task.
+    pub blocking_count: i64,
+    /// True when the task is not closed and has no open blockers.
+    pub ready_to_start: bool,
+}
+
+/// Lightweight related task record returned inside task context payloads.
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+pub struct TaskLinkRecord {
+    /// Active task relation UUID.
+    pub relation_id: String,
+    /// Related task UUID.
+    pub task_id: String,
+    /// Related task title.
+    pub title: String,
+    /// Related task lifecycle status.
+    pub status: TaskStatus,
+    /// Related task priority.
+    pub priority: TaskPriority,
+    /// Whether the related task is currently ready to start.
+    pub ready_to_start: bool,
+}
+
+/// Structured MCP representation of a task relation helper result.
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+pub struct TaskRelationRecord {
+    /// Stable task relation UUID.
+    pub relation_id: String,
+    /// Relation kind.
+    pub kind: TaskRelationKind,
+    /// Source task UUID. For `parent_child`, this is the parent; for `blocks`, this is the blocker.
+    pub source_task_id: String,
+    /// Target task UUID. For `parent_child`, this is the child; for `blocks`, this is the blocked task.
+    pub target_task_id: String,
+    /// Current relation lifecycle status.
+    pub status: TaskRelationStatus,
+    /// RFC 3339 timestamp for creation.
+    pub created_at: String,
+    /// RFC 3339 timestamp for the latest relation update.
+    pub updated_at: String,
+    /// RFC 3339 timestamp for resolution when the relation is resolved.
+    pub resolved_at: Option<String>,
 }
 
 /// Result returned by task mutation and lookup tools.
@@ -503,6 +630,21 @@ pub struct TaskContextToolOutput {
     pub attachments: Vec<AttachmentRecord>,
     /// Recent task activities in reverse chronological order.
     pub recent_activities: Vec<ActivityRecord>,
+    /// Active parent task link when one exists.
+    pub parent: Option<TaskLinkRecord>,
+    /// Active child task links.
+    pub children: Vec<TaskLinkRecord>,
+    /// Active blocker task links.
+    pub blocked_by: Vec<TaskLinkRecord>,
+    /// Active blocked task links.
+    pub blocking: Vec<TaskLinkRecord>,
+}
+
+/// Result returned by relation helper tools.
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+pub struct TaskRelationToolOutput {
+    /// The resolved relation record.
+    pub relation: TaskRelationRecord,
 }
 
 impl From<Task> for TaskRecord {
@@ -524,6 +666,11 @@ impl From<Task> for TaskRecord {
             note_count: 0,
             attachment_count: 0,
             latest_activity_at: format_timestamp(task.updated_at),
+            parent_task_id: None,
+            child_count: 0,
+            open_blocker_count: 0,
+            blocking_count: 0,
+            ready_to_start: !matches!(task.status, TaskStatus::Done | TaskStatus::Cancelled),
         }
     }
 }
@@ -535,6 +682,12 @@ impl From<TaskDetail> for TaskRecord {
             note_count,
             attachment_count,
             latest_activity_at,
+            parent_task_id,
+            child_count,
+            open_blocker_count,
+            blocking_count,
+            ready_to_start,
+            ..
         } = detail;
         Self {
             task_id: task.task_id.to_string(),
@@ -553,7 +706,46 @@ impl From<TaskDetail> for TaskRecord {
             note_count,
             attachment_count,
             latest_activity_at: format_timestamp(latest_activity_at),
+            parent_task_id: parent_task_id.map(|value| value.to_string()),
+            child_count,
+            open_blocker_count,
+            blocking_count,
+            ready_to_start,
         }
+    }
+}
+
+impl From<TaskLink> for TaskLinkRecord {
+    fn from(link: TaskLink) -> Self {
+        Self {
+            relation_id: link.relation_id.to_string(),
+            task_id: link.task_id.to_string(),
+            title: link.title,
+            status: link.status,
+            priority: link.priority,
+            ready_to_start: link.ready_to_start,
+        }
+    }
+}
+
+impl From<crate::domain::TaskRelation> for TaskRelationRecord {
+    fn from(relation: crate::domain::TaskRelation) -> Self {
+        Self {
+            relation_id: relation.relation_id.to_string(),
+            kind: relation.kind,
+            source_task_id: relation.source_task_id.to_string(),
+            target_task_id: relation.target_task_id.to_string(),
+            status: relation.status,
+            created_at: format_timestamp(relation.created_at),
+            updated_at: format_timestamp(relation.updated_at),
+            resolved_at: relation.resolved_at.map(format_timestamp),
+        }
+    }
+}
+
+impl From<TaskRelationRecord> for TaskRelationToolOutput {
+    fn from(relation: TaskRelationRecord) -> Self {
+        Self { relation }
     }
 }
 
@@ -1334,6 +1526,22 @@ impl AgentaMcpServer {
                     .into_iter()
                     .map(ActivityRecord::from)
                     .collect(),
+                parent: context.parent.map(TaskLinkRecord::from),
+                children: context
+                    .children
+                    .into_iter()
+                    .map(TaskLinkRecord::from)
+                    .collect(),
+                blocked_by: context
+                    .blocked_by
+                    .into_iter()
+                    .map(TaskLinkRecord::from)
+                    .collect(),
+                blocking: context
+                    .blocking
+                    .into_iter()
+                    .map(TaskLinkRecord::from)
+                    .collect(),
             })
             .map_err(error_to_rmcp);
         self.log_structured_tool_result("task_context_get", action, "Loaded task context", &result)
@@ -1430,6 +1638,225 @@ impl AgentaMcpServer {
         .await;
         self.log_structured_tool_result("task_update", action, "Updated task", &result)
             .await;
+
+        result.map(Json)
+    }
+
+    #[tool(
+        name = "task_create_child",
+        description = "Create a child task under an existing parent task. The child inherits the parent project and defaults to the parent version when omitted.",
+        annotations(
+            title = "Task Create Child",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    pub async fn task_create_child(
+        &self,
+        Parameters(params): Parameters<TaskCreateChildToolInput>,
+    ) -> Result<Json<TaskToolOutput>, ErrorData> {
+        let action = "create_child";
+        self.log_tool_call("task_create_child", action).await;
+        let result: Result<TaskToolOutput, ErrorData> = async {
+            let task = self
+                .service
+                .create_child_task_from(
+                    RequestOrigin::Mcp,
+                    CreateChildTaskInput {
+                        parent: required_text(params.parent, "parent")?,
+                        version: optional_trimmed(params.version),
+                        title: required_text(params.title, "title")?,
+                        summary: optional_trimmed(params.summary),
+                        description: optional_trimmed(params.description),
+                        status: params.status,
+                        priority: params.priority,
+                        created_by: optional_trimmed(params.created_by),
+                    },
+                )
+                .await
+                .map_err(error_to_rmcp)?;
+            let detail = self
+                .service
+                .get_task_detail(&task.task_id.to_string())
+                .await
+                .map_err(error_to_rmcp)?;
+            Ok(TaskToolOutput {
+                task: TaskRecord::from(detail),
+            })
+        }
+        .await;
+        self.log_structured_tool_result("task_create_child", action, "Created child task", &result)
+            .await;
+
+        result.map(Json)
+    }
+
+    #[tool(
+        name = "task_attach_child",
+        description = "Attach an existing child task to a parent task without exposing generic graph editing primitives.",
+        annotations(
+            title = "Task Attach Child",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    pub async fn task_attach_child(
+        &self,
+        Parameters(params): Parameters<TaskAttachChildToolInput>,
+    ) -> Result<Json<TaskRelationToolOutput>, ErrorData> {
+        let action = "attach_child";
+        self.log_tool_call("task_attach_child", action).await;
+        let result = self
+            .service
+            .attach_child_task_from(
+                RequestOrigin::Mcp,
+                AttachChildTaskInput {
+                    parent: required_text(params.parent, "parent")?,
+                    child: required_text(params.child, "child")?,
+                    updated_by: optional_trimmed(params.updated_by),
+                },
+            )
+            .await
+            .map(|relation| TaskRelationToolOutput {
+                relation: TaskRelationRecord::from(relation),
+            })
+            .map_err(error_to_rmcp);
+        self.log_structured_tool_result(
+            "task_attach_child",
+            action,
+            "Attached child task",
+            &result,
+        )
+        .await;
+
+        result.map(Json)
+    }
+
+    #[tool(
+        name = "task_detach_child",
+        description = "Resolve an active parent-child relation between two tasks.",
+        annotations(
+            title = "Task Detach Child",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    pub async fn task_detach_child(
+        &self,
+        Parameters(params): Parameters<TaskDetachChildToolInput>,
+    ) -> Result<Json<TaskRelationToolOutput>, ErrorData> {
+        let action = "detach_child";
+        self.log_tool_call("task_detach_child", action).await;
+        let result = self
+            .service
+            .detach_child_task_from(
+                RequestOrigin::Mcp,
+                DetachChildTaskInput {
+                    parent: required_text(params.parent, "parent")?,
+                    child: required_text(params.child, "child")?,
+                    updated_by: optional_trimmed(params.updated_by),
+                },
+            )
+            .await
+            .map(|relation| TaskRelationToolOutput {
+                relation: TaskRelationRecord::from(relation),
+            })
+            .map_err(error_to_rmcp);
+        self.log_structured_tool_result(
+            "task_detach_child",
+            action,
+            "Detached child task",
+            &result,
+        )
+        .await;
+
+        result.map(Json)
+    }
+
+    #[tool(
+        name = "task_add_blocker",
+        description = "Add a blocker relation between two tasks. The blocked task is moved to `blocked` when it is not already closed.",
+        annotations(
+            title = "Task Add Blocker",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    pub async fn task_add_blocker(
+        &self,
+        Parameters(params): Parameters<TaskAddBlockerToolInput>,
+    ) -> Result<Json<TaskRelationToolOutput>, ErrorData> {
+        let action = "add_blocker";
+        self.log_tool_call("task_add_blocker", action).await;
+        let result = self
+            .service
+            .add_task_blocker_from(
+                RequestOrigin::Mcp,
+                AddTaskBlockerInput {
+                    blocker: required_text(params.blocker, "blocker")?,
+                    blocked: required_text(params.blocked, "blocked")?,
+                    updated_by: optional_trimmed(params.updated_by),
+                },
+            )
+            .await
+            .map(|relation| TaskRelationToolOutput {
+                relation: TaskRelationRecord::from(relation),
+            })
+            .map_err(error_to_rmcp);
+        self.log_structured_tool_result("task_add_blocker", action, "Added task blocker", &result)
+            .await;
+
+        result.map(Json)
+    }
+
+    #[tool(
+        name = "task_resolve_blocker",
+        description = "Resolve a blocker relation for a task by blocker task_id or relation_id.",
+        annotations(
+            title = "Task Resolve Blocker",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    pub async fn task_resolve_blocker(
+        &self,
+        Parameters(params): Parameters<TaskResolveBlockerToolInput>,
+    ) -> Result<Json<TaskRelationToolOutput>, ErrorData> {
+        let action = "resolve_blocker";
+        self.log_tool_call("task_resolve_blocker", action).await;
+        let result = self
+            .service
+            .resolve_task_blocker_from(
+                RequestOrigin::Mcp,
+                ResolveTaskBlockerInput {
+                    task: required_text(params.task, "task")?,
+                    blocker: optional_trimmed(params.blocker),
+                    relation_id: optional_trimmed(params.relation_id),
+                    updated_by: optional_trimmed(params.updated_by),
+                },
+            )
+            .await
+            .map(|relation| TaskRelationToolOutput {
+                relation: TaskRelationRecord::from(relation),
+            })
+            .map_err(error_to_rmcp);
+        self.log_structured_tool_result(
+            "task_resolve_blocker",
+            action,
+            "Resolved task blocker",
+            &result,
+        )
+        .await;
 
         result.map(Json)
     }
@@ -1798,6 +2225,11 @@ mod tests {
             AgentaMcpServer::task_context_get_tool_attr(),
             AgentaMcpServer::task_list_tool_attr(),
             AgentaMcpServer::task_update_tool_attr(),
+            AgentaMcpServer::task_create_child_tool_attr(),
+            AgentaMcpServer::task_attach_child_tool_attr(),
+            AgentaMcpServer::task_detach_child_tool_attr(),
+            AgentaMcpServer::task_add_blocker_tool_attr(),
+            AgentaMcpServer::task_resolve_blocker_tool_attr(),
             AgentaMcpServer::note_create_tool_attr(),
             AgentaMcpServer::note_list_tool_attr(),
             AgentaMcpServer::activity_list_tool_attr(),
@@ -1932,6 +2364,9 @@ mod tests {
         assert!(task_get_output.contains("\"note_count\""));
         assert!(task_get_output.contains("\"attachment_count\""));
         assert!(task_get_output.contains("\"latest_activity_at\""));
+        assert!(task_get_output.contains("\"parent_task_id\""));
+        assert!(task_get_output.contains("\"open_blocker_count\""));
+        assert!(task_get_output.contains("\"ready_to_start\""));
 
         let activity_list_output =
             serde_json::to_string(&activity_list["outputSchema"]).expect("activity list output");
@@ -1943,5 +2378,8 @@ mod tests {
         assert!(task_context_output.contains("\"notes\""));
         assert!(task_context_output.contains("\"attachments\""));
         assert!(task_context_output.contains("\"recent_activities\""));
+        assert!(task_context_output.contains("\"blocked_by\""));
+        assert!(task_context_output.contains("\"blocking\""));
+        assert!(task_context_output.contains("\"children\""));
     }
 }

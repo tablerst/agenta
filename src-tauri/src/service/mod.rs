@@ -15,7 +15,8 @@ use crate::app::{SyncConfig, SyncRemoteConfig, SyncRemoteKind};
 use crate::domain::{
     ApprovalRequest, ApprovalRequestedVia, ApprovalStatus, Attachment, AttachmentKind, Project,
     ProjectStatus, SyncCheckpointKind, SyncEntityKind, SyncMode, SyncOperation, SyncOutboxStatus,
-    Task, TaskActivity, TaskActivityKind, TaskPriority, TaskStatus, Version, VersionStatus,
+    Task, TaskActivity, TaskActivityKind, TaskPriority, TaskRelation, TaskRelationKind,
+    TaskRelationStatus, TaskStatus, Version, VersionStatus,
 };
 use crate::error::{AppError, AppResult};
 use crate::policy::{PolicyEngine, WriteDecision};
@@ -164,6 +165,18 @@ pub struct CreateTaskInput {
     pub created_by: Option<String>,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CreateChildTaskInput {
+    pub parent: String,
+    pub version: Option<String>,
+    pub title: String,
+    pub summary: Option<String>,
+    pub description: Option<String>,
+    pub status: Option<TaskStatus>,
+    pub priority: Option<TaskPriority>,
+    pub created_by: Option<String>,
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct UpdateTaskInput {
     pub version: Option<String>,
@@ -172,6 +185,35 @@ pub struct UpdateTaskInput {
     pub description: Option<String>,
     pub status: Option<TaskStatus>,
     pub priority: Option<TaskPriority>,
+    pub updated_by: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct AttachChildTaskInput {
+    pub parent: String,
+    pub child: String,
+    pub updated_by: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct DetachChildTaskInput {
+    pub parent: String,
+    pub child: String,
+    pub updated_by: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct AddTaskBlockerInput {
+    pub blocker: String,
+    pub blocked: String,
+    pub updated_by: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ResolveTaskBlockerInput {
+    pub task: String,
+    pub blocker: Option<String>,
+    pub relation_id: Option<String>,
     pub updated_by: Option<String>,
 }
 
@@ -224,6 +266,21 @@ pub struct TaskDetail {
     pub note_count: i64,
     pub attachment_count: i64,
     pub latest_activity_at: OffsetDateTime,
+    pub parent_task_id: Option<Uuid>,
+    pub child_count: i64,
+    pub open_blocker_count: i64,
+    pub blocking_count: i64,
+    pub ready_to_start: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct TaskLink {
+    pub relation_id: Uuid,
+    pub task_id: Uuid,
+    pub title: String,
+    pub status: TaskStatus,
+    pub priority: TaskPriority,
+    pub ready_to_start: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -232,6 +289,10 @@ pub struct TaskContext {
     pub notes: Vec<TaskActivity>,
     pub attachments: Vec<Attachment>,
     pub recent_activities: Vec<TaskActivity>,
+    pub parent: Option<TaskLink>,
+    pub children: Vec<TaskLink>,
+    pub blocked_by: Vec<TaskLink>,
+    pub blocking: Vec<TaskLink>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -422,6 +483,27 @@ impl AgentaService {
             if queued {
                 summary.queued += 1;
                 summary.queued_tasks += 1;
+                if summary.queued >= max_to_queue {
+                    return Ok(summary);
+                }
+            } else {
+                summary.skipped += 1;
+            }
+        }
+
+        for relation in self.store.list_task_relations().await? {
+            let queued = self
+                .backfill_entity_if_untracked(
+                    &remote.id,
+                    SyncEntityKind::TaskRelation,
+                    relation.relation_id,
+                    &relation,
+                    relation.updated_at,
+                )
+                .await?;
+            summary.scanned += 1;
+            if queued {
+                summary.queued += 1;
                 if summary.queued >= max_to_queue {
                     return Ok(summary);
                 }
@@ -799,24 +881,100 @@ impl AgentaService {
             .await
     }
 
+    pub async fn create_child_task(&self, input: CreateChildTaskInput) -> AppResult<Task> {
+        self.create_child_task_from(RequestOrigin::Cli, input).await
+    }
+
+    pub async fn create_child_task_from(
+        &self,
+        origin: RequestOrigin,
+        mut input: CreateChildTaskInput,
+    ) -> AppResult<Task> {
+        if input
+            .created_by
+            .as_deref()
+            .is_none_or(|value| value.trim().is_empty())
+        {
+            input.created_by = Some(origin.fallback_actor().to_string());
+        }
+        let approval = self.approval_seed(
+            origin,
+            input.parent.clone(),
+            format!(
+                "Create child task {} under {}",
+                input.title.trim(),
+                input.parent.trim()
+            ),
+            actor_or_default(input.created_by.as_deref(), origin),
+            &input,
+        )?;
+        let _write_guard = self.write_queue.lock().await;
+        self.create_child_task_internal(input, ApprovalMode::Standard(approval))
+            .await
+    }
+
     pub async fn get_task(&self, reference: &str) -> AppResult<Task> {
         self.store.get_task_by_ref(reference).await
     }
 
     pub async fn get_task_detail(&self, reference: &str) -> AppResult<TaskDetail> {
-        let (task, note_count, attachment_count, latest_activity_at) =
-            self.store.get_task_with_stats_by_ref(reference).await?;
-        Ok(TaskDetail {
+        let (
             task,
             note_count,
             attachment_count,
             latest_activity_at,
-        })
+            parent_task_id,
+            child_count,
+            open_blocker_count,
+            blocking_count,
+        ) = self.store.get_task_with_stats_by_ref(reference).await?;
+        Ok(task_detail_from_parts(
+            task,
+            note_count,
+            attachment_count,
+            latest_activity_at,
+            parent_task_id,
+            child_count,
+            open_blocker_count,
+            blocking_count,
+        ))
     }
 
     pub async fn list_tasks(&self, query: TaskQuery) -> AppResult<Vec<Task>> {
         let filter = self.resolve_task_filter(&query).await?;
         self.store.list_tasks(filter).await
+    }
+
+    pub async fn list_task_details(&self, query: TaskQuery) -> AppResult<Vec<TaskDetail>> {
+        let filter = self.resolve_task_filter(&query).await?;
+        self.store
+            .list_tasks_with_stats(filter)
+            .await?
+            .into_iter()
+            .map(
+                |(
+                    task,
+                    note_count,
+                    attachment_count,
+                    latest_activity_at,
+                    parent_task_id,
+                    child_count,
+                    open_blocker_count,
+                    blocking_count,
+                )| {
+                    Ok(task_detail_from_parts(
+                        task,
+                        note_count,
+                        attachment_count,
+                        latest_activity_at,
+                        parent_task_id,
+                        child_count,
+                        open_blocker_count,
+                        blocking_count,
+                    ))
+                },
+            )
+            .collect()
     }
 
     pub async fn list_task_details_page(
@@ -831,11 +989,26 @@ impl AgentaService {
             .await?
             .into_iter()
             .map(
-                |(task, note_count, attachment_count, latest_activity_at)| TaskDetail {
+                |(
                     task,
                     note_count,
                     attachment_count,
                     latest_activity_at,
+                    parent_task_id,
+                    child_count,
+                    open_blocker_count,
+                    blocking_count,
+                )| {
+                    task_detail_from_parts(
+                        task,
+                        note_count,
+                        attachment_count,
+                        latest_activity_at,
+                        parent_task_id,
+                        child_count,
+                        open_blocker_count,
+                        blocking_count,
+                    )
                 },
             )
             .collect();
@@ -877,6 +1050,134 @@ impl AgentaService {
         )?;
         let _write_guard = self.write_queue.lock().await;
         self.update_task_internal(reference, input, ApprovalMode::Standard(approval))
+            .await
+    }
+
+    pub async fn attach_child_task(&self, input: AttachChildTaskInput) -> AppResult<TaskRelation> {
+        self.attach_child_task_from(RequestOrigin::Cli, input).await
+    }
+
+    pub async fn attach_child_task_from(
+        &self,
+        origin: RequestOrigin,
+        mut input: AttachChildTaskInput,
+    ) -> AppResult<TaskRelation> {
+        if input
+            .updated_by
+            .as_deref()
+            .is_none_or(|value| value.trim().is_empty())
+        {
+            input.updated_by = Some(origin.fallback_actor().to_string());
+        }
+        let approval = self.approval_seed(
+            origin,
+            input.child.clone(),
+            format!(
+                "Attach child task {} to parent {}",
+                input.child.trim(),
+                input.parent.trim()
+            ),
+            actor_or_default(input.updated_by.as_deref(), origin),
+            &input,
+        )?;
+        let _write_guard = self.write_queue.lock().await;
+        self.attach_child_task_internal(input, ApprovalMode::Standard(approval))
+            .await
+    }
+
+    pub async fn detach_child_task(&self, input: DetachChildTaskInput) -> AppResult<TaskRelation> {
+        self.detach_child_task_from(RequestOrigin::Cli, input).await
+    }
+
+    pub async fn detach_child_task_from(
+        &self,
+        origin: RequestOrigin,
+        mut input: DetachChildTaskInput,
+    ) -> AppResult<TaskRelation> {
+        if input
+            .updated_by
+            .as_deref()
+            .is_none_or(|value| value.trim().is_empty())
+        {
+            input.updated_by = Some(origin.fallback_actor().to_string());
+        }
+        let approval = self.approval_seed(
+            origin,
+            input.child.clone(),
+            format!(
+                "Detach child task {} from parent {}",
+                input.child.trim(),
+                input.parent.trim()
+            ),
+            actor_or_default(input.updated_by.as_deref(), origin),
+            &input,
+        )?;
+        let _write_guard = self.write_queue.lock().await;
+        self.detach_child_task_internal(input, ApprovalMode::Standard(approval))
+            .await
+    }
+
+    pub async fn add_task_blocker(&self, input: AddTaskBlockerInput) -> AppResult<TaskRelation> {
+        self.add_task_blocker_from(RequestOrigin::Cli, input).await
+    }
+
+    pub async fn add_task_blocker_from(
+        &self,
+        origin: RequestOrigin,
+        mut input: AddTaskBlockerInput,
+    ) -> AppResult<TaskRelation> {
+        if input
+            .updated_by
+            .as_deref()
+            .is_none_or(|value| value.trim().is_empty())
+        {
+            input.updated_by = Some(origin.fallback_actor().to_string());
+        }
+        let approval = self.approval_seed(
+            origin,
+            input.blocked.clone(),
+            format!(
+                "Block task {} with task {}",
+                input.blocked.trim(),
+                input.blocker.trim()
+            ),
+            actor_or_default(input.updated_by.as_deref(), origin),
+            &input,
+        )?;
+        let _write_guard = self.write_queue.lock().await;
+        self.add_task_blocker_internal(input, ApprovalMode::Standard(approval))
+            .await
+    }
+
+    pub async fn resolve_task_blocker(
+        &self,
+        input: ResolveTaskBlockerInput,
+    ) -> AppResult<TaskRelation> {
+        self.resolve_task_blocker_from(RequestOrigin::Cli, input)
+            .await
+    }
+
+    pub async fn resolve_task_blocker_from(
+        &self,
+        origin: RequestOrigin,
+        mut input: ResolveTaskBlockerInput,
+    ) -> AppResult<TaskRelation> {
+        if input
+            .updated_by
+            .as_deref()
+            .is_none_or(|value| value.trim().is_empty())
+        {
+            input.updated_by = Some(origin.fallback_actor().to_string());
+        }
+        let approval = self.approval_seed(
+            origin,
+            input.task.clone(),
+            format!("Resolve blocker for task {}", input.task.trim()),
+            actor_or_default(input.updated_by.as_deref(), origin),
+            &input,
+        )?;
+        let _write_guard = self.write_queue.lock().await;
+        self.resolve_task_blocker_internal(input, ApprovalMode::Standard(approval))
             .await
     }
 
@@ -1020,6 +1321,55 @@ impl AgentaService {
         let task = self.get_task_detail(task_ref).await?;
         let notes = self.list_notes(task_ref).await?;
         let attachments = self.list_attachments(task_ref).await?;
+        let parent = match task.parent_task_id {
+            Some(parent_task_id) => {
+                let parent_relation = self
+                    .store
+                    .find_active_parent_relation(task.task.task_id)
+                    .await?
+                    .ok_or_else(|| {
+                        AppError::Conflict("task parent summary is out of sync".to_string())
+                    })?;
+                Some(
+                    self.task_link_for_relation(parent_relation.relation_id, parent_task_id)
+                        .await?,
+                )
+            }
+            None => None,
+        };
+        let mut children = Vec::new();
+        for relation in self
+            .store
+            .list_active_child_relations(task.task.task_id)
+            .await?
+        {
+            children.push(
+                self.task_link_for_relation(relation.relation_id, relation.target_task_id)
+                    .await?,
+            );
+        }
+        let mut blocked_by = Vec::new();
+        for relation in self
+            .store
+            .list_active_blocker_relations(task.task.task_id)
+            .await?
+        {
+            blocked_by.push(
+                self.task_link_for_relation(relation.relation_id, relation.source_task_id)
+                    .await?,
+            );
+        }
+        let mut blocking = Vec::new();
+        for relation in self
+            .store
+            .list_active_blocking_relations(task.task.task_id)
+            .await?
+        {
+            blocking.push(
+                self.task_link_for_relation(relation.relation_id, relation.target_task_id)
+                    .await?,
+            );
+        }
         let recent_activities = self
             .list_task_activities_page(
                 task_ref,
@@ -1035,6 +1385,10 @@ impl AgentaService {
             notes,
             attachments,
             recent_activities,
+            parent,
+            children,
+            blocked_by,
+            blocking,
         })
     }
 
@@ -1359,6 +1713,9 @@ impl AgentaService {
         );
         task.task_context_digest = build_task_context_digest(&task);
         self.store.insert_task_tx(&mut tx, &task).await?;
+        task.task_context_digest = self
+            .refresh_task_context_digest_tx(&mut tx, task.task_id)
+            .await?;
         self.enqueue_sync_mutation_tx(
             &mut tx,
             SyncEntityKind::Task,
@@ -1415,6 +1772,9 @@ impl AgentaService {
         );
         task.task_context_digest = build_task_context_digest(&task);
         self.store.update_task_tx(&mut tx, &task).await?;
+        task.task_context_digest = self
+            .refresh_task_context_digest_tx(&mut tx, task.task_id)
+            .await?;
         if previous_status != task.status {
             let content = format!("Status changed from {previous_status} to {}.", task.status);
             let activity = TaskActivity {
@@ -1446,6 +1806,556 @@ impl AgentaService {
         .await?;
         tx.commit().await?;
         Ok(task)
+    }
+
+    async fn create_child_task_internal(
+        &self,
+        input: CreateChildTaskInput,
+        mode: ApprovalMode,
+    ) -> AppResult<Task> {
+        self.enforce("task.create_child", mode).await?;
+        let mut tx = self.store.pool.begin().await?;
+        let parent = self
+            .store
+            .get_task_by_ref_tx(&mut tx, &input.parent)
+            .await?;
+        let version_id = match input.version.as_deref() {
+            Some(reference) => {
+                self.resolve_version_for_project_tx(&mut tx, parent.project_id, Some(reference))
+                    .await?
+            }
+            None => parent.version_id,
+        };
+        let now = OffsetDateTime::now_utc();
+        let created_by = input
+            .created_by
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "cli".to_string());
+        let mut task = Task {
+            task_id: Uuid::new_v4(),
+            project_id: parent.project_id,
+            version_id,
+            title: require_non_empty(input.title, "task title")?,
+            summary: clean_optional(input.summary),
+            description: clean_optional(input.description),
+            task_search_summary: String::new(),
+            task_context_digest: String::new(),
+            status: input.status.unwrap_or_default(),
+            priority: input.priority.unwrap_or_default(),
+            created_by: created_by.clone(),
+            updated_by: created_by.clone(),
+            created_at: now,
+            updated_at: now,
+            closed_at: None,
+        };
+        task.closed_at = closed_at_for_status(task.status, now);
+        task.task_search_summary = build_task_search_summary(
+            &task.title,
+            task.summary.as_deref(),
+            task.description.as_deref(),
+        );
+        task.task_context_digest = build_task_context_digest(&task);
+        self.store.insert_task_tx(&mut tx, &task).await?;
+
+        let relation = TaskRelation {
+            relation_id: Uuid::new_v4(),
+            kind: TaskRelationKind::ParentChild,
+            source_task_id: parent.task_id,
+            target_task_id: task.task_id,
+            status: TaskRelationStatus::Active,
+            created_by: created_by.clone(),
+            updated_by: created_by.clone(),
+            created_at: now,
+            updated_at: now,
+            resolved_at: None,
+        };
+        self.store
+            .insert_task_relation_tx(&mut tx, &relation)
+            .await?;
+
+        task.task_context_digest = self
+            .refresh_task_context_digest_tx(&mut tx, task.task_id)
+            .await?;
+        self.touch_task_for_relation_change_tx(&mut tx, parent.task_id, &created_by, now, None)
+            .await?;
+        self.append_system_activity_tx(
+            &mut tx,
+            parent.task_id,
+            &format!("Attached child task {}.", task.title),
+            &created_by,
+            now,
+            json!({
+                "relation_id": relation.relation_id,
+                "kind": relation.kind,
+                "child_task_id": task.task_id,
+            }),
+        )
+        .await?;
+        self.append_system_activity_tx(
+            &mut tx,
+            task.task_id,
+            &format!("Attached to parent task {}.", parent.title),
+            &created_by,
+            now,
+            json!({
+                "relation_id": relation.relation_id,
+                "kind": relation.kind,
+                "parent_task_id": parent.task_id,
+            }),
+        )
+        .await?;
+        self.enqueue_sync_mutation_tx(
+            &mut tx,
+            SyncEntityKind::Task,
+            task.task_id,
+            SyncOperation::Create,
+            &task,
+            task.updated_at,
+        )
+        .await?;
+        self.enqueue_sync_mutation_tx(
+            &mut tx,
+            SyncEntityKind::TaskRelation,
+            relation.relation_id,
+            SyncOperation::Create,
+            &relation,
+            relation.updated_at,
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(task)
+    }
+
+    async fn attach_child_task_internal(
+        &self,
+        input: AttachChildTaskInput,
+        mode: ApprovalMode,
+    ) -> AppResult<TaskRelation> {
+        self.enforce("task.attach_child", mode).await?;
+        let mut tx = self.store.pool.begin().await?;
+        let parent = self
+            .store
+            .get_task_by_ref_tx(&mut tx, &input.parent)
+            .await?;
+        let child = self.store.get_task_by_ref_tx(&mut tx, &input.child).await?;
+        if parent.task_id == child.task_id {
+            return Err(AppError::Conflict(
+                "parent and child task must be different".to_string(),
+            ));
+        }
+        if parent.project_id != child.project_id {
+            return Err(AppError::Conflict(
+                "parent and child task must belong to the same project".to_string(),
+            ));
+        }
+        if self
+            .store
+            .find_active_relation_tx(
+                &mut tx,
+                TaskRelationKind::ParentChild,
+                parent.task_id,
+                child.task_id,
+            )
+            .await?
+            .is_some()
+        {
+            return Err(AppError::Conflict(
+                "child task is already attached to this parent".to_string(),
+            ));
+        }
+        if self
+            .store
+            .find_active_parent_relation_tx(&mut tx, child.task_id)
+            .await?
+            .is_some()
+        {
+            return Err(AppError::Conflict(
+                "child task already has an active parent".to_string(),
+            ));
+        }
+        if self
+            .store
+            .has_active_parent_path_tx(&mut tx, child.task_id, parent.task_id)
+            .await?
+        {
+            return Err(AppError::Conflict(
+                "attaching this child would create a parent cycle".to_string(),
+            ));
+        }
+        let now = OffsetDateTime::now_utc();
+        let updated_by = input
+            .updated_by
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "cli".to_string());
+        let relation = TaskRelation {
+            relation_id: Uuid::new_v4(),
+            kind: TaskRelationKind::ParentChild,
+            source_task_id: parent.task_id,
+            target_task_id: child.task_id,
+            status: TaskRelationStatus::Active,
+            created_by: updated_by.clone(),
+            updated_by: updated_by.clone(),
+            created_at: now,
+            updated_at: now,
+            resolved_at: None,
+        };
+        self.store
+            .insert_task_relation_tx(&mut tx, &relation)
+            .await?;
+        self.touch_task_for_relation_change_tx(&mut tx, parent.task_id, &updated_by, now, None)
+            .await?;
+        self.touch_task_for_relation_change_tx(&mut tx, child.task_id, &updated_by, now, None)
+            .await?;
+        self.append_system_activity_tx(
+            &mut tx,
+            parent.task_id,
+            &format!("Attached existing child task {}.", child.title),
+            &updated_by,
+            now,
+            json!({
+                "relation_id": relation.relation_id,
+                "kind": relation.kind,
+                "child_task_id": child.task_id,
+            }),
+        )
+        .await?;
+        self.append_system_activity_tx(
+            &mut tx,
+            child.task_id,
+            &format!("Attached to parent task {}.", parent.title),
+            &updated_by,
+            now,
+            json!({
+                "relation_id": relation.relation_id,
+                "kind": relation.kind,
+                "parent_task_id": parent.task_id,
+            }),
+        )
+        .await?;
+        self.enqueue_sync_mutation_tx(
+            &mut tx,
+            SyncEntityKind::TaskRelation,
+            relation.relation_id,
+            SyncOperation::Create,
+            &relation,
+            relation.updated_at,
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(relation)
+    }
+
+    async fn detach_child_task_internal(
+        &self,
+        input: DetachChildTaskInput,
+        mode: ApprovalMode,
+    ) -> AppResult<TaskRelation> {
+        self.enforce("task.detach_child", mode).await?;
+        let mut tx = self.store.pool.begin().await?;
+        let parent = self
+            .store
+            .get_task_by_ref_tx(&mut tx, &input.parent)
+            .await?;
+        let child = self.store.get_task_by_ref_tx(&mut tx, &input.child).await?;
+        let mut relation = self
+            .store
+            .find_active_relation_tx(
+                &mut tx,
+                TaskRelationKind::ParentChild,
+                parent.task_id,
+                child.task_id,
+            )
+            .await?
+            .ok_or_else(|| AppError::NotFound {
+                entity: "task_relation".to_string(),
+                reference: format!("parent_child:{}->{}", parent.task_id, child.task_id),
+            })?;
+        let now = OffsetDateTime::now_utc();
+        let updated_by = input
+            .updated_by
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "cli".to_string());
+        relation.status = TaskRelationStatus::Resolved;
+        relation.updated_by = updated_by.clone();
+        relation.updated_at = now;
+        relation.resolved_at = Some(now);
+        self.store
+            .update_task_relation_tx(&mut tx, &relation)
+            .await?;
+        self.touch_task_for_relation_change_tx(&mut tx, parent.task_id, &updated_by, now, None)
+            .await?;
+        self.touch_task_for_relation_change_tx(&mut tx, child.task_id, &updated_by, now, None)
+            .await?;
+        self.append_system_activity_tx(
+            &mut tx,
+            parent.task_id,
+            &format!("Detached child task {}.", child.title),
+            &updated_by,
+            now,
+            json!({
+                "relation_id": relation.relation_id,
+                "kind": relation.kind,
+                "child_task_id": child.task_id,
+                "status": relation.status,
+            }),
+        )
+        .await?;
+        self.append_system_activity_tx(
+            &mut tx,
+            child.task_id,
+            &format!("Detached from parent task {}.", parent.title),
+            &updated_by,
+            now,
+            json!({
+                "relation_id": relation.relation_id,
+                "kind": relation.kind,
+                "parent_task_id": parent.task_id,
+                "status": relation.status,
+            }),
+        )
+        .await?;
+        self.enqueue_sync_mutation_tx(
+            &mut tx,
+            SyncEntityKind::TaskRelation,
+            relation.relation_id,
+            SyncOperation::Update,
+            &relation,
+            relation.updated_at,
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(relation)
+    }
+
+    async fn add_task_blocker_internal(
+        &self,
+        input: AddTaskBlockerInput,
+        mode: ApprovalMode,
+    ) -> AppResult<TaskRelation> {
+        self.enforce("task.add_blocker", mode).await?;
+        let mut tx = self.store.pool.begin().await?;
+        let blocker = self
+            .store
+            .get_task_by_ref_tx(&mut tx, &input.blocker)
+            .await?;
+        let blocked = self
+            .store
+            .get_task_by_ref_tx(&mut tx, &input.blocked)
+            .await?;
+        if blocker.task_id == blocked.task_id {
+            return Err(AppError::Conflict(
+                "blocker and blocked task must be different".to_string(),
+            ));
+        }
+        if blocker.project_id != blocked.project_id {
+            return Err(AppError::Conflict(
+                "blocker and blocked task must belong to the same project".to_string(),
+            ));
+        }
+        if self
+            .store
+            .find_active_relation_tx(
+                &mut tx,
+                TaskRelationKind::Blocks,
+                blocker.task_id,
+                blocked.task_id,
+            )
+            .await?
+            .is_some()
+        {
+            return Err(AppError::Conflict(
+                "this blocker relation already exists".to_string(),
+            ));
+        }
+        let now = OffsetDateTime::now_utc();
+        let updated_by = input
+            .updated_by
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "cli".to_string());
+        let relation = TaskRelation {
+            relation_id: Uuid::new_v4(),
+            kind: TaskRelationKind::Blocks,
+            source_task_id: blocker.task_id,
+            target_task_id: blocked.task_id,
+            status: TaskRelationStatus::Active,
+            created_by: updated_by.clone(),
+            updated_by: updated_by.clone(),
+            created_at: now,
+            updated_at: now,
+            resolved_at: None,
+        };
+        self.store
+            .insert_task_relation_tx(&mut tx, &relation)
+            .await?;
+        self.touch_task_for_relation_change_tx(&mut tx, blocker.task_id, &updated_by, now, None)
+            .await?;
+        let blocked_status = (!matches!(blocked.status, TaskStatus::Done | TaskStatus::Cancelled))
+            .then_some(TaskStatus::Blocked);
+        self.touch_task_for_relation_change_tx(
+            &mut tx,
+            blocked.task_id,
+            &updated_by,
+            now,
+            blocked_status,
+        )
+        .await?;
+        self.append_system_activity_tx(
+            &mut tx,
+            blocker.task_id,
+            &format!("Task {} is now blocked by this task.", blocked.title),
+            &updated_by,
+            now,
+            json!({
+                "relation_id": relation.relation_id,
+                "kind": relation.kind,
+                "blocked_task_id": blocked.task_id,
+            }),
+        )
+        .await?;
+        self.append_system_activity_tx(
+            &mut tx,
+            blocked.task_id,
+            &format!("Blocked by task {}.", blocker.title),
+            &updated_by,
+            now,
+            json!({
+                "relation_id": relation.relation_id,
+                "kind": relation.kind,
+                "blocker_task_id": blocker.task_id,
+            }),
+        )
+        .await?;
+        self.enqueue_sync_mutation_tx(
+            &mut tx,
+            SyncEntityKind::TaskRelation,
+            relation.relation_id,
+            SyncOperation::Create,
+            &relation,
+            relation.updated_at,
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(relation)
+    }
+
+    async fn resolve_task_blocker_internal(
+        &self,
+        input: ResolveTaskBlockerInput,
+        mode: ApprovalMode,
+    ) -> AppResult<TaskRelation> {
+        self.enforce("task.resolve_blocker", mode).await?;
+        let mut tx = self.store.pool.begin().await?;
+        let blocked = self.store.get_task_by_ref_tx(&mut tx, &input.task).await?;
+        let mut relation = if let Some(relation_id) = input.relation_id.as_deref() {
+            let relation = self
+                .store
+                .get_task_relation_by_ref_tx(&mut tx, relation_id)
+                .await?;
+            if relation.kind != TaskRelationKind::Blocks
+                || relation.target_task_id != blocked.task_id
+            {
+                return Err(AppError::Conflict(
+                    "relation_id must point to an active blocker for the selected task".to_string(),
+                ));
+            }
+            relation
+        } else {
+            let blocker_ref = input.blocker.as_deref().ok_or_else(|| {
+                AppError::InvalidArguments(
+                    "either blocker or relation_id must be provided".to_string(),
+                )
+            })?;
+            let blocker = self.store.get_task_by_ref_tx(&mut tx, blocker_ref).await?;
+            self.store
+                .find_active_relation_tx(
+                    &mut tx,
+                    TaskRelationKind::Blocks,
+                    blocker.task_id,
+                    blocked.task_id,
+                )
+                .await?
+                .ok_or_else(|| AppError::NotFound {
+                    entity: "task_relation".to_string(),
+                    reference: format!("blocks:{}->{}", blocker.task_id, blocked.task_id),
+                })?
+        };
+        if relation.status != TaskRelationStatus::Active {
+            return Err(AppError::Conflict(
+                "only active blocker relations can be resolved".to_string(),
+            ));
+        }
+        let blocker = self
+            .store
+            .get_task_by_ref_tx(&mut tx, &relation.source_task_id.to_string())
+            .await?;
+        let now = OffsetDateTime::now_utc();
+        let updated_by = input
+            .updated_by
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "cli".to_string());
+        relation.status = TaskRelationStatus::Resolved;
+        relation.updated_by = updated_by.clone();
+        relation.updated_at = now;
+        relation.resolved_at = Some(now);
+        self.store
+            .update_task_relation_tx(&mut tx, &relation)
+            .await?;
+        self.touch_task_for_relation_change_tx(&mut tx, blocker.task_id, &updated_by, now, None)
+            .await?;
+        let (_, _, _, _, _, _, remaining_open_blockers, _) = self
+            .store
+            .get_task_with_stats_by_ref_tx(&mut tx, &blocked.task_id.to_string())
+            .await?;
+        let restore_status = (blocked.status == TaskStatus::Blocked
+            && remaining_open_blockers == 0)
+            .then_some(TaskStatus::Ready);
+        self.touch_task_for_relation_change_tx(
+            &mut tx,
+            blocked.task_id,
+            &updated_by,
+            now,
+            restore_status,
+        )
+        .await?;
+        self.append_system_activity_tx(
+            &mut tx,
+            blocker.task_id,
+            &format!("Resolved blocker for task {}.", blocked.title),
+            &updated_by,
+            now,
+            json!({
+                "relation_id": relation.relation_id,
+                "kind": relation.kind,
+                "blocked_task_id": blocked.task_id,
+                "status": relation.status,
+            }),
+        )
+        .await?;
+        self.append_system_activity_tx(
+            &mut tx,
+            blocked.task_id,
+            &format!("Unblocked from task {}.", blocker.title),
+            &updated_by,
+            now,
+            json!({
+                "relation_id": relation.relation_id,
+                "kind": relation.kind,
+                "blocker_task_id": blocker.task_id,
+                "status": relation.status,
+            }),
+        )
+        .await?;
+        self.enqueue_sync_mutation_tx(
+            &mut tx,
+            SyncEntityKind::TaskRelation,
+            relation.relation_id,
+            SyncOperation::Update,
+            &relation,
+            relation.updated_at,
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(relation)
     }
 
     async fn create_note_internal(
@@ -1569,6 +2479,168 @@ impl AgentaService {
         Ok(attachment)
     }
 
+    async fn task_detail_tx(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        task_id: Uuid,
+    ) -> AppResult<TaskDetail> {
+        let (
+            task,
+            note_count,
+            attachment_count,
+            latest_activity_at,
+            parent_task_id,
+            child_count,
+            open_blocker_count,
+            blocking_count,
+        ) = self
+            .store
+            .get_task_with_stats_by_ref_tx(tx, &task_id.to_string())
+            .await?;
+        Ok(task_detail_from_parts(
+            task,
+            note_count,
+            attachment_count,
+            latest_activity_at,
+            parent_task_id,
+            child_count,
+            open_blocker_count,
+            blocking_count,
+        ))
+    }
+
+    async fn refresh_task_context_digest_tx(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        task_id: Uuid,
+    ) -> AppResult<String> {
+        let detail = self.task_detail_tx(tx, task_id).await?;
+        let digest = build_task_context_digest_from_detail(&detail);
+        self.store
+            .update_task_context_digest_tx(tx, task_id, &digest)
+            .await?;
+        Ok(digest)
+    }
+
+    async fn touch_task_for_relation_change_tx(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        task_id: Uuid,
+        updated_by: &str,
+        updated_at: OffsetDateTime,
+        next_status: Option<TaskStatus>,
+    ) -> AppResult<Task> {
+        let mut task = self
+            .store
+            .get_task_by_ref_tx(tx, &task_id.to_string())
+            .await?;
+        let previous_status = task.status;
+        if let Some(status) = next_status {
+            task.status = status;
+        }
+        task.updated_by = updated_by.to_string();
+        task.updated_at = updated_at;
+        task.closed_at = closed_at_for_status(task.status, updated_at);
+        task.task_context_digest = build_task_context_digest(&task);
+        self.store.update_task_tx(tx, &task).await?;
+        task.task_context_digest = self
+            .refresh_task_context_digest_tx(tx, task.task_id)
+            .await?;
+        if previous_status != task.status {
+            self.append_status_change_activity_tx(
+                tx,
+                task.task_id,
+                previous_status,
+                task.status,
+                updated_by,
+                updated_at,
+            )
+            .await?;
+        }
+        self.enqueue_sync_mutation_tx(
+            tx,
+            SyncEntityKind::Task,
+            task.task_id,
+            SyncOperation::Update,
+            &task,
+            updated_at,
+        )
+        .await?;
+        Ok(task)
+    }
+
+    async fn append_status_change_activity_tx(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        task_id: Uuid,
+        previous_status: TaskStatus,
+        next_status: TaskStatus,
+        created_by: &str,
+        created_at: OffsetDateTime,
+    ) -> AppResult<()> {
+        let content = format!("Status changed from {previous_status} to {next_status}.");
+        let activity = TaskActivity {
+            activity_id: Uuid::new_v4(),
+            task_id,
+            kind: TaskActivityKind::StatusChange,
+            content: content.clone(),
+            activity_search_summary: build_activity_search_summary(
+                TaskActivityKind::StatusChange,
+                &content,
+            ),
+            created_by: created_by.to_string(),
+            created_at,
+            metadata_json: json!({
+                "from_status": previous_status,
+                "to_status": next_status,
+            }),
+        };
+        self.store.insert_activity_tx(tx, &activity).await?;
+        Ok(())
+    }
+
+    async fn append_system_activity_tx(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        task_id: Uuid,
+        content: &str,
+        created_by: &str,
+        created_at: OffsetDateTime,
+        metadata_json: Value,
+    ) -> AppResult<()> {
+        let activity = TaskActivity {
+            activity_id: Uuid::new_v4(),
+            task_id,
+            kind: TaskActivityKind::System,
+            content: content.to_string(),
+            activity_search_summary: build_activity_search_summary(
+                TaskActivityKind::System,
+                content,
+            ),
+            created_by: created_by.to_string(),
+            created_at,
+            metadata_json,
+        };
+        self.store.insert_activity_tx(tx, &activity).await?;
+        Ok(())
+    }
+
+    async fn task_link_for_relation(
+        &self,
+        relation_id: Uuid,
+        task_id: Uuid,
+    ) -> AppResult<TaskLink> {
+        let detail = self.get_task_detail(&task_id.to_string()).await?;
+        Ok(TaskLink {
+            relation_id,
+            task_id: detail.task.task_id,
+            title: detail.task.title.clone(),
+            status: detail.task.status,
+            priority: detail.task.priority,
+            ready_to_start: detail.ready_to_start,
+        })
+    }
+
     async fn enforce(&self, action: &str, mode: ApprovalMode) -> AppResult<()> {
         match self.policy.decision_for(action) {
             WriteDecision::Auto => Ok(()),
@@ -1687,6 +2759,18 @@ impl AgentaService {
             "task.update" => {
                 self.task_context_from_reference(&request.resource_ref)
                     .await
+            }
+            "task.create_child" | "task.attach_child" | "task.detach_child" => {
+                let task_ref = json_string(&request.payload_json, "parent")
+                    .or_else(|| json_string(&request.payload_json, "child"))
+                    .unwrap_or_else(|| request.resource_ref.clone());
+                self.task_context_from_reference(&task_ref).await
+            }
+            "task.add_blocker" | "task.resolve_blocker" => {
+                let task_ref = json_string(&request.payload_json, "blocked")
+                    .or_else(|| json_string(&request.payload_json, "task"))
+                    .unwrap_or_else(|| request.resource_ref.clone());
+                self.task_context_from_reference(&task_ref).await
             }
             "note.create" | "attachment.create" => {
                 let task_ref = json_string(&request.payload_json, "task")
@@ -1845,6 +2929,76 @@ impl AgentaService {
                         ApprovalMode::Replay,
                     )
                     .await?,
+                )
+                .map_err(|error| {
+                    AppError::internal(format!("failed to serialize replay result: {error}"))
+                })
+            }
+            "task.create_child" => {
+                let input =
+                    serde_json::from_value::<CreateChildTaskInput>(request.payload_json.clone())
+                        .map_err(|error| {
+                            AppError::InvalidArguments(format!("invalid approval payload: {error}"))
+                        })?;
+                serde_json::to_value(
+                    self.create_child_task_internal(input, ApprovalMode::Replay)
+                        .await?,
+                )
+                .map_err(|error| {
+                    AppError::internal(format!("failed to serialize replay result: {error}"))
+                })
+            }
+            "task.attach_child" => {
+                let input =
+                    serde_json::from_value::<AttachChildTaskInput>(request.payload_json.clone())
+                        .map_err(|error| {
+                            AppError::InvalidArguments(format!("invalid approval payload: {error}"))
+                        })?;
+                serde_json::to_value(
+                    self.attach_child_task_internal(input, ApprovalMode::Replay)
+                        .await?,
+                )
+                .map_err(|error| {
+                    AppError::internal(format!("failed to serialize replay result: {error}"))
+                })
+            }
+            "task.detach_child" => {
+                let input =
+                    serde_json::from_value::<DetachChildTaskInput>(request.payload_json.clone())
+                        .map_err(|error| {
+                            AppError::InvalidArguments(format!("invalid approval payload: {error}"))
+                        })?;
+                serde_json::to_value(
+                    self.detach_child_task_internal(input, ApprovalMode::Replay)
+                        .await?,
+                )
+                .map_err(|error| {
+                    AppError::internal(format!("failed to serialize replay result: {error}"))
+                })
+            }
+            "task.add_blocker" => {
+                let input =
+                    serde_json::from_value::<AddTaskBlockerInput>(request.payload_json.clone())
+                        .map_err(|error| {
+                            AppError::InvalidArguments(format!("invalid approval payload: {error}"))
+                        })?;
+                serde_json::to_value(
+                    self.add_task_blocker_internal(input, ApprovalMode::Replay)
+                        .await?,
+                )
+                .map_err(|error| {
+                    AppError::internal(format!("failed to serialize replay result: {error}"))
+                })
+            }
+            "task.resolve_blocker" => {
+                let input =
+                    serde_json::from_value::<ResolveTaskBlockerInput>(request.payload_json.clone())
+                        .map_err(|error| {
+                            AppError::InvalidArguments(format!("invalid approval payload: {error}"))
+                        })?;
+                serde_json::to_value(
+                    self.resolve_task_blocker_internal(input, ApprovalMode::Replay)
+                        .await?,
                 )
                 .map_err(|error| {
                     AppError::internal(format!("failed to serialize replay result: {error}"))
@@ -2107,6 +3261,101 @@ impl AgentaService {
                 tx.commit().await?;
                 Ok(true)
             }
+            SyncEntityKind::TaskRelation => {
+                let relation: TaskRelation = serde_json::from_value(mutation.payload_json.clone())
+                    .map_err(|error| {
+                        AppError::InvalidArguments(format!(
+                            "invalid remote task relation payload: {error}"
+                        ))
+                    })?;
+                let mut tx = self.store.pool.begin().await?;
+                let existed = match self
+                    .store
+                    .get_task_relation_by_ref_tx(&mut tx, &relation.relation_id.to_string())
+                    .await
+                {
+                    Ok(_) => {
+                        self.store
+                            .update_task_relation_tx(&mut tx, &relation)
+                            .await?;
+                        true
+                    }
+                    Err(AppError::NotFound { .. }) => {
+                        self.store
+                            .insert_task_relation_tx(&mut tx, &relation)
+                            .await?;
+                        false
+                    }
+                    Err(error) => return Err(error),
+                };
+                self.refresh_task_context_digest_tx(&mut tx, relation.source_task_id)
+                    .await?;
+                self.refresh_task_context_digest_tx(&mut tx, relation.target_task_id)
+                    .await?;
+                let source_message = if relation.status == TaskRelationStatus::Resolved {
+                    format!(
+                        "Resolved {} relation for task {}.",
+                        relation.kind, relation.target_task_id
+                    )
+                } else {
+                    format!(
+                        "Applied {} relation for task {}.",
+                        relation.kind, relation.target_task_id
+                    )
+                };
+                let target_message = if relation.status == TaskRelationStatus::Resolved {
+                    format!(
+                        "Resolved {} relation from task {}.",
+                        relation.kind, relation.source_task_id
+                    )
+                } else {
+                    format!(
+                        "Applied {} relation from task {}.",
+                        relation.kind, relation.source_task_id
+                    )
+                };
+                self.append_system_activity_tx(
+                    &mut tx,
+                    relation.source_task_id,
+                    &source_message,
+                    &relation.updated_by,
+                    mutation.created_at,
+                    json!({
+                        "relation_id": relation.relation_id,
+                        "kind": relation.kind,
+                        "counterparty_task_id": relation.target_task_id,
+                        "status": relation.status,
+                    }),
+                )
+                .await?;
+                self.append_system_activity_tx(
+                    &mut tx,
+                    relation.target_task_id,
+                    &target_message,
+                    &relation.updated_by,
+                    mutation.created_at,
+                    json!({
+                        "relation_id": relation.relation_id,
+                        "kind": relation.kind,
+                        "counterparty_task_id": relation.source_task_id,
+                        "status": relation.status,
+                    }),
+                )
+                .await?;
+                self.store
+                    .upsert_synced_entity_state_tx(
+                        &mut tx,
+                        SyncEntityKind::TaskRelation,
+                        relation.relation_id,
+                        remote_id,
+                        &mutation.remote_entity_id,
+                        mutation.local_version,
+                        mutation.created_at,
+                    )
+                    .await?;
+                tx.commit().await?;
+                Ok(!existed || relation.status == TaskRelationStatus::Resolved)
+            }
             SyncEntityKind::Note => {
                 let activity: TaskActivity = serde_json::from_value(mutation.payload_json.clone())
                     .map_err(|error| {
@@ -2311,6 +3560,60 @@ fn closed_at_for_status(status: TaskStatus, now: OffsetDateTime) -> Option<Offse
     match status {
         TaskStatus::Done | TaskStatus::Cancelled => Some(now),
         _ => None,
+    }
+}
+
+fn task_ready_to_start(task: &Task, open_blocker_count: i64) -> bool {
+    !matches!(task.status, TaskStatus::Done | TaskStatus::Cancelled) && open_blocker_count == 0
+}
+
+fn task_detail_from_parts(
+    task: Task,
+    note_count: i64,
+    attachment_count: i64,
+    latest_activity_at: OffsetDateTime,
+    parent_task_id: Option<Uuid>,
+    child_count: i64,
+    open_blocker_count: i64,
+    blocking_count: i64,
+) -> TaskDetail {
+    let ready_to_start = task_ready_to_start(&task, open_blocker_count);
+    TaskDetail {
+        task,
+        note_count,
+        attachment_count,
+        latest_activity_at,
+        parent_task_id,
+        child_count,
+        open_blocker_count,
+        blocking_count,
+        ready_to_start,
+    }
+}
+
+fn build_task_context_digest_from_detail(detail: &TaskDetail) -> String {
+    let digest = format!(
+        "status={} priority={} ready_to_start={} parent_task_id={} child_count={} open_blocker_count={} blocking_count={} title={} summary={} description={}",
+        detail.task.status,
+        detail.task.priority,
+        detail.ready_to_start,
+        detail
+            .parent_task_id
+            .map(|value| value.to_string())
+            .unwrap_or_default(),
+        detail.child_count,
+        detail.open_blocker_count,
+        detail.blocking_count,
+        detail.task.title,
+        detail.task.summary.as_deref().unwrap_or(""),
+        detail.task.description.as_deref().unwrap_or("")
+    );
+    if digest.chars().count() <= 320 {
+        digest
+    } else {
+        let mut output = digest.chars().take(319).collect::<String>();
+        output.push('…');
+        output
     }
 }
 

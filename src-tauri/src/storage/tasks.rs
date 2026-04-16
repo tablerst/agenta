@@ -152,13 +152,25 @@ impl SqliteStore {
     pub async fn get_task_with_stats_by_ref(
         &self,
         reference: &str,
-    ) -> AppResult<(Task, i64, i64, OffsetDateTime)> {
+    ) -> AppResult<(Task, i64, i64, OffsetDateTime, Option<Uuid>, i64, i64, i64)> {
         let row = query(
             r#"
             SELECT
                 t.task_id, t.project_id, t.version_id, t.title, t.summary, t.description,
                 t.task_search_summary, t.task_context_digest, t.status, t.priority,
                 t.created_by, t.updated_by, t.created_at, t.updated_at, t.closed_at,
+                (
+                    SELECT source_task_id
+                    FROM task_relations tr
+                    WHERE tr.kind = ? AND tr.status = ? AND tr.target_task_id = t.task_id
+                    ORDER BY tr.created_at DESC, tr.relation_id DESC
+                    LIMIT 1
+                ) AS parent_task_id,
+                (
+                    SELECT COUNT(*)
+                    FROM task_relations tr
+                    WHERE tr.kind = ? AND tr.status = ? AND tr.source_task_id = t.task_id
+                ) AS child_count,
                 (
                     SELECT COUNT(*)
                     FROM task_activities ta
@@ -179,14 +191,119 @@ impl SqliteStore {
                         ),
                         t.updated_at
                     )
-                ) AS latest_activity_at
+                ) AS latest_activity_at,
+                (
+                    SELECT COUNT(*)
+                    FROM task_relations tr
+                    JOIN tasks blocker ON blocker.task_id = tr.source_task_id
+                    WHERE tr.kind = ? AND tr.status = ? AND tr.target_task_id = t.task_id
+                      AND blocker.status NOT IN (?, ?)
+                ) AS open_blocker_count,
+                (
+                    SELECT COUNT(*)
+                    FROM task_relations tr
+                    WHERE tr.kind = ? AND tr.status = ? AND tr.source_task_id = t.task_id
+                ) AS blocking_count
             FROM tasks t
             WHERE t.task_id = ?
             "#,
         )
+        .bind(crate::domain::TaskRelationKind::ParentChild.to_string())
+        .bind(crate::domain::TaskRelationStatus::Active.to_string())
+        .bind(crate::domain::TaskRelationKind::ParentChild.to_string())
+        .bind(crate::domain::TaskRelationStatus::Active.to_string())
         .bind(TaskActivityKind::Note.to_string())
+        .bind(crate::domain::TaskRelationKind::Blocks.to_string())
+        .bind(crate::domain::TaskRelationStatus::Active.to_string())
+        .bind(crate::domain::TaskStatus::Done.to_string())
+        .bind(crate::domain::TaskStatus::Cancelled.to_string())
+        .bind(crate::domain::TaskRelationKind::Blocks.to_string())
+        .bind(crate::domain::TaskRelationStatus::Active.to_string())
         .bind(reference)
         .fetch_optional(&self.pool)
+        .await?;
+
+        row.map(map_task_with_stats)
+            .transpose()?
+            .ok_or_else(|| AppError::NotFound {
+                entity: "task".to_string(),
+                reference: reference.to_string(),
+            })
+    }
+
+    pub async fn get_task_with_stats_by_ref_tx(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        reference: &str,
+    ) -> AppResult<(Task, i64, i64, OffsetDateTime, Option<Uuid>, i64, i64, i64)> {
+        let row = query(
+            r#"
+            SELECT
+                t.task_id, t.project_id, t.version_id, t.title, t.summary, t.description,
+                t.task_search_summary, t.task_context_digest, t.status, t.priority,
+                t.created_by, t.updated_by, t.created_at, t.updated_at, t.closed_at,
+                (
+                    SELECT source_task_id
+                    FROM task_relations tr
+                    WHERE tr.kind = ? AND tr.status = ? AND tr.target_task_id = t.task_id
+                    ORDER BY tr.created_at DESC, tr.relation_id DESC
+                    LIMIT 1
+                ) AS parent_task_id,
+                (
+                    SELECT COUNT(*)
+                    FROM task_relations tr
+                    WHERE tr.kind = ? AND tr.status = ? AND tr.source_task_id = t.task_id
+                ) AS child_count,
+                (
+                    SELECT COUNT(*)
+                    FROM task_activities ta
+                    WHERE ta.task_id = t.task_id AND ta.kind = ?
+                ) AS note_count,
+                (
+                    SELECT COUNT(*)
+                    FROM attachments a
+                    WHERE a.task_id = t.task_id
+                ) AS attachment_count,
+                max(
+                    t.updated_at,
+                    COALESCE(
+                        (
+                            SELECT MAX(ta.created_at)
+                            FROM task_activities ta
+                            WHERE ta.task_id = t.task_id
+                        ),
+                        t.updated_at
+                    )
+                ) AS latest_activity_at,
+                (
+                    SELECT COUNT(*)
+                    FROM task_relations tr
+                    JOIN tasks blocker ON blocker.task_id = tr.source_task_id
+                    WHERE tr.kind = ? AND tr.status = ? AND tr.target_task_id = t.task_id
+                      AND blocker.status NOT IN (?, ?)
+                ) AS open_blocker_count,
+                (
+                    SELECT COUNT(*)
+                    FROM task_relations tr
+                    WHERE tr.kind = ? AND tr.status = ? AND tr.source_task_id = t.task_id
+                ) AS blocking_count
+            FROM tasks t
+            WHERE t.task_id = ?
+            "#,
+        )
+        .bind(crate::domain::TaskRelationKind::ParentChild.to_string())
+        .bind(crate::domain::TaskRelationStatus::Active.to_string())
+        .bind(crate::domain::TaskRelationKind::ParentChild.to_string())
+        .bind(crate::domain::TaskRelationStatus::Active.to_string())
+        .bind(TaskActivityKind::Note.to_string())
+        .bind(crate::domain::TaskRelationKind::Blocks.to_string())
+        .bind(crate::domain::TaskRelationStatus::Active.to_string())
+        .bind(crate::domain::TaskStatus::Done.to_string())
+        .bind(crate::domain::TaskStatus::Cancelled.to_string())
+        .bind(crate::domain::TaskRelationKind::Blocks.to_string())
+        .bind(crate::domain::TaskRelationStatus::Active.to_string())
+        .bind(reference)
+        .fetch_optional(&mut **tx)
         .await?;
 
         row.map(map_task_with_stats)
@@ -230,13 +347,49 @@ impl SqliteStore {
     pub async fn list_tasks_with_stats(
         &self,
         filter: TaskListFilter,
-    ) -> AppResult<Vec<(Task, i64, i64, OffsetDateTime)>> {
+    ) -> AppResult<Vec<(Task, i64, i64, OffsetDateTime, Option<Uuid>, i64, i64, i64)>> {
         let mut builder = QueryBuilder::<Sqlite>::new(
             r#"
             SELECT
                 t.task_id, t.project_id, t.version_id, t.title, t.summary, t.description,
                 t.task_search_summary, t.task_context_digest, t.status, t.priority,
                 t.created_by, t.updated_by, t.created_at, t.updated_at, t.closed_at,
+                (
+                    SELECT source_task_id
+                    FROM task_relations tr
+                    WHERE tr.kind = 
+            "#,
+        );
+        builder.push_bind(crate::domain::TaskRelationKind::ParentChild.to_string());
+        builder.push(
+            r#"
+                      AND tr.status = 
+            "#,
+        );
+        builder.push_bind(crate::domain::TaskRelationStatus::Active.to_string());
+        builder.push(
+            r#"
+                      AND tr.target_task_id = t.task_id
+                    ORDER BY tr.created_at DESC, tr.relation_id DESC
+                    LIMIT 1
+                ) AS parent_task_id,
+                (
+                    SELECT COUNT(*)
+                    FROM task_relations tr
+                    WHERE tr.kind = 
+            "#,
+        );
+        builder.push_bind(crate::domain::TaskRelationKind::ParentChild.to_string());
+        builder.push(
+            r#"
+                      AND tr.status = 
+            "#,
+        );
+        builder.push_bind(crate::domain::TaskRelationStatus::Active.to_string());
+        builder.push(
+            r#"
+                      AND tr.source_task_id = t.task_id
+                ) AS child_count,
                 (
                     SELECT COUNT(*)
                     FROM task_activities ta
@@ -262,7 +415,51 @@ impl SqliteStore {
                         ),
                         t.updated_at
                     )
-                ) AS latest_activity_at
+                ) AS latest_activity_at,
+                (
+                    SELECT COUNT(*)
+                    FROM task_relations tr
+                    JOIN tasks blocker ON blocker.task_id = tr.source_task_id
+                    WHERE tr.kind = 
+            "#,
+        );
+        builder.push_bind(crate::domain::TaskRelationKind::Blocks.to_string());
+        builder.push(
+            r#"
+                      AND tr.status = 
+            "#,
+        );
+        builder.push_bind(crate::domain::TaskRelationStatus::Active.to_string());
+        builder.push(
+            r#"
+                      AND tr.target_task_id = t.task_id
+                      AND blocker.status NOT IN (
+            "#,
+        );
+        builder.push_bind(crate::domain::TaskStatus::Done.to_string());
+        builder.push(", ");
+        builder.push_bind(crate::domain::TaskStatus::Cancelled.to_string());
+        builder.push(
+            r#"
+                      )
+                ) AS open_blocker_count,
+                (
+                    SELECT COUNT(*)
+                    FROM task_relations tr
+                    WHERE tr.kind = 
+            "#,
+        );
+        builder.push_bind(crate::domain::TaskRelationKind::Blocks.to_string());
+        builder.push(
+            r#"
+                      AND tr.status = 
+            "#,
+        );
+        builder.push_bind(crate::domain::TaskRelationStatus::Active.to_string());
+        builder.push(
+            r#"
+                      AND tr.source_task_id = t.task_id
+                ) AS blocking_count
             FROM tasks t
             WHERE 1 = 1
             "#,
@@ -359,6 +556,26 @@ impl SqliteStore {
         .bind(format_time(task.updated_at)?)
         .bind(task.closed_at.map(format_time).transpose()?)
         .bind(task.task_id.to_string())
+        .execute(&mut **tx)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn update_task_context_digest_tx(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        task_id: Uuid,
+        task_context_digest: &str,
+    ) -> AppResult<()> {
+        query(
+            r#"
+            UPDATE tasks
+            SET task_context_digest = ?
+            WHERE task_id = ?
+            "#,
+        )
+        .bind(task_context_digest)
+        .bind(task_id.to_string())
         .execute(&mut **tx)
         .await?;
         Ok(())
@@ -507,10 +724,26 @@ impl SqliteStore {
 
 fn map_task_with_stats(
     row: sqlx::sqlite::SqliteRow,
-) -> AppResult<(Task, i64, i64, OffsetDateTime)> {
+) -> AppResult<(Task, i64, i64, OffsetDateTime, Option<Uuid>, i64, i64, i64)> {
     let note_count = row.get::<i64, _>("note_count");
     let attachment_count = row.get::<i64, _>("attachment_count");
     let latest_activity_at = parse_time(row.get("latest_activity_at"), "latest_activity_at")?;
+    let parent_task_id = row
+        .get::<Option<String>, _>("parent_task_id")
+        .map(|value| crate::storage::mapping::parse_uuid(value, "parent_task_id"))
+        .transpose()?;
+    let child_count = row.get::<i64, _>("child_count");
+    let open_blocker_count = row.get::<i64, _>("open_blocker_count");
+    let blocking_count = row.get::<i64, _>("blocking_count");
     let task = map_task(row)?;
-    Ok((task, note_count, attachment_count, latest_activity_at))
+    Ok((
+        task,
+        note_count,
+        attachment_count,
+        latest_activity_at,
+        parent_task_id,
+        child_count,
+        open_blocker_count,
+        blocking_count,
+    ))
 }

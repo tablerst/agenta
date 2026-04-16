@@ -74,6 +74,11 @@ const attachmentForm = reactive({
   summary: "",
 });
 
+const relationForm = reactive({
+  blockerTaskId: "",
+  childTaskId: "",
+});
+
 const selectedProjectSlug = computed(() => String(route.params.projectSlug ?? ""));
 const selectedVersionId = computed(() => readRouteString(route.query.version) ?? "");
 const selectedTaskId = computed(() => readRouteString(route.query.task) ?? "");
@@ -246,6 +251,8 @@ watch(
       taskForm.description = "";
       taskForm.status = "ready";
       taskForm.priority = "normal";
+      relationForm.blockerTaskId = "";
+      relationForm.childTaskId = "";
       return;
     }
 
@@ -254,6 +261,8 @@ watch(
     taskForm.description = task.description ?? "";
     taskForm.status = task.status;
     taskForm.priority = task.priority;
+    relationForm.blockerTaskId = "";
+    relationForm.childTaskId = "";
   },
   { immediate: true },
 );
@@ -457,6 +466,91 @@ async function openAttachment(path: string) {
   }
 }
 
+async function reloadVisibleTasks() {
+  await tasksStore.loadTasks({
+    project: selectedProjectSlug.value || undefined,
+    status: selectedStatus.value || undefined,
+    version: selectedVersionId.value || undefined,
+  });
+}
+
+async function jumpToLinkedTask(taskId: string) {
+  await selectTask(taskId);
+}
+
+async function submitAttachChild() {
+  if (!selectedTask.value || !relationForm.childTaskId.trim()) {
+    return;
+  }
+
+  try {
+    await tasksStore.attachChild(selectedTask.value.task_id, relationForm.childTaskId.trim(), "desktop");
+    relationForm.childTaskId = "";
+    await reloadVisibleTasks();
+    shell.pushNotice("success", t("notices.taskRelationUpdated"));
+  } catch (error) {
+    if (await jumpToQueuedApproval(error)) {
+      return;
+    }
+    shell.pushNotice("error", formatDesktopError(error, t));
+  }
+}
+
+async function submitAddBlocker() {
+  if (!selectedTask.value || !relationForm.blockerTaskId.trim()) {
+    return;
+  }
+
+  try {
+    await tasksStore.addBlocker(selectedTask.value.task_id, relationForm.blockerTaskId.trim(), "desktop");
+    relationForm.blockerTaskId = "";
+    await reloadVisibleTasks();
+    shell.pushNotice("success", t("notices.taskRelationUpdated"));
+  } catch (error) {
+    if (await jumpToQueuedApproval(error)) {
+      return;
+    }
+    shell.pushNotice("error", formatDesktopError(error, t));
+  }
+}
+
+async function handleDetachChild(childTaskId: string) {
+  if (!selectedTask.value) {
+    return;
+  }
+
+  try {
+    await tasksStore.detachChild(selectedTask.value.task_id, childTaskId, "desktop");
+    await reloadVisibleTasks();
+    shell.pushNotice("success", t("notices.taskRelationUpdated"));
+  } catch (error) {
+    if (await jumpToQueuedApproval(error)) {
+      return;
+    }
+    shell.pushNotice("error", formatDesktopError(error, t));
+  }
+}
+
+async function handleResolveBlocker(relationId: string) {
+  if (!selectedTask.value) {
+    return;
+  }
+
+  try {
+    await tasksStore.resolveBlocker(selectedTask.value.task_id, {
+      relation_id: relationId,
+      updated_by: "desktop",
+    });
+    await reloadVisibleTasks();
+    shell.pushNotice("success", t("notices.taskRelationUpdated"));
+  } catch (error) {
+    if (await jumpToQueuedApproval(error)) {
+      return;
+    }
+    shell.pushNotice("error", formatDesktopError(error, t));
+  }
+}
+
 async function jumpToQueuedApproval(error: unknown) {
   if (
     error instanceof DesktopBridgeError &&
@@ -633,19 +727,26 @@ async function jumpToQueuedApproval(error: unknown) {
 
       <div v-else-if="selectedTask" class="workspace-pane-stack">
         <section class="glass-panel p-5">
-          <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <p class="section-label">{{ t("tasks.taskDetail") }}</p>
-              <h2 class="text-2xl font-semibold text-[var(--text-main)]">{{ selectedTask.title }}</h2>
-              <p class="mt-2 max-w-3xl text-sm leading-6 text-[var(--text-muted)]">
-                {{ selectedTask.summary || t("tasks.noSummary") }}
-              </p>
+            <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p class="section-label">{{ t("tasks.taskDetail") }}</p>
+                <h2 class="text-2xl font-semibold text-[var(--text-main)]">{{ selectedTask.title }}</h2>
+                <p class="mt-2 max-w-3xl text-sm leading-6 text-[var(--text-muted)]">
+                  {{ selectedTask.summary || t("tasks.noSummary") }}
+                </p>
+              </div>
+              <div class="flex flex-wrap items-center gap-2">
+                <span class="status-pill">{{ t(`status.task.${selectedTask.status}`) }}</span>
+                <span class="status-pill">{{ t(`status.priority.${selectedTask.priority}`) }}</span>
+                <span class="status-pill">
+                  {{ selectedTask.ready_to_start ? t("tasks.readyToStart") : t("tasks.notReadyToStart") }}
+                </span>
+                <span class="status-pill">{{ t("tasks.childCount", { count: selectedTask.child_count }) }}</span>
+                <span class="status-pill">
+                  {{ t("tasks.blockerCount", { count: selectedTask.open_blocker_count }) }}
+                </span>
+              </div>
             </div>
-            <div class="flex items-center gap-2">
-              <span class="status-pill">{{ t(`status.task.${selectedTask.status}`) }}</span>
-              <span class="status-pill">{{ t(`status.priority.${selectedTask.priority}`) }}</span>
-            </div>
-          </div>
 
           <div class="task-detail-tablist" role="tablist" :aria-label="t('tasks.detailTabs')">
             <button
@@ -706,6 +807,118 @@ async function jumpToQueuedApproval(error: unknown) {
                 <JsonBlock :value="selectedTask" />
               </section>
             </div>
+            <section class="grid gap-5 xl:grid-cols-2">
+              <article class="panel-section space-y-4">
+                <div class="flex items-center justify-between gap-3">
+                  <p class="section-label">{{ t("tasks.relationships.parentChild") }}</p>
+                  <span class="status-pill">{{ t("tasks.childCount", { count: selectedTask.child_count }) }}</span>
+                </div>
+                <div class="space-y-3">
+                  <div>
+                    <p class="text-xs uppercase tracking-[0.2em] text-[var(--text-muted)]">{{ t("tasks.parentTask") }}</p>
+                    <button
+                      v-if="tasksStore.parentTask"
+                      class="secondary-action mt-2 spotlight-surface"
+                      type="button"
+                      @click="jumpToLinkedTask(tasksStore.parentTask.task_id)"
+                    >
+                      {{ tasksStore.parentTask.title }}
+                    </button>
+                    <p v-else class="mt-2 text-sm text-[var(--text-muted)]">{{ t("tasks.noParentTask") }}</p>
+                  </div>
+                  <div>
+                    <p class="text-xs uppercase tracking-[0.2em] text-[var(--text-muted)]">{{ t("tasks.childTasks") }}</p>
+                    <div v-if="tasksStore.childTasks.length > 0" class="mt-2 space-y-2">
+                      <div
+                        v-for="child in tasksStore.childTasks"
+                        :key="child.relation_id"
+                        class="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-[var(--border-color)] px-3 py-3"
+                      >
+                        <button class="secondary-action spotlight-surface" type="button" @click="jumpToLinkedTask(child.task_id)">
+                          {{ child.title }}
+                        </button>
+                        <button class="secondary-action spotlight-surface" type="button" @click="handleDetachChild(child.task_id)">
+                          {{ t("tasks.detachChildAction") }}
+                        </button>
+                      </div>
+                    </div>
+                    <p v-else class="mt-2 text-sm text-[var(--text-muted)]">{{ t("tasks.noChildTasks") }}</p>
+                  </div>
+                  <label class="form-field">
+                    <span class="field-label">{{ t("tasks.fields.childTaskId") }}</span>
+                    <input
+                      v-model="relationForm.childTaskId"
+                      class="control-input"
+                      :placeholder="t('tasks.placeholders.childTaskId')"
+                    />
+                  </label>
+                  <button class="primary-action spotlight-surface" type="button" @click="submitAttachChild">
+                    <Plus :size="15" />
+                    {{ t("tasks.attachChildAction") }}
+                  </button>
+                </div>
+              </article>
+
+              <article class="panel-section space-y-4">
+                <div class="flex items-center justify-between gap-3">
+                  <p class="section-label">{{ t("tasks.relationships.blockers") }}</p>
+                  <span class="status-pill">
+                    {{ t("tasks.blockerCount", { count: selectedTask.open_blocker_count }) }}
+                  </span>
+                </div>
+                <div class="space-y-3">
+                  <div>
+                    <p class="text-xs uppercase tracking-[0.2em] text-[var(--text-muted)]">{{ t("tasks.blockedByTasks") }}</p>
+                    <div v-if="tasksStore.blockedByTasks.length > 0" class="mt-2 space-y-2">
+                      <div
+                        v-for="item in tasksStore.blockedByTasks"
+                        :key="item.relation_id"
+                        class="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-[var(--border-color)] px-3 py-3"
+                      >
+                        <button class="secondary-action spotlight-surface" type="button" @click="jumpToLinkedTask(item.task_id)">
+                          {{ item.title }}
+                        </button>
+                        <button
+                          class="secondary-action spotlight-surface"
+                          type="button"
+                          @click="handleResolveBlocker(item.relation_id)"
+                        >
+                          {{ t("tasks.resolveBlockerAction") }}
+                        </button>
+                      </div>
+                    </div>
+                    <p v-else class="mt-2 text-sm text-[var(--text-muted)]">{{ t("tasks.noBlockers") }}</p>
+                  </div>
+                  <div>
+                    <p class="text-xs uppercase tracking-[0.2em] text-[var(--text-muted)]">{{ t("tasks.blockingTasks") }}</p>
+                    <div v-if="tasksStore.blockingTasks.length > 0" class="mt-2 space-y-2">
+                      <button
+                        v-for="item in tasksStore.blockingTasks"
+                        :key="item.relation_id"
+                        class="secondary-action spotlight-surface"
+                        type="button"
+                        @click="jumpToLinkedTask(item.task_id)"
+                      >
+                        {{ item.title }}
+                      </button>
+                    </div>
+                    <p v-else class="mt-2 text-sm text-[var(--text-muted)]">{{ t("tasks.noBlockingTasks") }}</p>
+                  </div>
+                  <label class="form-field">
+                    <span class="field-label">{{ t("tasks.fields.blockerTaskId") }}</span>
+                    <input
+                      v-model="relationForm.blockerTaskId"
+                      class="control-input"
+                      :placeholder="t('tasks.placeholders.blockerTaskId')"
+                    />
+                  </label>
+                  <button class="primary-action spotlight-surface" type="button" @click="submitAddBlocker">
+                    <Plus :size="15" />
+                    {{ t("tasks.addBlockerAction") }}
+                  </button>
+                </div>
+              </article>
+            </section>
           </div>
 
           <div

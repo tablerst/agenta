@@ -21,6 +21,8 @@ import type {
   SyncStatusSummary,
   Task,
   TaskActivity,
+  TaskContextPayload,
+  TaskRelation,
   Version,
 } from "./types";
 import { mockDesktopBridge } from "./mockDesktop";
@@ -184,6 +186,73 @@ function normalizeError(error: unknown): DesktopBridgeError {
   });
 }
 
+type RawTaskDetail = {
+  task: Task;
+  note_count: number;
+  attachment_count: number;
+  latest_activity_at: string;
+  parent_task_id: string | null;
+  child_count: number;
+  open_blocker_count: number;
+  blocking_count: number;
+  ready_to_start: boolean;
+};
+
+type RawTaskContextPayload = Omit<TaskContextPayload, "task"> & {
+  task: Task | RawTaskDetail;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function isTaskDetail(value: unknown): value is RawTaskDetail {
+  return isRecord(value) && isRecord(value.task) && typeof value.task.task_id === "string";
+}
+
+function flattenTaskDetail(value: RawTaskDetail): Task {
+  return {
+    ...value.task,
+    attachment_count: value.attachment_count,
+    blocking_count: value.blocking_count,
+    child_count: value.child_count,
+    latest_activity_at: value.latest_activity_at,
+    note_count: value.note_count,
+    open_blocker_count: value.open_blocker_count,
+    parent_task_id: value.parent_task_id,
+    ready_to_start: value.ready_to_start,
+  };
+}
+
+function normalizeTaskResult(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => (isTaskDetail(item) ? flattenTaskDetail(item) : item));
+  }
+
+  if (isTaskDetail(value)) {
+    return flattenTaskDetail(value);
+  }
+
+  if (isRecord(value) && "notes" in value && "attachments" in value && isTaskDetail(value.task)) {
+    const context = value as RawTaskContextPayload;
+    return {
+      ...context,
+      task: flattenTaskDetail(context.task as RawTaskDetail),
+    } satisfies TaskContextPayload;
+  }
+
+  return value;
+}
+
+function normalizeTaskEnvelope<TResult>(
+  envelope: SuccessEnvelope<TResult>,
+): SuccessEnvelope<TResult> {
+  return {
+    ...envelope,
+    result: normalizeTaskResult(envelope.result) as TResult,
+  };
+}
+
 async function subscribeDesktopEvent<TPayload>(
   event: string,
   listener: (payload: TPayload) => void,
@@ -284,8 +353,12 @@ export const desktopBridge = {
   },
   task(input: Record<string, unknown>) {
     return resolveBridgeMode() === "desktop"
-      ? callDesktop<Task | Task[] | TaskActivity[]>("desktop_task", input)
-      : callPreview<Task | Task[] | TaskActivity[]>(() => mockDesktopBridge.task(input));
+      ? callDesktop<Task | Task[] | TaskActivity[] | TaskContextPayload | TaskRelation>("desktop_task", input).then(
+          normalizeTaskEnvelope,
+        )
+      : callPreview<Task | Task[] | TaskActivity[] | TaskContextPayload | TaskRelation>(() =>
+          mockDesktopBridge.task(input),
+        ).then(normalizeTaskEnvelope);
   },
   note(input: Record<string, unknown>) {
     return resolveBridgeMode() === "desktop"

@@ -6,9 +6,10 @@ use crate::app::runtime::{init_tracing, AgentaApp, BootstrapOptions};
 use crate::error::{AppError, AppResult};
 use crate::interface::response::{error, success, SuccessEnvelope};
 use crate::service::{
-    CreateAttachmentInput, CreateNoteInput, CreateProjectInput, CreateTaskInput,
-    CreateVersionInput, RequestOrigin, SearchInput, TaskQuery, UpdateProjectInput, UpdateTaskInput,
-    UpdateVersionInput,
+    AddTaskBlockerInput, AttachChildTaskInput, CreateAttachmentInput, CreateChildTaskInput,
+    CreateNoteInput, CreateProjectInput, CreateTaskInput, CreateVersionInput, DetachChildTaskInput,
+    RequestOrigin, ResolveTaskBlockerInput, SearchInput, TaskQuery, UpdateProjectInput,
+    UpdateTaskInput, UpdateVersionInput,
 };
 
 #[derive(Debug, Parser)]
@@ -60,9 +61,14 @@ enum VersionCommand {
 #[derive(Debug, Subcommand)]
 enum TaskCommand {
     Create(TaskCreateArgs),
+    CreateChild(TaskCreateChildArgs),
     Get(TaskRefArgs),
     List(TaskListArgs),
     Update(TaskUpdateArgs),
+    AttachChild(TaskAttachChildArgs),
+    DetachChild(TaskDetachChildArgs),
+    AddBlocker(TaskAddBlockerArgs),
+    ResolveBlocker(TaskResolveBlockerArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -187,6 +193,26 @@ struct TaskCreateArgs {
 }
 
 #[derive(Debug, Args)]
+struct TaskCreateChildArgs {
+    #[arg(long)]
+    parent: String,
+    #[arg(long)]
+    version: Option<String>,
+    #[arg(long)]
+    title: String,
+    #[arg(long)]
+    summary: Option<String>,
+    #[arg(long)]
+    description: Option<String>,
+    #[arg(long)]
+    status: Option<String>,
+    #[arg(long)]
+    priority: Option<String>,
+    #[arg(long = "created-by")]
+    created_by: Option<String>,
+}
+
+#[derive(Debug, Args)]
 struct TaskRefArgs {
     #[arg(long)]
     task: String,
@@ -218,6 +244,48 @@ struct TaskUpdateArgs {
     status: Option<String>,
     #[arg(long)]
     priority: Option<String>,
+    #[arg(long = "updated-by")]
+    updated_by: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct TaskAttachChildArgs {
+    #[arg(long)]
+    parent: String,
+    #[arg(long)]
+    child: String,
+    #[arg(long = "updated-by")]
+    updated_by: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct TaskDetachChildArgs {
+    #[arg(long)]
+    parent: String,
+    #[arg(long)]
+    child: String,
+    #[arg(long = "updated-by")]
+    updated_by: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct TaskAddBlockerArgs {
+    #[arg(long)]
+    blocker: String,
+    #[arg(long)]
+    blocked: String,
+    #[arg(long = "updated-by")]
+    updated_by: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct TaskResolveBlockerArgs {
+    #[arg(long)]
+    task: String,
+    #[arg(long)]
+    blocker: Option<String>,
+    #[arg(long = "relation-id")]
+    relation_id: Option<String>,
     #[arg(long = "updated-by")]
     updated_by: Option<String>,
 }
@@ -423,16 +491,43 @@ async fn execute_task(app: AgentaApp, command: TaskCommand) -> AppResult<Success
                     },
                 )
                 .await?;
-            success("task.create", task, "Created task")
+            let detail = app
+                .service
+                .get_task_detail(&task.task_id.to_string())
+                .await?;
+            success("task.create", detail, "Created task")
+        }
+        TaskCommand::CreateChild(args) => {
+            let task = app
+                .service
+                .create_child_task_from(
+                    RequestOrigin::Cli,
+                    CreateChildTaskInput {
+                        parent: args.parent,
+                        version: args.version,
+                        title: args.title,
+                        summary: args.summary,
+                        description: args.description,
+                        status: parse_optional_enum(args.status)?,
+                        priority: parse_optional_enum(args.priority)?,
+                        created_by: args.created_by,
+                    },
+                )
+                .await?;
+            let detail = app
+                .service
+                .get_task_detail(&task.task_id.to_string())
+                .await?;
+            success("task.create_child", detail, "Created child task")
         }
         TaskCommand::Get(args) => {
-            let task = app.service.get_task(&args.task).await?;
+            let task = app.service.get_task_detail(&args.task).await?;
             success("task.get", task, "Loaded task")
         }
         TaskCommand::List(args) => {
             let tasks = app
                 .service
-                .list_tasks(TaskQuery {
+                .list_task_details(TaskQuery {
                     project: args.project,
                     version: args.version,
                     status: parse_optional_enum(args.status)?,
@@ -461,7 +556,68 @@ async fn execute_task(app: AgentaApp, command: TaskCommand) -> AppResult<Success
                     },
                 )
                 .await?;
-            success("task.update", task, "Updated task")
+            let detail = app
+                .service
+                .get_task_detail(&task.task_id.to_string())
+                .await?;
+            success("task.update", detail, "Updated task")
+        }
+        TaskCommand::AttachChild(args) => {
+            let relation = app
+                .service
+                .attach_child_task_from(
+                    RequestOrigin::Cli,
+                    AttachChildTaskInput {
+                        parent: args.parent,
+                        child: args.child,
+                        updated_by: args.updated_by,
+                    },
+                )
+                .await?;
+            success("task.attach_child", relation, "Attached child task")
+        }
+        TaskCommand::DetachChild(args) => {
+            let relation = app
+                .service
+                .detach_child_task_from(
+                    RequestOrigin::Cli,
+                    DetachChildTaskInput {
+                        parent: args.parent,
+                        child: args.child,
+                        updated_by: args.updated_by,
+                    },
+                )
+                .await?;
+            success("task.detach_child", relation, "Detached child task")
+        }
+        TaskCommand::AddBlocker(args) => {
+            let relation = app
+                .service
+                .add_task_blocker_from(
+                    RequestOrigin::Cli,
+                    AddTaskBlockerInput {
+                        blocker: args.blocker,
+                        blocked: args.blocked,
+                        updated_by: args.updated_by,
+                    },
+                )
+                .await?;
+            success("task.add_blocker", relation, "Added task blocker")
+        }
+        TaskCommand::ResolveBlocker(args) => {
+            let relation = app
+                .service
+                .resolve_task_blocker_from(
+                    RequestOrigin::Cli,
+                    ResolveTaskBlockerInput {
+                        task: args.task,
+                        blocker: args.blocker,
+                        relation_id: args.relation_id,
+                        updated_by: args.updated_by,
+                    },
+                )
+                .await?;
+            success("task.resolve_blocker", relation, "Resolved task blocker")
         }
     }
 }
