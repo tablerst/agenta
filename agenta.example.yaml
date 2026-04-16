@@ -29,6 +29,21 @@ sync:
       min_conns: 5
       max_conn_lifetime: 3600      
 
+search:
+  vector:
+    enabled: false
+    backend: chroma
+    endpoint: http://127.0.0.1:8000
+    autostart_sidecar: true
+    collection: agenta_tasks_v1
+    top_k: 40
+  embedding:
+    provider: openai_compatible
+    base_url: ${OPENAI_BASE_URL}
+    api_key_env: OPENAI_API_KEY
+    model: text-embedding-3-small
+    timeout_ms: 10000
+
 policy:
   default: auto
   actions:

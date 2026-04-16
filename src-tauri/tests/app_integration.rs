@@ -1166,7 +1166,11 @@ async fn standalone_agenta_mcp_binary_exposes_explicit_tools_and_runs_smoke_flow
     );
     assert_eq!(
         search_payload["result"]["structuredContent"]["meta"]["task_sort"],
-        "prefix/exact matches first, then query score, then latest_activity_at desc"
+        "sqlite fts5 bm25 with structured filters and recency tiebreaks"
+    );
+    assert_eq!(
+        search_payload["result"]["structuredContent"]["meta"]["retrieval_mode"],
+        "lexical_only"
     );
 
     child.kill()?;

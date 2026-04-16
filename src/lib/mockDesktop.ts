@@ -1754,7 +1754,20 @@ function runSearch(input: JsonMap) {
       task_code: item.task_code,
       task_kind: item.task_kind,
       knowledge_status: item.knowledge_status,
+      matched_fields: query
+        ? [
+            item.task_code?.toLowerCase().includes(query) ? "task_code" : null,
+            item.title.toLowerCase().includes(query) ? "title" : null,
+            (item.latest_note_summary ?? "").toLowerCase().includes(query)
+              ? "latest_note_summary"
+              : null,
+            item.task_search_summary.toLowerCase().includes(query) ? "task_search_summary" : null,
+            item.task_context_digest.toLowerCase().includes(query) ? "task_context_digest" : null,
+          ].filter((value): value is string => value !== null)
+        : [],
       priority: item.priority,
+      retrieval_source: query ? ("lexical" as const) : ("structured_filter" as const),
+      score: query ? 1 : null,
       status: item.status,
       summary: item.latest_note_summary ?? item.task_search_summary,
       task_id: item.task_id,
@@ -1773,6 +1786,7 @@ function runSearch(input: JsonMap) {
     .map((item) => ({
       activity_id: item.activity_id,
       kind: item.kind,
+      score: query ? 1 : null,
       summary: item.activity_search_summary,
       task_id: item.task_id,
     }));
@@ -1781,6 +1795,32 @@ function runSearch(input: JsonMap) {
     query,
     tasks,
     activities,
+    meta: {
+      indexed_fields: {
+        tasks: [
+          "title",
+          "task_code",
+          "task_kind",
+          "task_search_summary",
+          "task_context_digest",
+          "latest_note_summary",
+        ],
+        activities: ["activity_search_summary"],
+      },
+      task_sort: query
+        ? "sqlite fts5 bm25 with structured filters and recency tiebreaks"
+        : "structured task filter order",
+      activity_sort: "sqlite fts5 bm25 with structured task filters applied",
+      limit_applies_per_bucket: true,
+      task_limit_applied: limit,
+      activity_limit_applied: limit,
+      default_limit: 10,
+      max_limit: 50,
+      retrieval_mode: query ? "lexical_only" : "structured_only",
+      vector_backend: null,
+      vector_status: "disabled",
+      pending_index_jobs: 0,
+    },
   };
   return results;
 }

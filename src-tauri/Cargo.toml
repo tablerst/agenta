@@ -38,6 +38,7 @@ tauri-build = { version = "2", features = [] }
 default = ["mcp-streamable-http"]
 mcp-streamable-http = []
 mcp-stdio = []
+sync-postgres = ["sqlx/postgres"]
 
 [dependencies]
 tauri = { version = "2", features = [] }
@@ -56,11 +57,12 @@ sha2 = "0.10"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite", "postgres", "migrate", "macros", "uuid", "time"] }
 thiserror = "2"
 time = { version = "0.3", features = ["formatting", "parsing", "serde"] }
-tokio = { version = "1", features = ["fs", "macros", "rt-multi-thread", "sync", "time"] }
+tokio = { version = "1", features = ["fs", "macros", "process", "rt-multi-thread", "sync", "time"] }
 tower = "0.5"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 humantime = "2"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 url = "2"
 uuid = { version = "1", features = ["serde", "v4"] }
 

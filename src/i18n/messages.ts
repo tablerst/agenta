@@ -75,6 +75,18 @@ const baseMessages = {
       empty: "Type a query to search task and activity summaries.",
       loading: "Searching...",
       placeholder: "Search tasks and activity summaries",
+      retrieval: {
+        hybrid: "Hybrid",
+        indexing: "Indexing",
+        lexicalFallback: "Lexical Fallback",
+        structuredOnly: "Structured Filters",
+      },
+      source: {
+        hybrid: "Hybrid",
+        lexical: "Lexical",
+        semantic: "Semantic",
+        structured_filter: "Filtered",
+      },
       tasks: "Tasks",
     },
     projects: {
@@ -468,6 +480,18 @@ const baseMessages = {
       empty: "输入查询条件后，可搜索任务与活动摘要。",
       loading: "搜索中...",
       placeholder: "搜索任务和活动摘要",
+      retrieval: {
+        hybrid: "混合检索",
+        indexing: "索引处理中",
+        lexicalFallback: "词法降级",
+        structuredOnly: "结构化筛选",
+      },
+      source: {
+        hybrid: "混合",
+        lexical: "词法",
+        semantic: "语义",
+        structured_filter: "筛选",
+      },
       tasks: "任务",
     },
     projects: {

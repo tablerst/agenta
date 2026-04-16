@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 use sqlx::SqlitePool;
+use time::OffsetDateTime;
 use tokio::fs;
 use uuid::Uuid;
 
@@ -41,6 +42,32 @@ pub struct TaskListFilter {
     pub task_kind: Option<TaskKind>,
     pub task_code_prefix: Option<String>,
     pub title_prefix: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct TaskLexicalSearchRow {
+    pub task_id: String,
+    pub task_code: Option<String>,
+    pub task_kind: String,
+    pub title: String,
+    pub status: String,
+    pub priority: String,
+    pub knowledge_status: String,
+    pub task_search_summary: String,
+    pub task_context_digest: String,
+    pub latest_note_summary: Option<String>,
+    pub lexical_score: f64,
+    pub lexical_rank: usize,
+    pub latest_activity_at: OffsetDateTime,
+}
+
+#[derive(Clone, Debug)]
+pub struct ActivityLexicalSearchRow {
+    pub activity_id: String,
+    pub task_id: String,
+    pub kind: String,
+    pub summary: String,
+    pub score: f64,
 }
 
 impl SqliteStore {

@@ -1100,6 +1100,12 @@ pub struct SearchTaskHitRecord {
     pub knowledge_status: String,
     /// Search-oriented task summary.
     pub summary: String,
+    /// Retrieval lane that produced the hit.
+    pub retrieval_source: String,
+    /// Optional combined rank score used for ordering.
+    pub score: Option<f64>,
+    /// Indexed fields that matched the lexical query terms.
+    pub matched_fields: Vec<String>,
 }
 
 /// Structured MCP representation of an activity search hit.
@@ -1113,6 +1119,8 @@ pub struct SearchActivityHitRecord {
     pub kind: String,
     /// Search-oriented activity summary.
     pub summary: String,
+    /// Optional lexical score used for ordering.
+    pub score: Option<f64>,
 }
 
 /// Structured MCP representation of indexed field coverage.
@@ -1143,6 +1151,14 @@ pub struct SearchMetaRecord {
     pub default_limit: usize,
     /// Maximum supported limit.
     pub max_limit: usize,
+    /// Effective retrieval mode for the task bucket.
+    pub retrieval_mode: String,
+    /// Active vector backend when semantic retrieval is enabled.
+    pub vector_backend: Option<String>,
+    /// Current vector runtime status.
+    pub vector_status: String,
+    /// Pending task vector index jobs still waiting to be processed.
+    pub pending_index_jobs: usize,
 }
 
 /// Result returned by local search queries.
@@ -1160,10 +1176,15 @@ pub struct SearchQueryToolOutput {
 
 impl SearchQueryToolOutput {
     fn from_response(response: SearchResponse, applied_limit: usize) -> Self {
+        let crate::search::SearchResponse {
+            query,
+            tasks,
+            activities,
+            meta,
+        } = response;
         Self {
-            query: response.query,
-            tasks: response
-                .tasks
+            query,
+            tasks: tasks
                 .into_iter()
                 .map(|task| SearchTaskHitRecord {
                     task_id: task.task_id,
@@ -1174,39 +1195,37 @@ impl SearchQueryToolOutput {
                     priority: task.priority,
                     knowledge_status: task.knowledge_status,
                     summary: task.summary,
+                    retrieval_source: task.retrieval_source,
+                    score: task.score,
+                    matched_fields: task.matched_fields,
                 })
                 .collect(),
-            activities: response
-                .activities
+            activities: activities
                 .into_iter()
                 .map(|activity| SearchActivityHitRecord {
                     activity_id: activity.activity_id,
                     task_id: activity.task_id,
                     kind: activity.kind,
                     summary: activity.summary,
+                    score: activity.score,
                 })
                 .collect(),
             meta: SearchMetaRecord {
                 indexed_fields: SearchIndexedFieldsRecord {
-                    tasks: vec![
-                        "title".to_string(),
-                        "task_code".to_string(),
-                        "task_kind".to_string(),
-                        "task_search_summary".to_string(),
-                        "task_context_digest".to_string(),
-                        "latest_note_summary".to_string(),
-                    ],
-                    activities: vec!["activity_search_summary".to_string()],
+                    tasks: meta.indexed_fields.tasks,
+                    activities: meta.indexed_fields.activities,
                 },
-                task_sort:
-                    "prefix/exact matches first, then query score, then latest_activity_at desc"
-                        .to_string(),
-                activity_sort: "query match order with structured task filters applied".to_string(),
-                limit_applies_per_bucket: true,
+                task_sort: meta.task_sort,
+                activity_sort: meta.activity_sort,
+                limit_applies_per_bucket: meta.limit_applies_per_bucket,
                 task_limit_applied: applied_limit,
                 activity_limit_applied: applied_limit,
-                default_limit: 10,
-                max_limit: 50,
+                default_limit: meta.default_limit,
+                max_limit: meta.max_limit,
+                retrieval_mode: meta.retrieval_mode,
+                vector_backend: meta.vector_backend,
+                vector_status: meta.vector_status,
+                pending_index_jobs: meta.pending_index_jobs,
             },
         }
     }

@@ -69,6 +69,16 @@ impl DesktopAppState {
             let _ = self.autostart_mcp_if_configured().await;
         });
     }
+
+    fn spawn_search_autostart(self: Arc<Self>) {
+        if !self.service.search_sidecar_autostart_enabled() {
+            return;
+        }
+
+        tauri::async_runtime::spawn(async move {
+            let _ = self.service.start_search_sidecar().await;
+        });
+    }
 }
 
 impl Deref for DesktopAppState {
@@ -973,6 +983,7 @@ pub fn run(runtime: Arc<AppRuntime>) {
                 }),
             );
             state_for_setup.clone().spawn_mcp_autostart();
+            state_for_setup.clone().spawn_search_autostart();
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -999,6 +1010,7 @@ pub fn run(runtime: Arc<AppRuntime>) {
         .run(move |_app_handle, event| {
             if matches!(event, tauri::RunEvent::Exit) {
                 let _ = tauri::async_runtime::block_on(state_for_run.mcp_supervisor.shutdown());
+                let _ = tauri::async_runtime::block_on(state_for_run.service.stop_search_sidecar());
             }
         });
 }

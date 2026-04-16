@@ -5,10 +5,10 @@ use time::OffsetDateTime;
 
 use crate::domain::{KnowledgeStatus, Task, TaskActivity, TaskActivityKind};
 use crate::error::{AppError, AppResult};
-use crate::search::{ActivitySearchHit, SearchResponse, TaskSearchHit};
+use crate::search::{build_task_vector_document_text, SearchVectorJob, TaskVectorDocument};
 
 use super::mapping::{format_time, map_activity, map_task, parse_time};
-use super::{SqliteStore, TaskListFilter};
+use super::{ActivityLexicalSearchRow, SqliteStore, TaskLexicalSearchRow, TaskListFilter};
 
 impl SqliteStore {
     pub async fn insert_task(&self, task: &Task) -> AppResult<()> {
@@ -734,8 +734,13 @@ impl SqliteStore {
         rows.into_iter().map(map_activity).collect()
     }
 
-    pub async fn search(&self, query_text: &str, limit: usize) -> AppResult<SearchResponse> {
-        let task_rows = query(
+    pub async fn search_tasks(
+        &self,
+        filter: &TaskListFilter,
+        query_text: &str,
+        limit: usize,
+    ) -> AppResult<Vec<TaskLexicalSearchRow>> {
+        let mut builder = QueryBuilder::<Sqlite>::new(
             r#"
             SELECT
                 t.task_id,
@@ -745,61 +750,344 @@ impl SqliteStore {
                 t.status,
                 t.priority,
                 t.knowledge_status,
-                COALESCE(t.latest_note_summary, t.task_search_summary) AS task_summary
+                t.task_search_summary,
+                t.task_context_digest,
+                t.latest_note_summary,
+                bm25(tasks_fts, 8.0, 10.0, 1.0, 1.25, 0.75, 1.5) AS lexical_score,
+                max(
+                    t.updated_at,
+                    COALESCE(
+                        (
+                            SELECT MAX(ta.created_at)
+                            FROM task_activities ta
+                            WHERE ta.task_id = t.task_id
+                        ),
+                        t.updated_at
+                    )
+                ) AS latest_activity_at
             FROM tasks_fts f
             JOIN tasks t ON t.rowid = f.rowid
-            WHERE tasks_fts MATCH ?
-            ORDER BY bm25(tasks_fts)
-            LIMIT ?
+            WHERE tasks_fts MATCH
             "#,
-        )
-        .bind(query_text)
-        .bind(limit as i64)
-        .fetch_all(&self.pool)
-        .await?;
-        let activity_rows = query(
+        );
+        builder.push_bind(query_text);
+        push_task_filter_predicates(&mut builder, filter);
+        builder.push(" ORDER BY lexical_score ASC, latest_activity_at DESC, t.task_id ASC LIMIT ");
+        builder.push_bind(limit as i64);
+
+        let rows = builder.build().fetch_all(&self.pool).await?;
+        rows.into_iter()
+            .enumerate()
+            .map(|(index, row)| {
+                Ok(TaskLexicalSearchRow {
+                    task_id: row.get::<String, _>("task_id"),
+                    task_code: row.get::<Option<String>, _>("task_code"),
+                    task_kind: row.get::<String, _>("task_kind"),
+                    title: row.get::<String, _>("title"),
+                    status: row.get::<String, _>("status"),
+                    priority: row.get::<String, _>("priority"),
+                    knowledge_status: row.get::<String, _>("knowledge_status"),
+                    task_search_summary: row.get::<String, _>("task_search_summary"),
+                    task_context_digest: row.get::<String, _>("task_context_digest"),
+                    latest_note_summary: row.get::<Option<String>, _>("latest_note_summary"),
+                    lexical_score: row.get::<f64, _>("lexical_score"),
+                    lexical_rank: index,
+                    latest_activity_at: parse_time(
+                        row.get("latest_activity_at"),
+                        "latest_activity_at",
+                    )?,
+                })
+            })
+            .collect()
+    }
+
+    pub async fn search_tasks_by_ids(
+        &self,
+        task_ids: &[String],
+    ) -> AppResult<Vec<TaskLexicalSearchRow>> {
+        if task_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut builder = QueryBuilder::<Sqlite>::new(
             r#"
-            SELECT a.activity_id, a.task_id, a.kind, a.activity_search_summary
+            SELECT
+                t.task_id,
+                t.task_code,
+                t.task_kind,
+                t.title,
+                t.status,
+                t.priority,
+                t.knowledge_status,
+                t.task_search_summary,
+                t.task_context_digest,
+                t.latest_note_summary,
+                0.0 AS lexical_score,
+                max(
+                    t.updated_at,
+                    COALESCE(
+                        (
+                            SELECT MAX(ta.created_at)
+                            FROM task_activities ta
+                            WHERE ta.task_id = t.task_id
+                        ),
+                        t.updated_at
+                    )
+                ) AS latest_activity_at
+            FROM tasks t
+            WHERE t.task_id IN (
+            "#,
+        );
+        let mut separated = builder.separated(", ");
+        for task_id in task_ids {
+            separated.push_bind(task_id);
+        }
+        builder.push(")");
+
+        let rows = builder.build().fetch_all(&self.pool).await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(TaskLexicalSearchRow {
+                    task_id: row.get::<String, _>("task_id"),
+                    task_code: row.get::<Option<String>, _>("task_code"),
+                    task_kind: row.get::<String, _>("task_kind"),
+                    title: row.get::<String, _>("title"),
+                    status: row.get::<String, _>("status"),
+                    priority: row.get::<String, _>("priority"),
+                    knowledge_status: row.get::<String, _>("knowledge_status"),
+                    task_search_summary: row.get::<String, _>("task_search_summary"),
+                    task_context_digest: row.get::<String, _>("task_context_digest"),
+                    latest_note_summary: row.get::<Option<String>, _>("latest_note_summary"),
+                    lexical_score: 0.0,
+                    lexical_rank: usize::MAX,
+                    latest_activity_at: parse_time(
+                        row.get("latest_activity_at"),
+                        "latest_activity_at",
+                    )?,
+                })
+            })
+            .collect()
+    }
+
+    pub async fn search_activities(
+        &self,
+        filter: &TaskListFilter,
+        query_text: &str,
+        limit: usize,
+    ) -> AppResult<Vec<ActivityLexicalSearchRow>> {
+        let mut builder = QueryBuilder::<Sqlite>::new(
+            r#"
+            SELECT
+                a.activity_id,
+                a.task_id,
+                a.kind,
+                a.activity_search_summary,
+                bm25(task_activities_fts, 1.0) AS lexical_score
             FROM task_activities_fts f
             JOIN task_activities a ON a.rowid = f.rowid
-            WHERE task_activities_fts MATCH ?
-            ORDER BY bm25(task_activities_fts)
-            LIMIT ?
+            JOIN tasks t ON t.task_id = a.task_id
+            WHERE task_activities_fts MATCH
             "#,
-        )
-        .bind(query_text)
-        .bind(limit as i64)
-        .fetch_all(&self.pool)
-        .await?;
+        );
+        builder.push_bind(query_text);
+        push_task_filter_predicates(&mut builder, filter);
+        builder.push(" ORDER BY lexical_score ASC, a.created_at DESC, a.activity_id ASC LIMIT ");
+        builder.push_bind(limit as i64);
 
-        let tasks = task_rows
+        let rows = builder.build().fetch_all(&self.pool).await?;
+        Ok(rows
             .into_iter()
-            .map(|row| TaskSearchHit {
-                task_id: row.get::<String, _>("task_id"),
-                task_code: row.get::<Option<String>, _>("task_code"),
-                task_kind: row.get::<String, _>("task_kind"),
-                title: row.get::<String, _>("title"),
-                status: row.get::<String, _>("status"),
-                priority: row.get::<String, _>("priority"),
-                knowledge_status: row.get::<String, _>("knowledge_status"),
-                summary: row.get::<String, _>("task_summary"),
-            })
-            .collect();
-        let activities = activity_rows
-            .into_iter()
-            .map(|row| ActivitySearchHit {
+            .map(|row| ActivityLexicalSearchRow {
                 activity_id: row.get::<String, _>("activity_id"),
                 task_id: row.get::<String, _>("task_id"),
                 kind: row.get::<String, _>("kind"),
                 summary: row.get::<String, _>("activity_search_summary"),
+                score: row.get::<f64, _>("lexical_score"),
             })
-            .collect();
+            .collect())
+    }
 
-        Ok(SearchResponse {
-            query: Some(query_text.to_string()),
-            tasks,
-            activities,
-        })
+    pub async fn upsert_search_index_job_tx(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        task_id: Uuid,
+        now: OffsetDateTime,
+    ) -> AppResult<()> {
+        let now = format_time(now)?;
+        query(
+            r#"
+            INSERT INTO search_index_jobs (
+                task_id, job_kind, status, attempt_count, last_error, next_attempt_at, created_at, updated_at
+            ) VALUES (?, 'task_vector_upsert', 'pending', 0, NULL, NULL, ?, ?)
+            ON CONFLICT(task_id) DO UPDATE SET
+                status = 'pending',
+                attempt_count = 0,
+                last_error = NULL,
+                next_attempt_at = NULL,
+                updated_at = excluded.updated_at
+            "#,
+        )
+        .bind(task_id.to_string())
+        .bind(&now)
+        .bind(&now)
+        .execute(&mut **tx)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn claim_next_search_index_job(
+        &self,
+        now: OffsetDateTime,
+    ) -> AppResult<Option<SearchVectorJob>> {
+        let mut tx = self.pool.begin().await?;
+        let now_text = format_time(now)?;
+        let row = query(
+            r#"
+            SELECT task_id, attempt_count
+            FROM search_index_jobs
+            WHERE status IN ('pending', 'failed')
+              AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+            ORDER BY updated_at ASC, task_id ASC
+            LIMIT 1
+            "#,
+        )
+        .bind(&now_text)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let Some(row) = row else {
+            tx.commit().await?;
+            return Ok(None);
+        };
+
+        let task_id = crate::storage::mapping::parse_uuid(
+            row.get::<String, _>("task_id"),
+            "search_index_jobs.task_id",
+        )?;
+        let attempt_count = row.get::<i64, _>("attempt_count") + 1;
+        query(
+            r#"
+            UPDATE search_index_jobs
+            SET status = 'processing',
+                attempt_count = ?,
+                updated_at = ?
+            WHERE task_id = ?
+            "#,
+        )
+        .bind(attempt_count)
+        .bind(&now_text)
+        .bind(task_id.to_string())
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+
+        Ok(Some(SearchVectorJob {
+            task_id,
+            attempt_count,
+        }))
+    }
+
+    pub async fn complete_search_index_job(&self, task_id: Uuid) -> AppResult<()> {
+        query("DELETE FROM search_index_jobs WHERE task_id = ?")
+            .bind(task_id.to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn fail_search_index_job(
+        &self,
+        task_id: Uuid,
+        error_message: &str,
+        next_attempt_at: OffsetDateTime,
+    ) -> AppResult<()> {
+        query(
+            r#"
+            UPDATE search_index_jobs
+            SET status = 'failed',
+                last_error = ?,
+                next_attempt_at = ?,
+                updated_at = ?
+            WHERE task_id = ?
+            "#,
+        )
+        .bind(error_message)
+        .bind(format_time(next_attempt_at)?)
+        .bind(format_time(OffsetDateTime::now_utc())?)
+        .bind(task_id.to_string())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn pending_search_index_job_count(&self) -> AppResult<usize> {
+        let row = query("SELECT COUNT(*) AS count FROM search_index_jobs")
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(row.get::<i64, _>("count").max(0) as usize)
+    }
+
+    pub async fn get_task_vector_document(
+        &self,
+        task_id: Uuid,
+    ) -> AppResult<Option<TaskVectorDocument>> {
+        let row = query(
+            r#"
+            SELECT
+                t.task_id,
+                t.project_id,
+                p.slug AS project_slug,
+                t.version_id,
+                t.task_code,
+                t.task_kind,
+                t.title,
+                t.status,
+                t.priority,
+                t.knowledge_status,
+                t.latest_note_summary,
+                t.task_search_summary,
+                t.task_context_digest,
+                t.updated_at
+            FROM tasks t
+            JOIN projects p ON p.project_id = t.project_id
+            WHERE t.task_id = ?
+            "#,
+        )
+        .bind(task_id.to_string())
+        .fetch_optional(&self.pool)
+        .await?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+
+        let task_code = row.get::<Option<String>, _>("task_code");
+        let title = row.get::<String, _>("title");
+        let latest_note_summary = row.get::<Option<String>, _>("latest_note_summary");
+        let task_search_summary = row.get::<String, _>("task_search_summary");
+        let task_context_digest = row.get::<String, _>("task_context_digest");
+
+        Ok(Some(TaskVectorDocument {
+            task_id: row.get::<String, _>("task_id"),
+            project_id: row.get::<String, _>("project_id"),
+            project_slug: row.get::<String, _>("project_slug"),
+            version_id: row.get::<Option<String>, _>("version_id"),
+            task_code: task_code.clone(),
+            task_kind: row.get::<String, _>("task_kind"),
+            title: title.clone(),
+            status: row.get::<String, _>("status"),
+            priority: row.get::<String, _>("priority"),
+            knowledge_status: row.get::<String, _>("knowledge_status"),
+            latest_note_summary: latest_note_summary.clone(),
+            task_search_summary: task_search_summary.clone(),
+            task_context_digest: task_context_digest.clone(),
+            updated_at: row.get::<String, _>("updated_at"),
+            document: build_task_vector_document_text(
+                task_code.as_deref(),
+                &title,
+                latest_note_summary.as_deref(),
+                &task_search_summary,
+                &task_context_digest,
+            ),
+        }))
     }
 
     pub async fn task_count(&self) -> AppResult<i64> {
@@ -814,6 +1102,39 @@ impl SqliteStore {
             .fetch_one(&self.pool)
             .await?;
         Ok(row.get::<i64, _>("count"))
+    }
+}
+
+fn push_task_filter_predicates(builder: &mut QueryBuilder<'_, Sqlite>, filter: &TaskListFilter) {
+    if let Some(project_id) = filter.project_id {
+        builder
+            .push(" AND t.project_id = ")
+            .push_bind(project_id.to_string());
+    }
+    if let Some(version_id) = filter.version_id {
+        builder
+            .push(" AND t.version_id = ")
+            .push_bind(version_id.to_string());
+    }
+    if let Some(status) = filter.status {
+        builder
+            .push(" AND t.status = ")
+            .push_bind(status.to_string());
+    }
+    if let Some(task_kind) = filter.task_kind {
+        builder
+            .push(" AND t.task_kind = ")
+            .push_bind(task_kind.to_string());
+    }
+    if let Some(task_code_prefix) = filter.task_code_prefix.as_deref() {
+        builder
+            .push(" AND t.task_code LIKE ")
+            .push_bind(format!("{task_code_prefix}%"));
+    }
+    if let Some(title_prefix) = filter.title_prefix.as_deref() {
+        builder
+            .push(" AND t.title LIKE ")
+            .push_bind(format!("{title_prefix}%"));
     }
 }
 

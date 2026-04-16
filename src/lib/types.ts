@@ -354,6 +354,9 @@ export interface SearchTaskHit {
   priority: TaskPriority;
   knowledge_status: KnowledgeStatus;
   summary: string;
+  retrieval_source: "structured_filter" | "lexical" | "semantic" | "hybrid";
+  score: number | null;
+  matched_fields: string[];
 }
 
 export interface SearchActivityHit {
@@ -361,12 +364,32 @@ export interface SearchActivityHit {
   task_id: string;
   kind: TaskActivity["kind"];
   summary: string;
+  score: number | null;
+}
+
+export interface SearchMeta {
+  indexed_fields: {
+    tasks: string[];
+    activities: string[];
+  };
+  task_sort: string;
+  activity_sort: string;
+  limit_applies_per_bucket: boolean;
+  task_limit_applied: number;
+  activity_limit_applied: number;
+  default_limit: number;
+  max_limit: number;
+  retrieval_mode: "structured_only" | "lexical_only" | "hybrid";
+  vector_backend: string | null;
+  vector_status: "disabled" | "ready" | "indexing" | "lexical_fallback";
+  pending_index_jobs: number;
 }
 
 export interface SearchResponse {
   query: string | null;
   tasks: SearchTaskHit[];
   activities: SearchActivityHit[];
+  meta: SearchMeta;
 }
 
 export interface AppBridgeError {

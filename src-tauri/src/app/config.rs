@@ -175,12 +175,60 @@ pub struct SyncConfig {
     pub remote: Option<SyncRemoteConfig>,
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SearchVectorBackend {
+    Chroma,
+}
+
+impl SearchVectorBackend {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Chroma => "chroma",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum SearchEmbeddingProvider {
+    #[serde(rename = "openai_compatible")]
+    OpenAiCompatible,
+}
+
+#[derive(Clone, Debug)]
+pub struct SearchVectorConfig {
+    pub enabled: bool,
+    pub backend: SearchVectorBackend,
+    pub endpoint: Url,
+    pub autostart_sidecar: bool,
+    pub collection: String,
+    pub top_k: usize,
+    pub sidecar_data_dir: PathBuf,
+}
+
+#[derive(Clone, Debug)]
+pub struct SearchEmbeddingConfig {
+    pub provider: SearchEmbeddingProvider,
+    pub base_url: String,
+    pub api_key_env: String,
+    pub api_key: String,
+    pub model: String,
+    pub timeout_ms: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct SearchConfig {
+    pub vector: SearchVectorConfig,
+    pub embedding: SearchEmbeddingConfig,
+}
+
 #[derive(Clone, Debug)]
 pub struct RuntimeConfig {
     pub paths: AppPaths,
     pub policy: PolicyConfig,
     pub mcp: McpConfig,
     pub sync: SyncConfig,
+    pub search: SearchConfig,
 }
 
 impl McpConfig {
@@ -278,6 +326,7 @@ struct RawConfig {
     policy: Option<RawPolicyConfig>,
     mcp: Option<RawMcpConfig>,
     sync: Option<RawSyncConfig>,
+    search: Option<RawSearchConfig>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -335,6 +384,31 @@ struct RawSyncRemotePostgresConfig {
     max_conn_lifetime: Option<String>,
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+struct RawSearchConfig {
+    vector: Option<RawSearchVectorConfig>,
+    embedding: Option<RawSearchEmbeddingConfig>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+struct RawSearchVectorConfig {
+    enabled: Option<bool>,
+    backend: Option<SearchVectorBackend>,
+    endpoint: Option<String>,
+    autostart_sidecar: Option<bool>,
+    collection: Option<String>,
+    top_k: Option<usize>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+struct RawSearchEmbeddingConfig {
+    provider: Option<SearchEmbeddingProvider>,
+    base_url: Option<String>,
+    api_key_env: Option<String>,
+    model: Option<String>,
+    timeout_ms: Option<u64>,
+}
+
 pub fn load_runtime_config(explicit_config_path: Option<PathBuf>) -> AppResult<RuntimeConfig> {
     let project_dirs = ProjectDirs::from("com", "choriko", "agenta").ok_or_else(|| {
         AppError::Config("failed to determine system application data directory".to_string())
@@ -374,6 +448,88 @@ pub fn load_runtime_config(explicit_config_path: Option<PathBuf>) -> AppResult<R
         .map(|path| expand_path_vars(path).map(|path| resolve_path(&path, &config_base_dir)))
         .transpose()?
         .unwrap_or_else(|| data_dir.join("attachments"));
+
+    let raw_search = raw_config.search.clone().unwrap_or_default();
+    let raw_vector = raw_search.vector.unwrap_or_default();
+    let vector_enabled = raw_vector.enabled.unwrap_or(false);
+    let vector_endpoint = Url::parse(&expand_env_vars(
+        raw_vector
+            .endpoint
+            .as_deref()
+            .unwrap_or(crate::search::DEFAULT_VECTOR_ENDPOINT),
+    )?)
+    .map_err(|error| AppError::Config(format!("invalid search.vector.endpoint: {error}")))?;
+    let vector_collection = sanitize_non_empty(
+        &expand_env_vars(
+            raw_vector
+                .collection
+                .as_deref()
+                .unwrap_or(crate::search::DEFAULT_VECTOR_COLLECTION),
+        )?,
+        "search.vector.collection",
+    )?;
+    let raw_embedding = raw_search.embedding.unwrap_or_default();
+    let embedding_provider = raw_embedding
+        .provider
+        .unwrap_or(SearchEmbeddingProvider::OpenAiCompatible);
+    let embedding_base_url = if vector_enabled {
+        sanitize_non_empty(
+            &expand_env_vars(raw_embedding.base_url.as_deref().unwrap_or_default())?,
+            "search.embedding.base_url",
+        )?
+    } else {
+        expand_env_vars(raw_embedding.base_url.as_deref().unwrap_or(""))?
+    };
+    let embedding_api_key_env = if vector_enabled {
+        sanitize_non_empty(
+            &expand_env_vars(raw_embedding.api_key_env.as_deref().unwrap_or_default())?,
+            "search.embedding.api_key_env",
+        )?
+    } else {
+        expand_env_vars(raw_embedding.api_key_env.as_deref().unwrap_or(""))?
+    };
+    let embedding_api_key = if vector_enabled {
+        env::var(&embedding_api_key_env).map_err(|_| {
+            AppError::Config(format!(
+                "missing environment variable for search embedding api key: {embedding_api_key_env}"
+            ))
+        })?
+    } else {
+        String::new()
+    };
+    let embedding_model = if vector_enabled {
+        sanitize_non_empty(
+            &expand_env_vars(raw_embedding.model.as_deref().unwrap_or_default())?,
+            "search.embedding.model",
+        )?
+    } else {
+        expand_env_vars(raw_embedding.model.as_deref().unwrap_or(""))?
+    };
+    let search = SearchConfig {
+        vector: SearchVectorConfig {
+            enabled: vector_enabled,
+            backend: raw_vector.backend.unwrap_or(SearchVectorBackend::Chroma),
+            endpoint: vector_endpoint,
+            autostart_sidecar: raw_vector.autostart_sidecar.unwrap_or(true),
+            collection: vector_collection,
+            top_k: raw_vector
+                .top_k
+                .unwrap_or(crate::search::DEFAULT_VECTOR_TOP_K)
+                .clamp(1, 200),
+            sidecar_data_dir: data_dir.join("search").join("chroma"),
+        },
+        embedding: SearchEmbeddingConfig {
+            provider: embedding_provider,
+            base_url: embedding_base_url,
+            api_key_env: embedding_api_key_env,
+            api_key: embedding_api_key,
+            model: embedding_model,
+            timeout_ms: raw_embedding
+                .timeout_ms
+                .unwrap_or(crate::search::DEFAULT_EMBEDDING_TIMEOUT_MS)
+                .max(1_000),
+        },
+    };
 
     let raw_mcp = raw_config.mcp.unwrap_or_default();
     let raw_log = raw_mcp.log.unwrap_or_default();
@@ -487,6 +643,7 @@ pub fn load_runtime_config(explicit_config_path: Option<PathBuf>) -> AppResult<R
             },
         },
         sync,
+        search,
     })
 }
 

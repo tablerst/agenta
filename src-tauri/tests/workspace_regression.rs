@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use sqlx::sqlite::SqliteConnectOptions;
-use sqlx::{Connection, Executor, SqliteConnection};
+use sqlx::{Connection, Executor, Row, SqliteConnection};
 use tempfile::TempDir;
 use tokio::task::JoinSet;
 
@@ -507,6 +507,86 @@ async fn task_context_retrieval_fields_sort_summary_and_search(
         .tasks
         .iter()
         .all(|hit| hit.task_id != ctx10.task_id.to_string()));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn task_search_reindex_jobs_persist_when_vector_runtime_is_unavailable(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let tempdir = TempDir::new()?;
+    let config_path = tempdir.path().join("agenta.local.yaml");
+    let data_dir = tempdir.path().join("data");
+    std::env::set_var("AGENTA_TEST_SEARCH_EMBEDDING_KEY", "test-key");
+    std::fs::write(
+        &config_path,
+        format!(
+            "paths:\n  data_dir: {}\nsearch:\n  vector:\n    enabled: true\n    endpoint: http://127.0.0.1:65535\n    autostart_sidecar: false\n  embedding:\n    provider: openai_compatible\n    base_url: http://127.0.0.1:65535\n    api_key_env: AGENTA_TEST_SEARCH_EMBEDDING_KEY\n    model: test-embedding\n",
+            normalize_path_for_yaml(&data_dir),
+        ),
+    )?;
+
+    let runtime = AppRuntime::bootstrap(BootstrapOptions {
+        config_path: Some(config_path),
+    })
+    .await?;
+
+    let project = runtime
+        .service
+        .create_project(CreateProjectInput {
+            slug: "search-index-jobs".to_string(),
+            name: "Search Index Jobs".to_string(),
+            description: None,
+        })
+        .await?;
+    let version = runtime
+        .service
+        .create_version(CreateVersionInput {
+            project: project.slug.clone(),
+            name: "v1".to_string(),
+            description: None,
+            status: None,
+        })
+        .await?;
+    let task = runtime
+        .service
+        .create_task(CreateTaskInput {
+            project: project.slug,
+            version: Some(version.version_id.to_string()),
+            task_code: Some("InitCtx-Search".to_string()),
+            task_kind: Some(TaskKind::Context),
+            title: "Vector job source".to_string(),
+            summary: Some("Queue a vector job".to_string()),
+            description: Some("This should enqueue a durable search index job.".to_string()),
+            status: Some(TaskStatus::Ready),
+            priority: Some(TaskPriority::Normal),
+            created_by: Some("search-test".to_string()),
+        })
+        .await?;
+    runtime
+        .service
+        .create_note(CreateNoteInput {
+            task: task.task_id.to_string(),
+            content: "Conclusion note that refreshes the task digest".to_string(),
+            note_kind: Some(NoteKind::Conclusion),
+            created_by: Some("search-test".to_string()),
+        })
+        .await?;
+
+    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+
+    let mut connection = SqliteConnection::connect_with(
+        &SqliteConnectOptions::new()
+            .filename(&runtime.config.paths.database_path)
+            .create_if_missing(false)
+            .busy_timeout(std::time::Duration::from_secs(5)),
+    )
+    .await?;
+    let row = sqlx::query("SELECT COUNT(*) AS count FROM search_index_jobs WHERE task_id = ?")
+        .bind(task.task_id.to_string())
+        .fetch_one(&mut connection)
+        .await?;
+    assert!(row.get::<i64, _>("count") >= 1);
 
     Ok(())
 }
