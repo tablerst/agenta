@@ -22,6 +22,10 @@ const baseMessages = {
       },
       runtime: {
         kicker: "Environment",
+        sections: {
+          host: "Host",
+          sync: "Sync",
+        },
         title: "Runtime",
       },
       tasks: {
@@ -231,10 +235,13 @@ const baseMessages = {
       kicker: "Runtime",
       loading: "Loading runtime status...",
       mcpBind: "MCP Bind",
+      navigation: "Runtime sections",
       paths: "Paths",
       payload: "Payload",
       pendingApprovals: "Pending Approvals",
       projects: "Projects",
+      shellSummary:
+        "Operate the desktop-managed MCP host, inspect logs, and review sync state without leaving the runtime shell.",
       summary: "Current shell state, filesystem roots, and desktop bridge status.",
       tasks: "Tasks",
       title: "Desktop runtime surface",
@@ -342,6 +349,10 @@ const baseMessages = {
       },
       runtime: {
         kicker: "环境",
+        sections: {
+          host: "宿主",
+          sync: "同步",
+        },
         title: "运行时",
       },
       tasks: {
@@ -551,10 +562,12 @@ const baseMessages = {
       kicker: "运行时",
       loading: "正在加载运行时状态...",
       mcpBind: "MCP 绑定",
+      navigation: "运行时分区",
       paths: "路径",
       payload: "载荷",
       pendingApprovals: "待审批",
       projects: "项目",
+      shellSummary: "在同一个运行时壳层内管理托管 MCP 主机、检查日志，并查看同步状态。",
       summary: "展示当前壳层状态、文件系统路径以及桌面桥接状态。",
       tasks: "任务",
       title: "桌面运行时界面",
@@ -697,6 +710,16 @@ const localeOverrides = {
       logRouting: "Log routing",
       logs: "Logs",
       logsSummary: "Live MCP host events and the most recent buffered log entries.",
+      host: {
+        sections: {
+          checkpoints: "Checkpoints",
+          control: "Host control",
+          destinations: "Destinations",
+          logs: "Log inspector",
+          paths: "Paths",
+          persistence: "Persistence",
+        },
+      },
       noSession: "No active session",
       persistence: "Persistence",
       recovery: "Recovery",
@@ -800,6 +823,16 @@ const localeOverrides = {
       logRouting: "日志路由",
       logs: "日志",
       logsSummary: "展示 MCP 主机实时事件和最近缓存的日志条目。",
+      host: {
+        sections: {
+          checkpoints: "检查点",
+          control: "宿主控制",
+          destinations: "日志去向",
+          logs: "日志检查器",
+          paths: "路径",
+          persistence: "持久化",
+        },
+      },
       noSession: "当前没有活动会话",
       persistence: "持久化",
       recovery: "恢复",

@@ -34,3 +34,4 @@ target/rust-analyzer/*
 !src-tauri/migrations/
 !src-tauri/migrations/*.sql
 /local-data
+.playwright-mcp/*

@@ -5,6 +5,8 @@ import ProjectWorkspaceApprovalsView from "./views/ProjectWorkspaceApprovalsView
 import ProjectWorkspaceOverviewView from "./views/ProjectWorkspaceOverviewView.vue";
 import ProjectWorkspaceTasksView from "./views/ProjectWorkspaceTasksView.vue";
 import ProjectWorkspaceVersionsView from "./views/ProjectWorkspaceVersionsView.vue";
+import RuntimeHostView from "./views/RuntimeHostView.vue";
+import RuntimeSyncView from "./views/RuntimeSyncView.vue";
 import ProjectWorkspaceView from "./views/ProjectWorkspaceView.vue";
 import RuntimeView from "./views/RuntimeView.vue";
 
@@ -103,12 +105,39 @@ export const router = createRouter({
     },
     {
       path: "/runtime",
-      name: "runtime",
       component: RuntimeView,
       meta: {
         titleKey: "routes.runtime.title",
         kickerKey: "routes.runtime.kicker",
       },
+      children: [
+        {
+          path: "",
+          redirect: {
+            name: "runtime-host",
+          },
+        },
+        {
+          path: "host",
+          name: "runtime-host",
+          component: RuntimeHostView,
+          meta: {
+            titleKey: "routes.runtime.sections.host",
+            kickerKey: "routes.runtime.title",
+            runtimeSection: "host",
+          },
+        },
+        {
+          path: "sync",
+          name: "runtime-sync",
+          component: RuntimeSyncView,
+          meta: {
+            titleKey: "routes.runtime.sections.sync",
+            kickerKey: "routes.runtime.title",
+            runtimeSection: "sync",
+          },
+        },
+      ],
     },
   ],
 });

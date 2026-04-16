@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ArrowRight, BadgeCheck } from "@lucide/vue";
+import { BadgeCheck } from "@lucide/vue";
 import { computed, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
@@ -129,78 +129,64 @@ function openSection(section: "versions" | "tasks" | "approvals") {
 
 <template>
   <section class="workspace-section-grid">
-    <aside class="workspace-list-pane">
+    <aside class="workspace-list-pane overview-pane">
       <div v-if="selectedProject" class="workspace-pane-stack">
-        <section class="glass-panel p-5">
-          <p class="section-label">{{ t("projects.summary") }}</p>
-          <div class="metric-grid">
-            <article class="metric-card">
-              <span class="field-label">{{ t("projects.metrics.versions") }}</span>
-              <strong class="metric-value">{{ counts.versions }}</strong>
-            </article>
-            <article class="metric-card">
-              <span class="field-label">{{ t("projects.metrics.tasks") }}</span>
-              <strong class="metric-value">{{ counts.tasks }}</strong>
-            </article>
-            <article class="metric-card">
-              <span class="field-label">{{ t("projects.metrics.pendingApprovals") }}</span>
-              <strong class="metric-value">{{ counts.approvals }}</strong>
-            </article>
-          </div>
+        <section class="overview-metrics">
+          <button class="overview-metric-link spotlight-surface" type="button" @click="openSection('versions')">
+            <span class="field-label">{{ t("projects.metrics.versions") }}</span>
+            <strong class="overview-metric-value">{{ counts.versions }}</strong>
+            <span class="overview-metric-meta">{{ t("projects.workspaceNav.versions") }}</span>
+          </button>
+          <button class="overview-metric-link spotlight-surface" type="button" @click="openSection('tasks')">
+            <span class="field-label">{{ t("projects.metrics.tasks") }}</span>
+            <strong class="overview-metric-value">{{ counts.tasks }}</strong>
+            <span class="overview-metric-meta">{{ t("projects.workspaceNav.tasks") }}</span>
+          </button>
+          <button class="overview-metric-link spotlight-surface" type="button" @click="openSection('approvals')">
+            <span class="field-label">{{ t("projects.metrics.pendingApprovals") }}</span>
+            <strong class="overview-metric-value">{{ counts.approvals }}</strong>
+            <span class="overview-metric-meta">{{ t("projects.workspaceNav.approvals") }}</span>
+          </button>
         </section>
 
-        <section class="panel-section">
-          <p class="section-label">{{ t("projects.metadata") }}</p>
-          <dl class="space-y-3 text-sm">
+        <section class="overview-meta-block">
+          <dl class="overview-definition-list">
             <div>
-              <dt class="text-[var(--text-muted)]">{{ t("projects.fields.slug") }}</dt>
+              <dt>{{ t("projects.fields.slug") }}</dt>
               <dd>{{ selectedProject.slug }}</dd>
             </div>
             <div>
-              <dt class="text-[var(--text-muted)]">{{ t("projects.created") }}</dt>
+              <dt>{{ t("projects.created") }}</dt>
               <dd>{{ formatDateTime(selectedProject.created_at) }}</dd>
             </div>
             <div>
-              <dt class="text-[var(--text-muted)]">{{ t("projects.updated") }}</dt>
+              <dt>{{ t("projects.updated") }}</dt>
               <dd>{{ formatDateTime(selectedProject.updated_at) }}</dd>
             </div>
             <div>
-              <dt class="text-[var(--text-muted)]">{{ t("projects.defaultVersion") }}</dt>
+              <dt>{{ t("projects.defaultVersion") }}</dt>
               <dd>{{ selectedProject.default_version_id || t("projects.notAssigned") }}</dd>
             </div>
           </dl>
         </section>
-
-        <section class="panel-section">
-          <p class="section-label">{{ t("projects.quickActions") }}</p>
-          <div class="flex flex-col gap-2">
-            <button class="secondary-action justify-between spotlight-surface" @click="openSection('versions')">
-              <span>{{ t("projects.workspaceNav.versions") }}</span>
-              <ArrowRight :size="15" />
-            </button>
-            <button class="secondary-action justify-between spotlight-surface" @click="openSection('tasks')">
-              <span>{{ t("projects.workspaceNav.tasks") }}</span>
-              <ArrowRight :size="15" />
-            </button>
-            <button class="secondary-action justify-between spotlight-surface" @click="openSection('approvals')">
-              <span>{{ t("projects.workspaceNav.approvals") }}</span>
-              <ArrowRight :size="15" />
-            </button>
-          </div>
-        </section>
       </div>
     </aside>
 
-    <div class="workspace-inspector-pane">
+    <div class="workspace-inspector-pane overview-editor-pane">
       <div v-if="selectedProject" class="workspace-pane-stack">
-        <section class="glass-panel p-5">
-          <p class="section-label">{{ t("projects.editProject") }}</p>
-          <div class="space-y-3">
+        <section class="overview-editor">
+          <div class="overview-editor-copy">
+            <p class="section-label">{{ t("routes.projects.sections.overview") }}</p>
+            <h2 class="overview-editor-title">{{ selectedProject.name }}</h2>
+            <p class="overview-editor-summary">{{ selectedProject.slug }}</p>
+          </div>
+
+          <div class="overview-field-grid">
             <label class="form-field">
               <span class="field-label">{{ t("projects.fields.slug") }}</span>
               <input
                 v-model="projectForm.slug"
-                class="control-input"
+                class="quiet-control-input"
                 :placeholder="t('projects.placeholders.slug')"
               />
             </label>
@@ -208,26 +194,29 @@ function openSection(section: "versions" | "tasks" | "approvals") {
               <span class="field-label">{{ t("projects.fields.name") }}</span>
               <input
                 v-model="projectForm.name"
-                class="control-input"
+                class="quiet-control-input"
                 :placeholder="t('projects.placeholders.projectName')"
               />
             </label>
-            <label class="form-field">
+            <label class="form-field overview-field-wide">
               <span class="field-label">{{ t("projects.fields.description") }}</span>
               <textarea
                 v-model="projectForm.description"
-                class="control-textarea"
+                class="quiet-control-textarea"
                 :placeholder="t('projects.placeholders.projectDescription')"
               />
             </label>
             <label class="form-field">
               <span class="field-label">{{ t("common.status") }}</span>
-              <select v-model="projectForm.status" class="control-select">
+              <select v-model="projectForm.status" class="quiet-control-select">
                 <option v-for="status in projectStatusOptions" :key="status" :value="status">
                   {{ t(`status.project.${status}`) }}
                 </option>
               </select>
             </label>
+          </div>
+
+          <div class="overview-editor-actions">
             <button class="primary-action spotlight-surface" @click="submitProjectUpdate">
               <BadgeCheck :size="15" />
               {{ t("projects.saveProject") }}

@@ -17,6 +17,7 @@ import SidebarLocaleSwitcher from "./SidebarLocaleSwitcher.vue";
 import logoUrl from "../assets/logo.svg";
 import { resolveBridgeMode } from "../lib/desktop";
 import { buildProjectWorkspacePath, readRouteString } from "../lib/projectWorkspace";
+import { buildRuntimeWorkspacePath } from "../lib/runtimeWorkspace";
 import { useProjectsStore } from "../stores/projects";
 import { useShellStore } from "../stores/shell";
 
@@ -35,7 +36,7 @@ const navItems = computed(() => {
   void locale.value;
   return [
     { key: "projects", label: t("routes.projects.title"), to: projectsTarget.value, icon: FolderKanban },
-    { key: "runtime", label: t("routes.runtime.title"), to: "/runtime", icon: Activity },
+    { key: "runtime", label: t("routes.runtime.title"), to: buildRuntimeWorkspacePath("host"), icon: Activity },
   ];
 });
 
@@ -63,6 +64,9 @@ const toggleIcon = computed(() => {
 function isActive(key: string, to: string) {
   if (key === "projects") {
     return route.path.startsWith("/projects");
+  }
+  if (key === "runtime") {
+    return route.path.startsWith("/runtime");
   }
   return route.path === to;
 }
