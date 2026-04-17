@@ -72,6 +72,8 @@ cargo run --manifest-path src-tauri/Cargo.toml --bin agenta -- `
 
 CLI 默认输出 JSON。
 
+更完整的 CLI 命令面、搜索回填、Chroma 前置条件和同步命令说明见 [CLI Reference](cli-reference.md)。
+
 ## 4. Desktop Runtime 控制台
 
 桌面启动后，Runtime 页面现在是 MCP 控制台，默认行为如下：

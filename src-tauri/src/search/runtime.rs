@@ -138,6 +138,7 @@ impl SearchRuntime {
 
         let batch_size = batch_size.clamp(1, MAX_INDEX_JOB_BATCH_SIZE);
         let _guard = self.inner.worker_lock.lock().await;
+        let mut first_error: Option<String> = None;
         loop {
             let mut jobs = Vec::with_capacity(batch_size);
             for _ in 0..batch_size {
@@ -177,6 +178,9 @@ impl SearchRuntime {
                 }
                 Err(error) => {
                     let error_message = error.to_string();
+                    if first_error.is_none() {
+                        first_error = Some(error_message.clone());
+                    }
                     let now = OffsetDateTime::now_utc();
                     for job in jobs
                         .iter()
@@ -192,7 +196,11 @@ impl SearchRuntime {
             }
         }
 
-        Ok(())
+        if let Some(error_message) = first_error {
+            Err(AppError::Io(error_message))
+        } else {
+            Ok(())
+        }
     }
 
     pub async fn runtime_status(&self) -> SearchRuntimeStatus {
@@ -264,7 +272,15 @@ impl SearchRuntime {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
-            .map_err(|error| AppError::Io(format!("failed to start chroma sidecar: {error}")))?;
+            .map_err(|error| {
+                if error.kind() == std::io::ErrorKind::NotFound {
+                    AppError::Io(
+                        "failed to start chroma sidecar: program not found; install the Chroma CLI or run a local Chroma server before backfill".to_string(),
+                    )
+                } else {
+                    AppError::Io(format!("failed to start chroma sidecar: {error}"))
+                }
+            })?;
 
         if !self.wait_for_heartbeat().await {
             let _ = child.kill().await;
@@ -566,10 +582,13 @@ impl SearchRuntime {
     }
 
     fn embedding_endpoint(&self) -> AppResult<String> {
-        Ok(format!(
-            "{}/v1/embeddings",
-            self.inner.config.embedding.base_url.trim_end_matches('/')
-        ))
+        let base_url = self.inner.config.embedding.base_url.trim_end_matches('/');
+        let prefix = if base_url.ends_with("/v1") {
+            base_url.to_string()
+        } else {
+            format!("{base_url}/v1")
+        };
+        Ok(format!("{prefix}/embeddings"))
     }
 
     fn base_endpoint(&self) -> AppResult<String> {

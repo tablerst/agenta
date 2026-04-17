@@ -9,6 +9,7 @@
 - [tech.md](tech.md)：技术实现与模块组织
 - [migration_plan.md](migration_plan.md)：迁移和阶段推进背景
 - [../docs/cli-mcp-quickstart.md](../docs/cli-mcp-quickstart.md)：Desktop / CLI / MCP 快速开始
+- [../docs/cli-reference.md](../docs/cli-reference.md)：CLI 命令参考、搜索回填和同步命令说明
 
 ## 执行计划
 

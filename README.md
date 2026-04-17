@@ -71,9 +71,23 @@ Current sync defaults stay intentionally conservative:
 - Sync uses manual `status / outbox / backfill / push / pull`; background auto-sync is still disabled
 - Status output redacts PostgreSQL credentials, and Runtime exposes the same manual sync actions inside Desktop
 
+## Search / Chroma Prerequisites
+
+Vector search and `回填搜索索引` depend on a reachable Chroma backend when `search.vector.enabled: true`.
+
+- If `search.vector.autostart_sidecar: true`, Desktop will try to run `chroma` locally. This only works when the Chroma CLI is installed and available on `PATH`.
+- If you prefer to run Chroma yourself, start a local server first and keep `search.vector.endpoint` pointed at that server.
+- If neither the CLI nor a running server is available, search backfill jobs may be queued but processing will fail until Chroma becomes reachable.
+
+Official Chroma references:
+
+- CLI install: <https://docs.trychroma.com/docs/cli/install>
+- Run local server: <https://docs.trychroma.com/docs/cli/run>
+
 ## Documentation
 
 - Quickstart: [docs/cli-mcp-quickstart.md](docs/cli-mcp-quickstart.md)
+- CLI reference: [docs/cli-reference.md](docs/cli-reference.md)
 - Latest archived execution plan: [dev_docs/execution-plans/archive/fifth-milestone-remote-replica-sync-foundation.md](dev_docs/execution-plans/archive/fifth-milestone-remote-replica-sync-foundation.md)
 - Archived execution plans: [dev_docs/execution-plans/archive](dev_docs/execution-plans/archive)
 - Product baseline: [dev_docs/baseline.md](dev_docs/baseline.md)

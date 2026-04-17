@@ -1,210 +1,68 @@
 ---
 name: agenta-workflow
-description: '使用 Agenta 管理项目初始化、版本基线、任务拆分、上下文沉淀与任务收口。Use when: initializing an Agenta project for a repository, creating baseline versions, organizing module context tasks, restoring task context, appending implementation notes, verifying task status, or building a reusable project context index.'
-argument-hint: '要在 Agenta 中推进的目标，例如：初始化项目、补齐模块上下文、收口任务状态'
+description: Use when managing Agenta as a project/context ledger: initialize or reuse projects and baseline versions, organize module context tasks, restore task context, append findings/conclusions, verify task state, or close out work through either CLI or MCP.
+argument-hint: 要在 Agenta 中推进的目标，例如：初始化项目、补齐模块上下文、恢复任务上下文、收口任务状态
 user-invocable: true
 disable-model-invocation: false
 ---
 
 # Agenta Workflow
 
-用于在仓库开发过程中，把 Agenta 当作“项目上下文账本”和“任务收口器”来使用，而不是只把它当一个待办列表。
+用于把 Agenta 当作“项目上下文账本”和“任务收口器”来使用，而不是只把它当一个待办列表。
 
 ## 何时使用
 
 在以下场景使用这个 Skill：
 
-- 需要为当前仓库创建或初始化 Agenta 项目
-- 需要创建版本基线并挂接后续任务
-- 需要把模块级上下文整理成可复用任务
-- 需要恢复某个 Agenta 任务的历史上下文
-- 需要把本轮探索、设计、风险、验证结果沉淀回任务笔记
-- 需要在多项并行探索后收口任务状态
-- 需要为后续工作整理一份常驻上下文索引
+- 需要为当前仓库初始化或复用 Agenta 项目
+- 需要创建或复用版本基线，并把后续任务挂到正确版本下
+- 需要把模块级探索沉淀成上下文任务、索引任务或结论笔记
+- 需要恢复某个 Agenta 任务的历史上下文并继续推进
+- 需要在多项并行探索后收口状态、结论和风险
 
-## 这个 Skill 产出什么
+## 工作方式
+
+这个 Skill 只有两套主要操作模式：
+
+1. CLI 模式
+适用：本地脚本化、批量操作、快速验收，或当前环境没有更直接的 Agenta 工具。
+
+2. MCP 模式
+适用：当前环境已经暴露 Agenta MCP tools，或者任务本身就是围绕 tool contract / 集成边界展开。
+
+不要预设 CLI 是默认方式。先判断当前最直接、最稳定的边界，再进入对应模式。
+
+## 先读哪个参考
+
+- 先读 `references/operating-surfaces.md`
+  用于判断当前该走 CLI 还是 MCP。
+- 再读 `references/common-workflow.md`
+  这里放所有模式共用的项目复用、任务拆分、笔记沉淀、状态收口规则。
+- 如果当前是 CLI 模式，再读 `references/cli-mode.md`
+- 如果当前是 MCP 模式，再读 `references/mcp-mode.md`
+
+## 产出目标
 
 使用这个 Skill 后，应尽量产出以下一种或多种结果：
 
-- 一个已初始化的 Agenta 项目
-- 一个可作为锚点的默认版本基线
-- 一组按模块或工作流拆分好的任务
-- 与任务绑定的上下文笔记
-- 已更新且可信的任务状态
-- 一个适合后续恢复上下文的索引型任务或总结任务
+- 一个已初始化或已确认可复用的 Agenta 项目
+- 一个稳定的默认版本基线
+- 一组按恢复入口组织好的任务
+- 绑定在任务上的 finding / conclusion 笔记
+- 可信的任务状态与知识状态
+- 一份适合后续恢复上下文的索引型任务
 
-## 核心工作流
+## 核心约束
 
-### 1. 先判断当前属于哪种 Agenta 场景
+- 先复用现有项目和版本，再创建新对象
+- 任务组织优先服务“后续如何恢复上下文”，而不是只按目录平铺
+- 显式使用 Agenta 一等字段：`task_code`、`task_kind`、`note_kind`
+- 只读探索可以并行；写入、状态更新、回读确认尽量串行
+- 每次写入后都要回读或以等价方式确认成功
 
-优先判断当前请求属于哪一类：
-
-- **项目初始化**：仓库还没有对应 Agenta 项目或版本
-- **上下文建设**：需要为某些模块创建初始化任务并沉淀导航信息
-- **任务推进**：已有任务，需要补充阅读结论、设计结论或执行进度
-- **任务收口**：当前任务已完成，需要更新状态、补齐总结、确认闭环
-- **索引沉淀**：前面已经积累了多份上下文，需要汇总成常驻入口
-
-### 2. 初始化项目前，先读现状，避免重复创建
-
-如果目标是初始化：
-
-1. 先查看现有项目列表
-2. 查找是否已有与当前仓库对应的项目或近似 slug
-3. 若存在，则优先复用现有项目
-4. 若不存在，再创建项目
-5. 创建版本基线，并设置为默认版本
-
-建议命名模式：
-
-- 项目：使用仓库名或对外可读名称
-- slug：稳定、简短、便于脚本引用
-- 版本：使用 `workspace-baseline-YYYY-MM-DD` 之类的基线名
-
-### 3. 任务拆分时，优先按“后续最常用的恢复入口”组织
-
-创建任务时，不要只按技术目录平铺；优先按后续最常用的恢复入口来组织：
-
-- 启动与运行基线
-- API 路由与领域边界
-- 图执行与组件初始化链路
-- Service 层与依赖注入
-- MCP / EDC / Skills / VFS 集成边界
-- AI Chat / 流式 / 上传边界
-- Tracing / Langfuse / 可观测性
-- Evaluations 能力与兼容边界
-- 测试入口与高风险回归点
-- 汇总型常驻上下文索引
-
-创建编号型或上下文型任务时，优先使用 Agenta 的一等字段，而不是只把语义塞进标题：
-
-- 编号任务显式填写 `task_code`，例如 `InitCtx-01`
-- 普通执行任务使用 `task_kind=standard`
-- 模块上下文任务使用 `task_kind=context`
-- 汇总、导航、常驻索引任务使用 `task_kind=index`
-- 恢复一批编号任务时，优先调用 `task_list(project, version, sort_by=task_code, sort_order=asc)` 或 `search_query(project, version, task_code_prefix=...)`
-- 如果只想拉取上下文任务，优先使用 `kind=context` 或 `task_kind=context` 过滤
-
-如果某轮工作只覆盖其中一部分，优先把已经完成的模块沉淀成独立任务笔记，而不是等全部完成后再一次性补。
-
-### 4. 可并行的探索用子代理，但写入与收口要串行
-
-如果有多个独立模块需要探索：
-
-- 可把 **只读探索** 并行化
-- 每个子代理只负责一个边界明确的主题
-- 要求返回：关键事实、关键文件、阅读顺序、风险/契约
-
-但以下事情应尽量串行处理：
-
-- 创建项目 / 版本
-- 批量创建任务时的最终命名与顺序校验
-- 向任务写入笔记
-- 更新任务状态
-- 回读确认是否写入成功
-
-## 任务笔记应该写什么
-
-给 Agenta 任务追加笔记时，优先写可复用内容，而不是聊天式流水账。
-
-写入 note 时显式标注 `note_kind`：
-
-- `scratch`：临时草稿或过程记录，不代表已形成沉淀
-- `finding`：已核实发现，默认选项
-- `conclusion`：可复用结论，会把任务提升为 `knowledge_status=reusable`
-
-推荐结构：
-
-1. **主题与日期**
-2. **已核实的关键结论**
-3. **推荐阅读顺序**
-4. **关键文件**
-5. **主要风险 / 契约 / 注意事项**
-6. **必要时补充推荐验证路径**
-
-写法要求：
-
-- 结论优先，不要只贴文件名
-- 文件路径要能直接帮助后续定位
-- 风险要写“为什么危险”，不要只写标题
-- 如果任务已经形成可复用结论，使用 `note_kind=conclusion`
-- 如果任务已足够可复用，再更新状态为 `done`
-
-## 决策规则
-
-### 什么时候新建任务
-
-新建任务，如果满足任一情况：
-
-- 该模块会在后续被反复访问
-- 该主题有独立风险边界
-- 该结论足以成为下一轮工作的入口
-- 该内容不适合塞进别的任务作为附注
-
-### 什么时候只追加笔记
-
-只追加笔记，如果：
-
-- 本轮只是补充已有任务的上下文
-- 没有产生新的独立主题
-- 只是对已有导航任务做增量完善
-
-### 什么时候标记为 done
-
-只有当以下条件基本满足时才标记为 `done`：
-
-- 已经有足够支撑后续恢复上下文的笔记
-- 项目 / 版本 / 任务归属正确
-- 当前轮目标已经闭环
-- 已回读确认任务状态和笔记都写入成功
-
-如果只是刚创建任务但尚未沉淀有价值内容，保持 `ready` 或 `in_progress` 更合适。
-
-## 完成前检查
-
-在结束本轮前，检查以下事项：
-
-- 项目是否存在且 slug 正确
-- 默认版本是否已经设置
-- 新任务是否挂在正确版本下
-- 编号任务是否已经写入 `task_code`，而不是只靠标题猜
-- 上下文/索引任务是否已经写入正确的 `task_kind`
-- 笔记是否已经用 `note_kind` 标明草稿、发现或结论
-- `task_list.summary` 中的 `done/ready/in_progress/blocked` 数量是否符合真实完成度
-- `knowledge_status` 是否能区分“无沉淀 / 进行中 / 可复用”
-- 状态是否与真实完成度一致
-- 是否已经回读确认写入成功
-
-## 推荐实践
-
-- 对新仓库，先做“基线版本 + 初始化任务清单”
-- 对复杂模块，优先使用并行子代理做只读探索
-- 对高风险主题，把“风险/契约”明确写进任务笔记
-- 对连续多轮工作，保留一个汇总型索引任务用于后续恢复上下文
-- 如果数据库锁或写入冲突出现，重试时改为串行写入
-
-## 避免这些反模式
-
-- 只创建任务标题，不补任务笔记
-- 任务很多，但没有清晰顺序编号
-- 不回读就假设写入成功
-- 所有内容都塞进一个巨型任务
-- 并行执行多个写操作导致存储锁冲突
-- 把“探索中”的任务过早标为 `done`
-
-## 可直接套用的提示语
+## 直接可用的提示语
 
 - `/agenta-workflow 初始化当前仓库的 Agenta 项目与基线版本`
 - `/agenta-workflow 为这个仓库排一组模块初始化上下文任务`
-- `/agenta-workflow 继续推进 API 和 Graph 两个模块的上下文沉淀`
-- `/agenta-workflow 读取这个 Agenta 任务的上下文并继续补充笔记`
+- `/agenta-workflow 恢复这个 Agenta 任务的上下文并继续补充笔记`
 - `/agenta-workflow 收口本轮任务，把状态和结论同步到 Agenta`
-
-## 与这个 Skill 配套的下一步定制
-
-后续可以继续新增这些相关 Skill：
-
-- `agenta-context-index`：专门负责汇总索引型任务
-- `agenta-module-context`：专门为单个模块生成上下文卡
-- `agenta-task-closeout`：专门做任务收口、状态更新与结论压缩
-- `agenta-parallel-research`：专门规范“子代理并行探索 + 主线程收口”流程
