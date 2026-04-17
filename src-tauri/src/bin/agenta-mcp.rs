@@ -16,6 +16,11 @@ struct Cli {
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
+    if std::env::args().any(|arg| arg == "--version" || arg == "-V") {
+        println!("{}", agenta_lib::build_info::cli_version("agenta-mcp"));
+        return Ok(());
+    }
+
     init_tracing();
     let cli = Cli::parse();
     let runtime = AppRuntime::bootstrap(BootstrapOptions {

@@ -28,6 +28,8 @@ Agenta is a local-first task and context service for agent hosts. The local desk
 - `cargo run --manifest-path src-tauri/Cargo.toml --bin agenta -- --help`
 - `cargo run --manifest-path src-tauri/Cargo.toml --bin agenta-cli -- --help`
 - `cargo run --manifest-path src-tauri/Cargo.toml --bin agenta-mcp -- --help`
+- `bun run release -- --dry-run`: preview release metadata and artifact paths.
+- `bun run release`: build installers and versioned binary artifacts under `target/release-artifacts/`.
 
 ## Verification Baseline
 

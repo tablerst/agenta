@@ -219,6 +219,46 @@ function openSync() {
           <section class="runtime-block">
             <div class="runtime-block-header">
               <div>
+                <p class="section-label">{{ t("runtime.host.sections.build") }}</p>
+                <h2 class="runtime-block-title">{{ t("runtime.build.title") }}</h2>
+                <p class="runtime-block-summary">{{ t("runtime.build.summary") }}</p>
+              </div>
+            </div>
+            <dl class="runtime-definition-list">
+              <div>
+                <dt>{{ t("runtime.build.version") }}</dt>
+                <dd class="runtime-field-mono">
+                  {{ runtimeConsole.runtime.value.build.display_version }}
+                </dd>
+              </div>
+              <div>
+                <dt>{{ t("runtime.build.commit") }}</dt>
+                <dd class="runtime-field-mono">
+                  {{ runtimeConsole.runtime.value.build.git_commit_short ?? t("common.na") }}
+                </dd>
+              </div>
+              <div>
+                <dt>{{ t("runtime.build.describe") }}</dt>
+                <dd class="runtime-field-mono">
+                  {{ runtimeConsole.runtime.value.build.git_describe ?? t("common.na") }}
+                </dd>
+              </div>
+              <div>
+                <dt>{{ t("runtime.build.dirty") }}</dt>
+                <dd>
+                  {{
+                    runtimeConsole.runtime.value.build.git_dirty
+                      ? t("runtime.build.dirtyYes")
+                      : t("runtime.build.dirtyNo")
+                  }}
+                </dd>
+              </div>
+            </dl>
+          </section>
+
+          <section class="runtime-block">
+            <div class="runtime-block-header">
+              <div>
                 <p class="section-label">{{ t("runtime.host.sections.paths") }}</p>
                 <h2 class="runtime-block-title">{{ t("runtime.paths") }}</h2>
               </div>

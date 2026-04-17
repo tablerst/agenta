@@ -2,6 +2,7 @@
 use std::sync::Arc;
 
 pub mod app;
+pub mod build_info;
 pub mod domain;
 pub mod error;
 pub mod interface;

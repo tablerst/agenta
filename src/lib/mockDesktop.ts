@@ -1841,6 +1841,14 @@ function runSearch(input: JsonMap) {
 
 function runtimeStatus(): RuntimeStatus {
   return {
+    build: {
+      version: "0.1.0",
+      display_version: "0.1.0+preview",
+      git_commit: "preview",
+      git_commit_short: "preview",
+      git_describe: "preview",
+      git_dirty: false,
+    },
     data_dir: "D:/preview/agenta/data",
     database_path: "D:/preview/agenta/data/agenta.sqlite3",
     attachments_dir: "D:/preview/agenta/data/attachments",

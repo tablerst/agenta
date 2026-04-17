@@ -10,6 +10,7 @@ use crate::app::{
     save_mcp_config_defaults, AppRuntime, McpLaunchOverrides, McpLogDestination, McpLogLevel,
     McpLogSnapshot, McpRuntimeStatus, McpSupervisor, MCP_LOG_EVENT, MCP_STATUS_EVENT,
 };
+use crate::build_info::{self, BuildInfo};
 use crate::domain::ApprovalStatus;
 use crate::error::AppError;
 use crate::interface::response::{error, success, ErrorEnvelope, SuccessEnvelope};
@@ -23,6 +24,7 @@ use crate::service::{
 
 #[derive(Debug, Serialize)]
 struct DesktopRuntimeStatus {
+    build: BuildInfo,
     data_dir: String,
     database_path: String,
     attachments_dir: String,
@@ -254,6 +256,7 @@ async fn desktop_status(
     success(
         "desktop.status",
         DesktopRuntimeStatus {
+            build: build_info::get(),
             data_dir: state.config.paths.data_dir.display().to_string(),
             database_path: state.config.paths.database_path.display().to_string(),
             attachments_dir: state.config.paths.attachments_dir.display().to_string(),

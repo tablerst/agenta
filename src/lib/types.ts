@@ -219,7 +219,17 @@ export interface ApprovalRequest {
   status: ApprovalStatus;
 }
 
+export interface BuildInfo {
+  version: string;
+  display_version: string;
+  git_commit: string | null;
+  git_commit_short: string | null;
+  git_describe: string | null;
+  git_dirty: boolean;
+}
+
 export interface RuntimeStatus {
+  build: BuildInfo;
   data_dir: string;
   database_path: string;
   attachments_dir: string;

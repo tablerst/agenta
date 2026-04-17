@@ -25,6 +25,7 @@ dist-ssr
 *.sln
 *.sw?
 target/rust-analyzer/*
+target/release-artifacts/
 *.sql
 *.sqlite
 *.sqlite3

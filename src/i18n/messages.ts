@@ -835,6 +835,16 @@ const localeOverrides = {
       },
       autostartHint:
         "When saved as part of the active config, Desktop will start the managed MCP host automatically after app setup.",
+      build: {
+        commit: "Git commit",
+        describe: "Git describe",
+        dirty: "Worktree",
+        dirtyNo: "Clean",
+        dirtyYes: "Dirty",
+        summary: "Build metadata embedded into this binary for release traceability.",
+        title: "Build identity",
+        version: "Version",
+      },
       bufferSize: "UI buffer: {count} lines",
       configSource: "Config source",
       destinations: {
@@ -870,6 +880,7 @@ const localeOverrides = {
       logsSummary: "Live MCP host events and the most recent buffered log entries.",
       host: {
         sections: {
+          build: "Build",
           checkpoints: "Checkpoints",
           control: "Host control",
           destinations: "Destinations",
@@ -991,6 +1002,16 @@ const localeOverrides = {
         stop: "停止主机",
       },
       autostartHint: "保存到当前配置后，Desktop 会在应用完成初始化后自动拉起托管 MCP 主机。",
+      build: {
+        commit: "Git 提交",
+        describe: "Git 描述",
+        dirty: "工作区",
+        dirtyNo: "干净",
+        dirtyYes: "有未提交变更",
+        summary: "嵌入到当前二进制中的构建元数据，用于追溯发布产物。",
+        title: "构建标识",
+        version: "版本",
+      },
       bufferSize: "UI 缓冲区：{count} 行",
       configSource: "配置来源",
       destinations: {
@@ -1026,6 +1047,7 @@ const localeOverrides = {
       logsSummary: "展示 MCP 主机实时事件和最近缓存的日志条目。",
       host: {
         sections: {
+          build: "构建",
           checkpoints: "检查点",
           control: "宿主控制",
           destinations: "日志去向",

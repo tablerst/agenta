@@ -384,6 +384,11 @@ struct SyncExecuteArgs {
 }
 
 pub async fn run() -> i32 {
+    if std::env::args().any(|arg| arg == "--version" || arg == "-V") {
+        println!("{}", crate::build_info::cli_version(&cli_binary_name()));
+        return 0;
+    }
+
     init_tracing();
     let cli = Cli::parse();
 
@@ -406,6 +411,19 @@ pub async fn run() -> i32 {
             1
         }
     }
+}
+
+fn cli_binary_name() -> String {
+    std::env::args()
+        .next()
+        .and_then(|path| {
+            std::path::Path::new(&path)
+                .file_stem()
+                .and_then(|value| value.to_str())
+                .map(ToOwned::to_owned)
+        })
+        .filter(|name| name == "agenta-cli")
+        .unwrap_or_else(|| "agenta".to_string())
 }
 
 async fn execute(app: AgentaApp, command: TopLevelCommand) -> AppResult<SuccessEnvelope> {
