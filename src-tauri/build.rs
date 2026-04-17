@@ -8,6 +8,8 @@ fn main() {
 }
 
 fn emit_git_build_metadata() {
+    println!("cargo:rerun-if-env-changed=AGENTA_BUILD_FORCE_RERUN");
+
     let manifest_dir =
         PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string()));
 

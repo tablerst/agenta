@@ -21,6 +21,18 @@ const cargoLockPath = path.join(repoRoot, "src-tauri", "Cargo.lock");
 const releaseArtifactsRoot = path.join(repoRoot, "target", "release-artifacts");
 const semverPattern = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 const binaryNames = ["agenta", "agenta-cli", "agenta-mcp", "agenta-desktop"];
+const cargoCliBuildArgs = [
+  "build",
+  "--release",
+  "--manifest-path",
+  "src-tauri/Cargo.toml",
+  "--bin",
+  "agenta",
+  "--bin",
+  "agenta-cli",
+  "--bin",
+  "agenta-mcp",
+];
 
 main();
 
@@ -55,14 +67,17 @@ function main() {
     const artifactVersion = formatArtifactVersion(versions.packageVersion, git);
     const releaseDirName = `agenta-v${artifactVersion}`;
     const releaseDir = path.join(releaseArtifactsRoot, releaseDirName);
+    const buildEnv = {
+      AGENTA_BUILD_FORCE_RERUN: new Date().toISOString(),
+    };
 
     const packageBuildCommand = resolvePackageBuildCommand();
 
     printPlan({
       artifactVersion,
       buildCommands: [
+        `cargo ${cargoCliBuildArgs.join(" ")}`,
         packageBuildCommand.label,
-        "cargo build --release --manifest-path src-tauri/Cargo.toml --bins",
       ],
       git,
       options,
@@ -79,8 +94,8 @@ function main() {
       throw new Error(`Release directory already exists: ${releaseDir}`);
     }
 
-    run(packageBuildCommand.command, packageBuildCommand.args);
-    run("cargo", ["build", "--release", "--manifest-path", "src-tauri/Cargo.toml", "--bins"]);
+    run("cargo", cargoCliBuildArgs, buildEnv);
+    run(packageBuildCommand.command, packageBuildCommand.args, buildEnv);
 
     mkdirSync(path.join(releaseDir, "installers"), { recursive: true });
     mkdirSync(path.join(releaseDir, "bin"), { recursive: true });
@@ -328,9 +343,13 @@ function printPlan({ artifactVersion, buildCommands, git, options, releaseDir, t
   }
 }
 
-function run(command, args) {
+function run(command, args, extraEnv = {}) {
   const result = spawnSync(command, args, {
     cwd: repoRoot,
+    env: {
+      ...process.env,
+      ...extraEnv,
+    },
     shell: false,
     stdio: "inherit",
   });
