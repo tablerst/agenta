@@ -20,6 +20,7 @@ import type {
   McpLogLevel,
   McpRuntimeStatus,
   RuntimeStatus,
+  SearchBackfillSummary,
   SyncOutboxListItem,
   SyncStatusSummary,
 } from "./types";
@@ -35,12 +36,13 @@ function createRuntimeConsoleModel() {
     | "stop"
     | "refreshLogs"
     | "openLogDirectory";
-  type SyncAction = "refresh" | "backfill" | "push" | "pull";
+  type SyncAction = "refresh" | "backfill" | "push" | "pull" | "searchBackfill";
 
   const runtime = ref<RuntimeStatus | null>(null);
   const mcp = ref<McpRuntimeStatus | null>(null);
   const syncStatus = ref<SyncStatusSummary | null>(null);
   const syncOutbox = ref<SyncOutboxListItem[]>([]);
+  const searchBackfillResult = ref<SearchBackfillSummary | null>(null);
   const logs = ref<McpLogEntry[]>([]);
   const busy = ref(false);
   const syncBusy = ref(false);
@@ -392,6 +394,25 @@ function createRuntimeConsoleModel() {
     });
   }
 
+  async function runSearchBackfill() {
+    await withSyncAction("searchBackfill", async () => {
+      try {
+        const envelope = await desktopBridge.searchBackfill(1000);
+        searchBackfillResult.value = envelope.result;
+        if (envelope.result.processing_error) {
+          shell.pushNotice("error", envelope.result.processing_error);
+          return;
+        }
+        shell.pushNotice(
+          "success",
+          t("notices.searchBackfillCompleted", { count: envelope.result.queued }),
+        );
+      } catch (error) {
+        shell.pushNotice("error", formatDesktopError(error, t));
+      }
+    });
+  }
+
   onMounted(async () => {
     unlisteners.push(
       await desktopBridge.onMcpStatus((payload) => {
@@ -447,11 +468,13 @@ function createRuntimeConsoleModel() {
     mcp,
     openLogDirectory,
     refreshLogs,
+    runSearchBackfill,
     runSyncBackfill,
     runSyncPull,
     runSyncPush,
     runtime,
     saveAsDefault,
+    searchBackfillResult,
     startMcp,
     statusClass,
     stopMcp,

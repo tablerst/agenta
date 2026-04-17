@@ -12,6 +12,7 @@ import type {
   McpRuntimeStatus,
   Project,
   RuntimeStatus,
+  SearchBackfillSummary,
   SearchResponse,
   SuccessEnvelope,
   SyncBackfillSummary,
@@ -387,6 +388,12 @@ export const desktopBridge = {
     return resolveBridgeMode() === "desktop"
       ? callDesktop<SearchResponse>("desktop_search", input)
       : callPreview<SearchResponse>(() => mockDesktopBridge.search(input));
+  },
+  searchBackfill(limit?: number) {
+    const input = { action: "backfill", limit: typeof limit === "number" ? limit : null };
+    return resolveBridgeMode() === "desktop"
+      ? callDesktop<SearchBackfillSummary>("desktop_search", input)
+      : callPreview<SearchBackfillSummary>(() => mockDesktopBridge.searchBackfill(limit));
   },
   approval(input: Record<string, unknown>) {
     return resolveBridgeMode() === "desktop"

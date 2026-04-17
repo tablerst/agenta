@@ -12,6 +12,7 @@ import type {
   NoteKind,
   Project,
   RuntimeStatus,
+  SearchBackfillSummary,
   SearchResponse,
   SuccessEnvelope,
   SyncBackfillSummary,
@@ -344,6 +345,19 @@ function runPreviewPull(limit?: number): SyncPullSummary {
     applied: 0,
     skipped: fetched,
     last_remote_mutation_id: fetched > 0 ? previewRemoteMutationCursor : null,
+  };
+}
+
+function runPreviewSearchBackfill(limit?: number): SearchBackfillSummary {
+  const maxToQueue = typeof limit === "number" ? Math.max(1, limit) : 1000;
+  const scanned = state.tasks.length;
+  const queued = Math.min(scanned, maxToQueue);
+  return {
+    scanned,
+    queued,
+    skipped: Math.max(0, scanned - queued),
+    pending_after: 0,
+    processing_error: null,
   };
 }
 
@@ -2029,6 +2043,11 @@ export const mockDesktopBridge = {
   },
   search(input: JsonMap = {}) {
     return Promise.resolve(envelope("desktop_search", runSearch(input), "Loaded preview search results."));
+  },
+  searchBackfill(limit?: number) {
+    return Promise.resolve(
+      envelope("desktop_search", runPreviewSearchBackfill(limit), "Completed preview search backfill."),
+    );
   },
   openPath(_path?: string) {
     return Promise.resolve();

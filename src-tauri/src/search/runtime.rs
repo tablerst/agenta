@@ -15,7 +15,7 @@ use crate::error::{AppError, AppResult};
 use crate::search::TaskVectorDocument;
 use crate::storage::{SqliteStore, TaskListFilter};
 
-const INDEX_JOB_BATCH_SIZE: usize = 32;
+const INDEX_JOB_BATCH_SIZE: usize = 10;
 
 #[derive(Clone, Debug)]
 pub struct SearchVectorJob {

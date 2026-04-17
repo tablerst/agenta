@@ -345,6 +345,14 @@ export interface SyncPullSummary {
   last_remote_mutation_id: number | null;
 }
 
+export interface SearchBackfillSummary {
+  scanned: number;
+  queued: number;
+  skipped: number;
+  pending_after: number;
+  processing_error: string | null;
+}
+
 export interface SearchTaskHit {
   task_id: string;
   task_code: string | null;
