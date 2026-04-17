@@ -43,6 +43,10 @@ function createRuntimeConsoleModel() {
   const syncStatus = ref<SyncStatusSummary | null>(null);
   const syncOutbox = ref<SyncOutboxListItem[]>([]);
   const searchBackfillResult = ref<SearchBackfillSummary | null>(null);
+  const searchBackfillForm = reactive({
+    batchSize: 10,
+    limit: 1000,
+  });
   const logs = ref<McpLogEntry[]>([]);
   const busy = ref(false);
   const syncBusy = ref(false);
@@ -97,6 +101,29 @@ function createRuntimeConsoleModel() {
   const syncRemoteDatabase = computed(
     () => syncStatus.value?.remote?.postgres?.database ?? t("common.na"),
   );
+
+  function clampInteger(
+    value: unknown,
+    fallback: number,
+    min: number,
+    max: number,
+  ): number {
+    const normalized =
+      typeof value === "number"
+        ? value
+        : typeof value === "string" && value.trim()
+          ? Number(value)
+          : Number.NaN;
+    if (!Number.isFinite(normalized)) {
+      return fallback;
+    }
+    return Math.min(max, Math.max(min, Math.trunc(normalized)));
+  }
+
+  function normalizeSearchBackfillForm() {
+    searchBackfillForm.batchSize = clampInteger(searchBackfillForm.batchSize, 10, 1, 200);
+    searchBackfillForm.limit = clampInteger(searchBackfillForm.limit, 1000, 1, 100_000);
+  }
 
   function statusPillClass(state: McpRuntimeStatus["state"]) {
     switch (state) {
@@ -397,7 +424,11 @@ function createRuntimeConsoleModel() {
   async function runSearchBackfill() {
     await withSyncAction("searchBackfill", async () => {
       try {
-        const envelope = await desktopBridge.searchBackfill(1000);
+        normalizeSearchBackfillForm();
+        const envelope = await desktopBridge.searchBackfill({
+          limit: searchBackfillForm.limit,
+          batchSize: searchBackfillForm.batchSize,
+        });
         searchBackfillResult.value = envelope.result;
         if (envelope.result.processing_error) {
           shell.pushNotice("error", envelope.result.processing_error);
@@ -466,6 +497,7 @@ function createRuntimeConsoleModel() {
     logLevelOptions,
     logs,
     mcp,
+    normalizeSearchBackfillForm,
     openLogDirectory,
     refreshLogs,
     runSearchBackfill,
@@ -474,6 +506,7 @@ function createRuntimeConsoleModel() {
     runSyncPush,
     runtime,
     saveAsDefault,
+    searchBackfillForm,
     searchBackfillResult,
     startMcp,
     statusClass,

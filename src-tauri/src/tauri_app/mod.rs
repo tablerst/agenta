@@ -167,6 +167,7 @@ struct DesktopSearchInput {
     task_code_prefix: Option<String>,
     title_prefix: Option<String>,
     limit: Option<usize>,
+    batch_size: Option<usize>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -721,7 +722,10 @@ async fn desktop_search(
             ),
             "backfill" => success(
                 "search.backfill",
-                state.service.search_backfill(input.limit).await?,
+                state
+                    .service
+                    .search_backfill(input.limit, input.batch_size)
+                    .await?,
                 "Completed search backfill",
             ),
             other => Err(AppError::InvalidAction(format!(

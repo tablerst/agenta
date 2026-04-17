@@ -852,7 +852,11 @@ impl AgentaService {
         Ok(summary)
     }
 
-    pub async fn search_backfill(&self, limit: Option<usize>) -> AppResult<SearchBackfillSummary> {
+    pub async fn search_backfill(
+        &self,
+        limit: Option<usize>,
+        batch_size: Option<usize>,
+    ) -> AppResult<SearchBackfillSummary> {
         if !self.search.vector_enabled() {
             return Err(AppError::Conflict(
                 "vector search is not enabled".to_string(),
@@ -860,6 +864,7 @@ impl AgentaService {
         }
 
         let max_to_queue = limit.unwrap_or(1_000).clamp(1, 100_000);
+        let batch_size = batch_size.unwrap_or(10).clamp(1, 200);
         let mut summary = {
             let _write_guard = self.write_queue.lock().await;
             let task_ids = self.store.list_task_ids().await?;
@@ -883,7 +888,7 @@ impl AgentaService {
 
         summary.processing_error = self
             .search
-            .process_pending_jobs(self.store.clone())
+            .process_pending_jobs_with_batch(self.store.clone(), batch_size)
             .await
             .err()
             .map(|error| error.to_string());

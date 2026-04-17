@@ -31,6 +31,11 @@ import { mockDesktopBridge } from "./mockDesktop";
 
 export type BridgeMode = "desktop" | "preview";
 
+interface SearchBackfillOptions {
+  limit?: number;
+  batchSize?: number;
+}
+
 function hasTauriRuntime() {
   return typeof window !== "undefined" && isTauri();
 }
@@ -389,11 +394,15 @@ export const desktopBridge = {
       ? callDesktop<SearchResponse>("desktop_search", input)
       : callPreview<SearchResponse>(() => mockDesktopBridge.search(input));
   },
-  searchBackfill(limit?: number) {
-    const input = { action: "backfill", limit: typeof limit === "number" ? limit : null };
+  searchBackfill(options: SearchBackfillOptions = {}) {
+    const input = {
+      action: "backfill",
+      limit: typeof options.limit === "number" ? options.limit : null,
+      batch_size: typeof options.batchSize === "number" ? options.batchSize : null,
+    };
     return resolveBridgeMode() === "desktop"
       ? callDesktop<SearchBackfillSummary>("desktop_search", input)
-      : callPreview<SearchBackfillSummary>(() => mockDesktopBridge.searchBackfill(limit));
+      : callPreview<SearchBackfillSummary>(() => mockDesktopBridge.searchBackfill(options));
   },
   approval(input: Record<string, unknown>) {
     return resolveBridgeMode() === "desktop"

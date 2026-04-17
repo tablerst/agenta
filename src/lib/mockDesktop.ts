@@ -348,8 +348,8 @@ function runPreviewPull(limit?: number): SyncPullSummary {
   };
 }
 
-function runPreviewSearchBackfill(limit?: number): SearchBackfillSummary {
-  const maxToQueue = typeof limit === "number" ? Math.max(1, limit) : 1000;
+function runPreviewSearchBackfill(options: { limit?: number; batchSize?: number } = {}): SearchBackfillSummary {
+  const maxToQueue = typeof options.limit === "number" ? Math.max(1, options.limit) : 1000;
   const scanned = state.tasks.length;
   const queued = Math.min(scanned, maxToQueue);
   return {
@@ -2044,9 +2044,13 @@ export const mockDesktopBridge = {
   search(input: JsonMap = {}) {
     return Promise.resolve(envelope("desktop_search", runSearch(input), "Loaded preview search results."));
   },
-  searchBackfill(limit?: number) {
+  searchBackfill(options: { limit?: number; batchSize?: number } = {}) {
     return Promise.resolve(
-      envelope("desktop_search", runPreviewSearchBackfill(limit), "Completed preview search backfill."),
+      envelope(
+        "desktop_search",
+        runPreviewSearchBackfill(options),
+        "Completed preview search backfill.",
+      ),
     );
   },
   openPath(_path?: string) {

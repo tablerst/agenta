@@ -1365,6 +1365,15 @@ html[data-theme="dark"] {
     color: var(--text-main);
   }
 
+  .runtime-search-index-item-control dd {
+    font-size: inherit;
+    font-weight: 400;
+  }
+
+  .runtime-search-index-input {
+    padding-bottom: 8px;
+  }
+
   .runtime-search-context-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 18px 24px;

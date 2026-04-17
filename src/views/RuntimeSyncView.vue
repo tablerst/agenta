@@ -92,22 +92,6 @@ const activeSurfaceSummary = computed(
               {{ t("runtime.actions.pull") }}
             </button>
           </div>
-          <div v-else class="flex flex-wrap items-center gap-2">
-            <button
-              class="secondary-action spotlight-surface"
-              :aria-busy="
-                runtimeConsole.isSyncActionPending('searchBackfill') ? 'true' : undefined
-              "
-              :data-pending="
-                runtimeConsole.isSyncActionPending('searchBackfill') ? 'true' : undefined
-              "
-              :disabled="runtimeConsole.syncBusy.value"
-              @click="runtimeConsole.runSearchBackfill"
-            >
-              <Search :size="14" />
-              {{ t("runtime.actions.searchBackfill") }}
-            </button>
-          </div>
         </div>
 
         <div class="task-detail-tablist runtime-sync-surface-tabs" role="tablist" :aria-label="t('runtime.sync.surfaceLabel')">
@@ -267,16 +251,50 @@ const activeSurfaceSummary = computed(
                   <h3 class="runtime-subblock-title">{{ t("runtime.searchIndex.title") }}</h3>
                   <p class="runtime-block-summary">{{ t("runtime.searchIndex.summary") }}</p>
                 </div>
+                <button
+                  class="secondary-action spotlight-surface"
+                  :aria-busy="
+                    runtimeConsole.isSyncActionPending('searchBackfill') ? 'true' : undefined
+                  "
+                  :data-pending="
+                    runtimeConsole.isSyncActionPending('searchBackfill') ? 'true' : undefined
+                  "
+                  :disabled="runtimeConsole.syncBusy.value"
+                  @click="runtimeConsole.runSearchBackfill"
+                >
+                  <Search :size="14" />
+                  {{ t("runtime.actions.searchBackfill") }}
+                </button>
               </div>
 
               <dl class="runtime-search-index-strip">
-                <div class="runtime-search-index-item">
+                <div class="runtime-search-index-item runtime-search-index-item-control">
                   <dt>{{ t("runtime.searchIndex.batchSize") }}</dt>
-                  <dd>10</dd>
+                  <dd>
+                    <input
+                      v-model.number="runtimeConsole.searchBackfillForm.batchSize"
+                      class="quiet-control-input runtime-search-index-input"
+                      inputmode="numeric"
+                      min="1"
+                      max="200"
+                      type="number"
+                      @blur="runtimeConsole.normalizeSearchBackfillForm"
+                    />
+                  </dd>
                 </div>
-                <div class="runtime-search-index-item">
+                <div class="runtime-search-index-item runtime-search-index-item-control">
                   <dt>{{ t("runtime.searchIndex.limit") }}</dt>
-                  <dd>1000</dd>
+                  <dd>
+                    <input
+                      v-model.number="runtimeConsole.searchBackfillForm.limit"
+                      class="quiet-control-input runtime-search-index-input"
+                      inputmode="numeric"
+                      min="1"
+                      max="100000"
+                      type="number"
+                      @blur="runtimeConsole.normalizeSearchBackfillForm"
+                    />
+                  </dd>
                 </div>
                 <div class="runtime-search-index-item">
                   <dt>{{ t("runtime.searchIndex.lastQueued") }}</dt>

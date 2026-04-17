@@ -814,15 +814,15 @@ async fn search_backfill_batches_embeddings_and_upserts_task_documents(
     })
     .await?;
 
-    let summary = runtime.service.search_backfill(Some(10)).await?;
+    let summary = runtime.service.search_backfill(Some(10), Some(1)).await?;
     assert_eq!(summary.scanned, 2);
     assert_eq!(summary.queued, 2);
     assert_eq!(summary.skipped, 0);
     assert_eq!(summary.pending_after, 0);
     assert!(summary.processing_error.is_none());
 
-    assert_eq!(*state.embedding_batch_sizes.lock().await, vec![2]);
-    assert_eq!(*state.upsert_batch_sizes.lock().await, vec![2]);
+    assert_eq!(*state.embedding_batch_sizes.lock().await, vec![1, 1]);
+    assert_eq!(*state.upsert_batch_sizes.lock().await, vec![1, 1]);
     let upsert_documents = state.upsert_documents.lock().await.clone();
     let flattened = upsert_documents.into_iter().flatten().collect::<Vec<_>>();
     assert!(flattened

@@ -16,6 +16,7 @@ use crate::search::TaskVectorDocument;
 use crate::storage::{SqliteStore, TaskListFilter};
 
 const INDEX_JOB_BATCH_SIZE: usize = 10;
+const MAX_INDEX_JOB_BATCH_SIZE: usize = 200;
 
 #[derive(Clone, Debug)]
 pub struct SearchVectorJob {
@@ -122,14 +123,24 @@ impl SearchRuntime {
     }
 
     pub async fn process_pending_jobs(&self, store: SqliteStore) -> AppResult<()> {
+        self.process_pending_jobs_with_batch(store, INDEX_JOB_BATCH_SIZE)
+            .await
+    }
+
+    pub async fn process_pending_jobs_with_batch(
+        &self,
+        store: SqliteStore,
+        batch_size: usize,
+    ) -> AppResult<()> {
         if !self.vector_enabled() {
             return Ok(());
         }
 
+        let batch_size = batch_size.clamp(1, MAX_INDEX_JOB_BATCH_SIZE);
         let _guard = self.inner.worker_lock.lock().await;
         loop {
-            let mut jobs = Vec::with_capacity(INDEX_JOB_BATCH_SIZE);
-            for _ in 0..INDEX_JOB_BATCH_SIZE {
+            let mut jobs = Vec::with_capacity(batch_size);
+            for _ in 0..batch_size {
                 let now = OffsetDateTime::now_utc();
                 let Some(job) = store.claim_next_search_index_job(now).await? else {
                     break;

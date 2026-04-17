@@ -367,6 +367,8 @@ struct SearchQueryArgs {
 struct SearchExecuteArgs {
     #[arg(long)]
     limit: Option<usize>,
+    #[arg(long = "batch-size")]
+    batch_size: Option<usize>,
 }
 
 #[derive(Debug, Args)]
@@ -756,7 +758,10 @@ async fn execute_search(app: AgentaApp, command: SearchCommand) -> AppResult<Suc
             success("search.query", result, "Completed search")
         }
         SearchCommand::Backfill(args) => {
-            let result = app.service.search_backfill(args.limit).await?;
+            let result = app
+                .service
+                .search_backfill(args.limit, args.batch_size)
+                .await?;
             success("search.backfill", result, "Completed search backfill")
         }
     }
