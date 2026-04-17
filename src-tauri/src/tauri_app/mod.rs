@@ -719,6 +719,11 @@ async fn desktop_search(
                     .await?,
                 "Completed search",
             ),
+            "backfill" => success(
+                "search.backfill",
+                state.service.search_backfill(input.limit).await?,
+                "Completed search backfill",
+            ),
             other => Err(AppError::InvalidAction(format!(
                 "unsupported search action: {other}"
             ))),

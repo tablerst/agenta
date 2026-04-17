@@ -398,6 +398,7 @@ struct RawSearchVectorConfig {
     autostart_sidecar: Option<bool>,
     collection: Option<String>,
     top_k: Option<usize>,
+    sidecar_data_dir: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -405,6 +406,7 @@ struct RawSearchEmbeddingConfig {
     provider: Option<SearchEmbeddingProvider>,
     base_url: Option<String>,
     api_key_env: Option<String>,
+    api_key: Option<String>,
     model: Option<String>,
     timeout_ms: Option<u64>,
 }
@@ -468,6 +470,12 @@ pub fn load_runtime_config(explicit_config_path: Option<PathBuf>) -> AppResult<R
         )?,
         "search.vector.collection",
     )?;
+    let vector_sidecar_data_dir = raw_vector
+        .sidecar_data_dir
+        .as_ref()
+        .map(|path| expand_path_vars(path).map(|path| resolve_path(&path, &config_base_dir)))
+        .transpose()?
+        .unwrap_or_else(|| data_dir.join("search").join("chroma"));
     let raw_embedding = raw_search.embedding.unwrap_or_default();
     let embedding_provider = raw_embedding
         .provider
@@ -480,20 +488,24 @@ pub fn load_runtime_config(explicit_config_path: Option<PathBuf>) -> AppResult<R
     } else {
         expand_env_vars(raw_embedding.base_url.as_deref().unwrap_or(""))?
     };
-    let embedding_api_key_env = if vector_enabled {
-        sanitize_non_empty(
-            &expand_env_vars(raw_embedding.api_key_env.as_deref().unwrap_or_default())?,
-            "search.embedding.api_key_env",
-        )?
-    } else {
-        expand_env_vars(raw_embedding.api_key_env.as_deref().unwrap_or(""))?
-    };
+    let embedding_api_key_env =
+        expand_env_vars(raw_embedding.api_key_env.as_deref().unwrap_or(""))?;
+    let embedding_api_key_inline = expand_env_vars(raw_embedding.api_key.as_deref().unwrap_or(""))?;
     let embedding_api_key = if vector_enabled {
-        env::var(&embedding_api_key_env).map_err(|_| {
-            AppError::Config(format!(
-                "missing environment variable for search embedding api key: {embedding_api_key_env}"
-            ))
-        })?
+        let inline_api_key = embedding_api_key_inline.trim().to_string();
+        if !inline_api_key.is_empty() {
+            inline_api_key
+        } else {
+            let api_key_env = sanitize_non_empty(
+                &embedding_api_key_env,
+                "search.embedding.api_key or search.embedding.api_key_env",
+            )?;
+            env::var(&api_key_env).map_err(|_| {
+                AppError::Config(format!(
+                    "missing environment variable for search embedding api key: {api_key_env}"
+                ))
+            })?
+        }
     } else {
         String::new()
     };
@@ -516,7 +528,7 @@ pub fn load_runtime_config(explicit_config_path: Option<PathBuf>) -> AppResult<R
                 .top_k
                 .unwrap_or(crate::search::DEFAULT_VECTOR_TOP_K)
                 .clamp(1, 200),
-            sidecar_data_dir: data_dir.join("search").join("chroma"),
+            sidecar_data_dir: vector_sidecar_data_dir,
         },
         embedding: SearchEmbeddingConfig {
             provider: embedding_provider,
@@ -885,6 +897,38 @@ mod tests {
 
         let config = load_runtime_config(Some(config_path)).expect("load config");
         assert_eq!(config.paths.data_dir, tempdir.path().join("expanded"));
+    }
+
+    #[test]
+    fn accepts_inline_search_embedding_api_key() {
+        let tempdir = tempdir().expect("tempdir");
+        let config_path = tempdir.path().join("agenta.local.yaml");
+        std::fs::write(
+            &config_path,
+            "search:\n  vector:\n    enabled: true\n  embedding:\n    provider: openai_compatible\n    base_url: http://127.0.0.1:65535\n    api_key: inline-test-key\n    model: text-embedding-3-small\n",
+        )
+        .expect("write config");
+
+        let config = load_runtime_config(Some(config_path)).expect("load config");
+        assert_eq!(config.search.embedding.api_key, "inline-test-key");
+        assert_eq!(config.search.embedding.api_key_env, "");
+    }
+
+    #[test]
+    fn resolves_search_sidecar_data_dir_from_config_directory() {
+        let tempdir = tempdir().expect("tempdir");
+        let config_path = tempdir.path().join("agenta.local.yaml");
+        std::fs::write(
+            &config_path,
+            "search:\n  vector:\n    enabled: true\n    sidecar_data_dir: cache/chroma-db\n  embedding:\n    provider: openai_compatible\n    base_url: http://127.0.0.1:65535\n    api_key: inline-test-key\n    model: text-embedding-3-small\n",
+        )
+        .expect("write config");
+
+        let config = load_runtime_config(Some(config_path)).expect("load config");
+        assert_eq!(
+            config.search.vector.sidecar_data_dir,
+            tempdir.path().join("cache").join("chroma-db")
+        );
     }
 
     #[test]

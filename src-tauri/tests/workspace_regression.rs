@@ -1,8 +1,15 @@
 use std::sync::Arc;
 
+use axum::extract::{Path, State};
+use axum::http::StatusCode;
+use axum::routing::{get, post};
+use axum::{Json, Router};
+use serde_json::{json, Value};
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{Connection, Executor, Row, SqliteConnection};
 use tempfile::TempDir;
+use tokio::net::TcpListener;
+use tokio::sync::Mutex;
 use tokio::task::JoinSet;
 
 use agenta_lib::{
@@ -340,6 +347,133 @@ fn normalize_path_for_yaml(path: &std::path::Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
+async fn clear_search_index_jobs(runtime: &AppRuntime) -> Result<(), Box<dyn std::error::Error>> {
+    let mut connection = SqliteConnection::connect_with(
+        &SqliteConnectOptions::new()
+            .filename(&runtime.config.paths.database_path)
+            .create_if_missing(false)
+            .busy_timeout(std::time::Duration::from_secs(5)),
+    )
+    .await?;
+    sqlx::query("DELETE FROM search_index_jobs")
+        .execute(&mut connection)
+        .await?;
+    Ok(())
+}
+
+async fn search_index_job_count(
+    runtime: &AppRuntime,
+    task_id: &str,
+) -> Result<i64, Box<dyn std::error::Error>> {
+    let mut connection = SqliteConnection::connect_with(
+        &SqliteConnectOptions::new()
+            .filename(&runtime.config.paths.database_path)
+            .create_if_missing(false)
+            .busy_timeout(std::time::Duration::from_secs(5)),
+    )
+    .await?;
+    let row = sqlx::query("SELECT COUNT(*) AS count FROM search_index_jobs WHERE task_id = ?")
+        .bind(task_id)
+        .fetch_one(&mut connection)
+        .await?;
+    Ok(row.get::<i64, _>("count"))
+}
+
+fn write_vector_test_config(
+    tempdir: &TempDir,
+    endpoint: &str,
+) -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
+    let config_path = tempdir.path().join("agenta.local.yaml");
+    let data_dir = tempdir.path().join("data");
+    let yaml = format!(
+        "paths:\n  data_dir: {}\nsearch:\n  vector:\n    enabled: true\n    endpoint: {}\n    autostart_sidecar: false\n  embedding:\n    provider: openai_compatible\n    base_url: {}\n    api_key: inline-search-key\n    model: test-embedding\n",
+        normalize_path_for_yaml(&data_dir),
+        endpoint,
+        endpoint,
+    );
+    std::fs::write(&config_path, yaml)?;
+    Ok(config_path)
+}
+
+#[derive(Clone, Default)]
+struct MockSearchServerState {
+    embedding_batch_sizes: Arc<Mutex<Vec<usize>>>,
+    upsert_batch_sizes: Arc<Mutex<Vec<usize>>>,
+    upsert_documents: Arc<Mutex<Vec<Vec<String>>>>,
+}
+
+async fn search_heartbeat() -> StatusCode {
+    StatusCode::OK
+}
+
+async fn search_collections() -> Json<Value> {
+    Json(json!({ "id": "test-collection" }))
+}
+
+async fn search_embeddings(
+    State(state): State<MockSearchServerState>,
+    Json(payload): Json<Value>,
+) -> Json<Value> {
+    let inputs = payload["input"].as_array().cloned().unwrap_or_default();
+    state.embedding_batch_sizes.lock().await.push(inputs.len());
+    Json(json!({
+        "data": inputs
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                json!({
+                    "index": index,
+                    "embedding": [index as f32 + 1.0, value.as_str().unwrap_or_default().len() as f32],
+                })
+            })
+            .collect::<Vec<_>>()
+    }))
+}
+
+async fn search_upsert(
+    State(state): State<MockSearchServerState>,
+    Path(_collection_id): Path<String>,
+    Json(payload): Json<Value>,
+) -> StatusCode {
+    let ids = payload["ids"].as_array().cloned().unwrap_or_default();
+    state.upsert_batch_sizes.lock().await.push(ids.len());
+    let documents = payload["documents"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|value| value.as_str().map(str::to_string))
+        .collect::<Vec<_>>();
+    state.upsert_documents.lock().await.push(documents);
+    StatusCode::OK
+}
+
+async fn spawn_mock_search_server(
+) -> Result<(String, MockSearchServerState, tokio::task::JoinHandle<()>), Box<dyn std::error::Error>>
+{
+    let state = MockSearchServerState::default();
+    let app = Router::new()
+        .route("/api/v2/heartbeat", get(search_heartbeat))
+        .route(
+            "/api/v2/tenants/default_tenant/databases/default_database/collections",
+            post(search_collections),
+        )
+        .route(
+            "/api/v2/tenants/default_tenant/databases/default_database/collections/{collection_id}/upsert",
+            post(search_upsert),
+        )
+        .route("/v1/embeddings", post(search_embeddings))
+        .with_state(state.clone());
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let address = format!("http://{}", listener.local_addr()?);
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("search mock server");
+    });
+    Ok((address, state, server))
+}
+
 #[tokio::test]
 async fn task_context_retrieval_fields_sort_summary_and_search(
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -587,6 +721,229 @@ async fn task_search_reindex_jobs_persist_when_vector_runtime_is_unavailable(
         .fetch_one(&mut connection)
         .await?;
     assert!(row.get::<i64, _>("count") >= 1);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn search_backfill_batches_embeddings_and_upserts_task_documents(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let tempdir = TempDir::new()?;
+    let disabled_config = write_test_config(&tempdir)?;
+    let disabled_runtime = AppRuntime::bootstrap(BootstrapOptions {
+        config_path: Some(disabled_config),
+    })
+    .await?;
+
+    let project = disabled_runtime
+        .service
+        .create_project(CreateProjectInput {
+            slug: "search-batch".to_string(),
+            name: "Search Batch Project".to_string(),
+            description: Some("Project context for vector backfill".to_string()),
+        })
+        .await?;
+    let version = disabled_runtime
+        .service
+        .create_version(CreateVersionInput {
+            project: project.slug.clone(),
+            name: "Search Batch v1".to_string(),
+            description: Some("Version context for vector backfill".to_string()),
+            status: Some(VersionStatus::Active),
+        })
+        .await?;
+    let task_a = disabled_runtime
+        .service
+        .create_task(CreateTaskInput {
+            project: project.slug.clone(),
+            version: Some(version.version_id.to_string()),
+            task_code: Some("InitCtx-Batch-A".to_string()),
+            task_kind: Some(TaskKind::Context),
+            title: "Batch vector source".to_string(),
+            summary: Some("Backfill should batch embeddings".to_string()),
+            description: Some("History should become searchable through chroma.".to_string()),
+            status: Some(TaskStatus::Ready),
+            priority: Some(TaskPriority::High),
+            created_by: Some("search-batch".to_string()),
+        })
+        .await?;
+    let task_b = disabled_runtime
+        .service
+        .create_task(CreateTaskInput {
+            project: project.slug,
+            version: Some(version.version_id.to_string()),
+            task_code: Some("InitCtx-Batch-B".to_string()),
+            task_kind: Some(TaskKind::Context),
+            title: "Attachment vector source".to_string(),
+            summary: Some("Attachment summaries should enter the vector document".to_string()),
+            description: Some(
+                "Batch processing should still include related attachment context.".to_string(),
+            ),
+            status: Some(TaskStatus::Ready),
+            priority: Some(TaskPriority::Normal),
+            created_by: Some("search-batch".to_string()),
+        })
+        .await?;
+    disabled_runtime
+        .service
+        .create_note(CreateNoteInput {
+            task: task_a.task_id.to_string(),
+            content: "Backfill conclusion note".to_string(),
+            note_kind: Some(NoteKind::Conclusion),
+            created_by: Some("search-batch".to_string()),
+        })
+        .await?;
+    let attachment_source = tempdir.path().join("search-batch-attachment.md");
+    std::fs::write(&attachment_source, "# Architecture")?;
+    disabled_runtime
+        .service
+        .create_attachment(CreateAttachmentInput {
+            task: task_b.task_id.to_string(),
+            path: attachment_source,
+            kind: None,
+            created_by: Some("search-batch".to_string()),
+            summary: Some("Architecture Overview".to_string()),
+        })
+        .await?;
+    drop(disabled_runtime);
+
+    let (endpoint, state, server) = spawn_mock_search_server().await?;
+    let enabled_config = write_vector_test_config(&tempdir, &endpoint)?;
+    let runtime = AppRuntime::bootstrap(BootstrapOptions {
+        config_path: Some(enabled_config),
+    })
+    .await?;
+
+    let summary = runtime.service.search_backfill(Some(10)).await?;
+    assert_eq!(summary.scanned, 2);
+    assert_eq!(summary.queued, 2);
+    assert_eq!(summary.skipped, 0);
+    assert_eq!(summary.pending_after, 0);
+    assert!(summary.processing_error.is_none());
+
+    assert_eq!(*state.embedding_batch_sizes.lock().await, vec![2]);
+    assert_eq!(*state.upsert_batch_sizes.lock().await, vec![2]);
+    let upsert_documents = state.upsert_documents.lock().await.clone();
+    let flattened = upsert_documents.into_iter().flatten().collect::<Vec<_>>();
+    assert!(flattened
+        .iter()
+        .any(|document| document.contains("project search-batch | Search Batch Project")));
+    assert!(flattened
+        .iter()
+        .any(|document| document.contains("version Search Batch v1")));
+    assert!(flattened
+        .iter()
+        .any(|document| document.contains("attachment Architecture Overview")));
+
+    server.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn project_version_and_attachment_changes_requeue_task_vector_jobs(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let tempdir = TempDir::new()?;
+    let config_path = tempdir.path().join("agenta.local.yaml");
+    let data_dir = tempdir.path().join("data");
+    std::fs::write(
+        &config_path,
+        format!(
+            "paths:\n  data_dir: {}\nsearch:\n  vector:\n    enabled: true\n    endpoint: http://127.0.0.1:65535\n    autostart_sidecar: false\n  embedding:\n    provider: openai_compatible\n    base_url: http://127.0.0.1:65535\n    api_key: inline-search-key\n    model: test-embedding\n",
+            normalize_path_for_yaml(&data_dir),
+        ),
+    )?;
+
+    let runtime = AppRuntime::bootstrap(BootstrapOptions {
+        config_path: Some(config_path),
+    })
+    .await?;
+
+    let project = runtime
+        .service
+        .create_project(CreateProjectInput {
+            slug: "search-requeue".to_string(),
+            name: "Search Requeue".to_string(),
+            description: Some("Project before requeue".to_string()),
+        })
+        .await?;
+    let version = runtime
+        .service
+        .create_version(CreateVersionInput {
+            project: project.slug.clone(),
+            name: "Search Requeue v1".to_string(),
+            description: Some("Version before requeue".to_string()),
+            status: Some(VersionStatus::Planning),
+        })
+        .await?;
+    let task = runtime
+        .service
+        .create_task(CreateTaskInput {
+            project: project.slug.clone(),
+            version: Some(version.version_id.to_string()),
+            task_code: Some("InitCtx-Requeue".to_string()),
+            task_kind: Some(TaskKind::Context),
+            title: "Requeue source".to_string(),
+            summary: Some("A task that should be requeued".to_string()),
+            description: Some(
+                "Project, version, and attachment changes should requeue this task.".to_string(),
+            ),
+            status: Some(TaskStatus::Ready),
+            priority: Some(TaskPriority::Normal),
+            created_by: Some("search-requeue".to_string()),
+        })
+        .await?;
+
+    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    clear_search_index_jobs(&runtime).await?;
+
+    runtime
+        .service
+        .update_project(
+            &project.slug,
+            UpdateProjectInput {
+                name: Some("Search Requeue Updated".to_string()),
+                description: Some("Project update should requeue".to_string()),
+                ..Default::default()
+            },
+        )
+        .await?;
+    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    let count_after_project = search_index_job_count(&runtime, &task.task_id.to_string()).await?;
+    assert_eq!(count_after_project, 1);
+    clear_search_index_jobs(&runtime).await?;
+
+    runtime
+        .service
+        .update_version(
+            &version.version_id.to_string(),
+            UpdateVersionInput {
+                name: Some("Search Requeue v2".to_string()),
+                description: Some("Version update should requeue".to_string()),
+                status: Some(VersionStatus::Active),
+            },
+        )
+        .await?;
+    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    let count_after_version = search_index_job_count(&runtime, &task.task_id.to_string()).await?;
+    assert_eq!(count_after_version, 1);
+    clear_search_index_jobs(&runtime).await?;
+
+    let attachment_source = tempdir.path().join("search-requeue-attachment.txt");
+    std::fs::write(&attachment_source, "attachment payload")?;
+    runtime
+        .service
+        .create_attachment(CreateAttachmentInput {
+            task: task.task_id.to_string(),
+            path: attachment_source,
+            kind: None,
+            created_by: Some("search-requeue".to_string()),
+            summary: Some("Requeue Attachment".to_string()),
+        })
+        .await?;
+    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    let count_after_attachment =
+        search_index_job_count(&runtime, &task.task_id.to_string()).await?;
+    assert_eq!(count_after_attachment, 1);
 
     Ok(())
 }

@@ -11,6 +11,81 @@ use super::mapping::{format_time, map_activity, map_task, parse_time};
 use super::{ActivityLexicalSearchRow, SqliteStore, TaskLexicalSearchRow, TaskListFilter};
 
 impl SqliteStore {
+    pub async fn list_task_ids(&self) -> AppResult<Vec<Uuid>> {
+        let rows = query(
+            r#"
+            SELECT task_id
+            FROM tasks
+            ORDER BY updated_at ASC, task_id ASC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter()
+            .map(|row| {
+                crate::storage::mapping::parse_uuid(
+                    row.get::<String, _>("task_id"),
+                    "tasks.task_id",
+                )
+            })
+            .collect()
+    }
+
+    pub async fn list_task_ids_by_project_tx(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        project_id: Uuid,
+    ) -> AppResult<Vec<Uuid>> {
+        let rows = query(
+            r#"
+            SELECT task_id
+            FROM tasks
+            WHERE project_id = ?
+            ORDER BY updated_at ASC, task_id ASC
+            "#,
+        )
+        .bind(project_id.to_string())
+        .fetch_all(&mut **tx)
+        .await?;
+
+        rows.into_iter()
+            .map(|row| {
+                crate::storage::mapping::parse_uuid(
+                    row.get::<String, _>("task_id"),
+                    "tasks.task_id",
+                )
+            })
+            .collect()
+    }
+
+    pub async fn list_task_ids_by_version_tx(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        version_id: Uuid,
+    ) -> AppResult<Vec<Uuid>> {
+        let rows = query(
+            r#"
+            SELECT task_id
+            FROM tasks
+            WHERE version_id = ?
+            ORDER BY updated_at ASC, task_id ASC
+            "#,
+        )
+        .bind(version_id.to_string())
+        .fetch_all(&mut **tx)
+        .await?;
+
+        rows.into_iter()
+            .map(|row| {
+                crate::storage::mapping::parse_uuid(
+                    row.get::<String, _>("task_id"),
+                    "tasks.task_id",
+                )
+            })
+            .collect()
+    }
+
     pub async fn insert_task(&self, task: &Task) -> AppResult<()> {
         query(
             r#"
@@ -1036,7 +1111,11 @@ impl SqliteStore {
                 t.task_id,
                 t.project_id,
                 p.slug AS project_slug,
+                p.name AS project_name,
+                p.description AS project_description,
                 t.version_id,
+                v.name AS version_name,
+                v.description AS version_description,
                 t.task_code,
                 t.task_kind,
                 t.title,
@@ -1044,11 +1123,20 @@ impl SqliteStore {
                 t.priority,
                 t.knowledge_status,
                 t.latest_note_summary,
+                (
+                    SELECT ta.content
+                    FROM task_activities ta
+                    WHERE ta.task_id = t.task_id
+                      AND ta.kind = 'attachment_ref'
+                    ORDER BY ta.created_at DESC, ta.activity_id DESC
+                    LIMIT 1
+                ) AS latest_attachment_summary,
                 t.task_search_summary,
                 t.task_context_digest,
                 t.updated_at
             FROM tasks t
             JOIN projects p ON p.project_id = t.project_id
+            LEFT JOIN versions v ON v.version_id = t.version_id
             WHERE t.task_id = ?
             "#,
         )
@@ -1062,6 +1150,7 @@ impl SqliteStore {
         let task_code = row.get::<Option<String>, _>("task_code");
         let title = row.get::<String, _>("title");
         let latest_note_summary = row.get::<Option<String>, _>("latest_note_summary");
+        let latest_attachment_summary = row.get::<Option<String>, _>("latest_attachment_summary");
         let task_search_summary = row.get::<String, _>("task_search_summary");
         let task_context_digest = row.get::<String, _>("task_context_digest");
 
@@ -1069,7 +1158,11 @@ impl SqliteStore {
             task_id: row.get::<String, _>("task_id"),
             project_id: row.get::<String, _>("project_id"),
             project_slug: row.get::<String, _>("project_slug"),
+            project_name: row.get::<String, _>("project_name"),
+            project_description: row.get::<Option<String>, _>("project_description"),
             version_id: row.get::<Option<String>, _>("version_id"),
+            version_name: row.get::<Option<String>, _>("version_name"),
+            version_description: row.get::<Option<String>, _>("version_description"),
             task_code: task_code.clone(),
             task_kind: row.get::<String, _>("task_kind"),
             title: title.clone(),
@@ -1077,13 +1170,22 @@ impl SqliteStore {
             priority: row.get::<String, _>("priority"),
             knowledge_status: row.get::<String, _>("knowledge_status"),
             latest_note_summary: latest_note_summary.clone(),
+            latest_attachment_summary: latest_attachment_summary.clone(),
             task_search_summary: task_search_summary.clone(),
             task_context_digest: task_context_digest.clone(),
             updated_at: row.get::<String, _>("updated_at"),
             document: build_task_vector_document_text(
+                &row.get::<String, _>("project_slug"),
+                &row.get::<String, _>("project_name"),
+                row.get::<Option<String>, _>("project_description")
+                    .as_deref(),
+                row.get::<Option<String>, _>("version_name").as_deref(),
+                row.get::<Option<String>, _>("version_description")
+                    .as_deref(),
                 task_code.as_deref(),
                 &title,
                 latest_note_summary.as_deref(),
+                latest_attachment_summary.as_deref(),
                 &task_search_summary,
                 &task_context_digest,
             ),

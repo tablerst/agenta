@@ -127,6 +127,15 @@ pub struct SyncPullSummary {
     pub last_remote_mutation_id: Option<i64>,
 }
 
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct SearchBackfillSummary {
+    pub scanned: usize,
+    pub queued: usize,
+    pub skipped: usize,
+    pub pending_after: usize,
+    pub processing_error: Option<String>,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct CreateProjectInput {
     pub slug: String,
@@ -837,6 +846,48 @@ impl AgentaService {
         }
 
         remote.close().await;
+        if summary.applied > 0 {
+            self.search.trigger_index_worker(self.store.clone());
+        }
+        Ok(summary)
+    }
+
+    pub async fn search_backfill(&self, limit: Option<usize>) -> AppResult<SearchBackfillSummary> {
+        if !self.search.vector_enabled() {
+            return Err(AppError::Conflict(
+                "vector search is not enabled".to_string(),
+            ));
+        }
+
+        let max_to_queue = limit.unwrap_or(1_000).clamp(1, 100_000);
+        let mut summary = {
+            let _write_guard = self.write_queue.lock().await;
+            let task_ids = self.store.list_task_ids().await?;
+            let mut tx = self.store.pool.begin().await?;
+            let now = OffsetDateTime::now_utc();
+            let queued = task_ids.len().min(max_to_queue);
+            for task_id in task_ids.iter().take(max_to_queue) {
+                self.store
+                    .upsert_search_index_job_tx(&mut tx, *task_id, now)
+                    .await?;
+            }
+            tx.commit().await?;
+            SearchBackfillSummary {
+                scanned: task_ids.len(),
+                queued,
+                skipped: task_ids.len().saturating_sub(queued),
+                pending_after: 0,
+                processing_error: None,
+            }
+        };
+
+        summary.processing_error = self
+            .search
+            .process_pending_jobs(self.store.clone())
+            .await
+            .err()
+            .map(|error| error.to_string());
+        summary.pending_after = self.store.pending_search_index_job_count().await?;
         Ok(summary)
     }
 
@@ -1895,7 +1946,10 @@ impl AgentaService {
             project.updated_at,
         )
         .await?;
+        self.queue_project_task_search_jobs_tx(&mut tx, project.project_id)
+            .await?;
         tx.commit().await?;
+        self.search.trigger_index_worker(self.store.clone());
         Ok(project)
     }
 
@@ -1984,7 +2038,10 @@ impl AgentaService {
             version.updated_at,
         )
         .await?;
+        self.queue_version_task_search_jobs_tx(&mut tx, version.version_id)
+            .await?;
         tx.commit().await?;
+        self.search.trigger_index_worker(self.store.clone());
         Ok(version)
     }
 
@@ -2817,6 +2874,8 @@ impl AgentaService {
                 attachment.created_at,
             )
             .await?;
+            self.queue_task_search_jobs_tx(&mut tx, &[attachment.task_id])
+                .await?;
             tx.commit().await?;
             Ok::<(), AppError>(())
         }
@@ -2828,7 +2887,50 @@ impl AgentaService {
             return Err(error);
         }
 
+        self.search.trigger_index_worker(self.store.clone());
         Ok(attachment)
+    }
+
+    async fn queue_task_search_jobs_tx(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        task_ids: &[Uuid],
+    ) -> AppResult<usize> {
+        if !self.search.vector_enabled() || task_ids.is_empty() {
+            return Ok(0);
+        }
+
+        let now = OffsetDateTime::now_utc();
+        for task_id in task_ids {
+            self.store
+                .upsert_search_index_job_tx(tx, *task_id, now)
+                .await?;
+        }
+        Ok(task_ids.len())
+    }
+
+    async fn queue_project_task_search_jobs_tx(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        project_id: Uuid,
+    ) -> AppResult<usize> {
+        let task_ids = self
+            .store
+            .list_task_ids_by_project_tx(tx, project_id)
+            .await?;
+        self.queue_task_search_jobs_tx(tx, &task_ids).await
+    }
+
+    async fn queue_version_task_search_jobs_tx(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        version_id: Uuid,
+    ) -> AppResult<usize> {
+        let task_ids = self
+            .store
+            .list_task_ids_by_version_tx(tx, version_id)
+            .await?;
+        self.queue_task_search_jobs_tx(tx, &task_ids).await
     }
 
     async fn task_detail_tx(
@@ -3583,6 +3685,8 @@ impl AgentaService {
                         mutation.created_at,
                     )
                     .await?;
+                self.queue_project_task_search_jobs_tx(&mut tx, project.project_id)
+                    .await?;
                 tx.commit().await?;
                 Ok(true)
             }
@@ -3615,6 +3719,8 @@ impl AgentaService {
                         mutation.local_version,
                         mutation.created_at,
                     )
+                    .await?;
+                self.queue_version_task_search_jobs_tx(&mut tx, version.version_id)
                     .await?;
                 tx.commit().await?;
                 Ok(true)
@@ -3862,6 +3968,8 @@ impl AgentaService {
                             mutation.local_version,
                             mutation.created_at,
                         )
+                        .await?;
+                    self.queue_task_search_jobs_tx(&mut tx, &[attachment.task_id])
                         .await?;
                     tx.commit().await?;
                     Ok::<(), AppError>(())

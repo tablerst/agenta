@@ -87,6 +87,7 @@ enum AttachmentCommand {
 #[derive(Debug, Subcommand)]
 enum SearchCommand {
     Query(SearchQueryArgs),
+    Backfill(SearchExecuteArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -358,6 +359,12 @@ struct SearchQueryArgs {
     task_code_prefix: Option<String>,
     #[arg(long = "title-prefix")]
     title_prefix: Option<String>,
+    #[arg(long)]
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Args)]
+struct SearchExecuteArgs {
     #[arg(long)]
     limit: Option<usize>,
 }
@@ -747,6 +754,10 @@ async fn execute_search(app: AgentaApp, command: SearchCommand) -> AppResult<Suc
                 })
                 .await?;
             success("search.query", result, "Completed search")
+        }
+        SearchCommand::Backfill(args) => {
+            let result = app.service.search_backfill(args.limit).await?;
+            success("search.backfill", result, "Completed search backfill")
         }
     }
 }

@@ -80,7 +80,11 @@ pub struct TaskVectorDocument {
     pub task_id: String,
     pub project_id: String,
     pub project_slug: String,
+    pub project_name: String,
+    pub project_description: Option<String>,
     pub version_id: Option<String>,
+    pub version_name: Option<String>,
+    pub version_description: Option<String>,
     pub task_code: Option<String>,
     pub task_kind: String,
     pub title: String,
@@ -88,6 +92,7 @@ pub struct TaskVectorDocument {
     pub priority: String,
     pub knowledge_status: String,
     pub latest_note_summary: Option<String>,
+    pub latest_attachment_summary: Option<String>,
     pub task_search_summary: String,
     pub task_context_digest: String,
     pub updated_at: String,
@@ -144,13 +149,44 @@ pub fn build_activity_search_summary(kind: TaskActivityKind, content: &str) -> S
 }
 
 pub fn build_task_vector_document_text(
+    project_slug: &str,
+    project_name: &str,
+    project_description: Option<&str>,
+    version_name: Option<&str>,
+    version_description: Option<&str>,
     task_code: Option<&str>,
     title: &str,
     latest_note_summary: Option<&str>,
+    latest_attachment_summary: Option<&str>,
     task_search_summary: &str,
     task_context_digest: &str,
 ) -> String {
     let mut parts = Vec::new();
+    let project_label = [project_slug.trim(), project_name.trim()]
+        .into_iter()
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>()
+        .join(" | ");
+    if !project_label.is_empty() {
+        parts.push(format!("project {project_label}"));
+    }
+    if let Some(project_description) = project_description.filter(|value| !value.trim().is_empty())
+    {
+        parts.push(format!(
+            "project description {}",
+            project_description.trim()
+        ));
+    }
+    if let Some(version_name) = version_name.filter(|value| !value.trim().is_empty()) {
+        parts.push(format!("version {}", version_name.trim()));
+    }
+    if let Some(version_description) = version_description.filter(|value| !value.trim().is_empty())
+    {
+        parts.push(format!(
+            "version description {}",
+            version_description.trim()
+        ));
+    }
     if let Some(task_code) = task_code.filter(|value| !value.trim().is_empty()) {
         parts.push(task_code.trim().to_owned());
     }
@@ -158,6 +194,11 @@ pub fn build_task_vector_document_text(
     if let Some(latest_note_summary) = latest_note_summary.filter(|value| !value.trim().is_empty())
     {
         parts.push(latest_note_summary.trim().to_owned());
+    }
+    if let Some(latest_attachment_summary) =
+        latest_attachment_summary.filter(|value| !value.trim().is_empty())
+    {
+        parts.push(format!("attachment {}", latest_attachment_summary.trim()));
     }
     if !task_search_summary.trim().is_empty() {
         parts.push(task_search_summary.trim().to_owned());
@@ -271,9 +312,15 @@ mod tests {
     #[test]
     fn vector_document_rollup_stays_compact() {
         let document = build_task_vector_document_text(
+            "workspace-alpha",
+            "Workspace Alpha",
+            Some("Primary workspace"),
+            Some("Alpha v1"),
+            Some("Initial release lane"),
             Some("InitCtx-1"),
             "Reusable task",
             Some("Conclusion note"),
+            Some("System architecture.md"),
             &"summary ".repeat(50),
             &"digest ".repeat(50),
         );

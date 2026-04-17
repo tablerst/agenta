@@ -35,12 +35,15 @@ search:
     backend: chroma
     endpoint: http://127.0.0.1:8000
     autostart_sidecar: true
+    sidecar_data_dir: ./local-data/search/chroma
     collection: agenta_tasks_v1
     top_k: 40
   embedding:
     provider: openai_compatible
     base_url: ${OPENAI_BASE_URL}
+    # Prefer api_key_env for secrets. api_key is also supported for local-only configs.
     api_key_env: OPENAI_API_KEY
+    # api_key: ${OPENAI_API_KEY}
     model: text-embedding-3-small
     timeout_ms: 10000
 

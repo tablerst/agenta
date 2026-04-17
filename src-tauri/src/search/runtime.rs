@@ -15,6 +15,8 @@ use crate::error::{AppError, AppResult};
 use crate::search::TaskVectorDocument;
 use crate::storage::{SqliteStore, TaskListFilter};
 
+const INDEX_JOB_BATCH_SIZE: usize = 32;
+
 #[derive(Clone, Debug)]
 pub struct SearchVectorJob {
     pub task_id: Uuid,
@@ -126,21 +128,55 @@ impl SearchRuntime {
 
         let _guard = self.inner.worker_lock.lock().await;
         loop {
-            let now = OffsetDateTime::now_utc();
-            let Some(job) = store.claim_next_search_index_job(now).await? else {
+            let mut jobs = Vec::with_capacity(INDEX_JOB_BATCH_SIZE);
+            for _ in 0..INDEX_JOB_BATCH_SIZE {
+                let now = OffsetDateTime::now_utc();
+                let Some(job) = store.claim_next_search_index_job(now).await? else {
+                    break;
+                };
+                jobs.push(job);
+            }
+            if jobs.is_empty() {
                 break;
-            };
+            }
 
-            match self.process_job(&store, &job).await {
+            let mut documents = Vec::with_capacity(jobs.len());
+            let mut queued_task_ids = Vec::with_capacity(jobs.len());
+            for job in &jobs {
+                match store.get_task_vector_document(job.task_id).await? {
+                    Some(document) => {
+                        queued_task_ids.push(job.task_id);
+                        documents.push(document);
+                    }
+                    None => {
+                        store.complete_search_index_job(job.task_id).await?;
+                    }
+                }
+            }
+
+            if documents.is_empty() {
+                continue;
+            }
+
+            match self.process_job_batch(&documents).await {
                 Ok(()) => {
-                    store.complete_search_index_job(job.task_id).await?;
+                    for task_id in queued_task_ids {
+                        store.complete_search_index_job(task_id).await?;
+                    }
                 }
                 Err(error) => {
-                    let next_attempt_at =
-                        now + time::Duration::seconds(backoff_seconds(job.attempt_count));
-                    store
-                        .fail_search_index_job(job.task_id, &error.to_string(), next_attempt_at)
-                        .await?;
+                    let error_message = error.to_string();
+                    let now = OffsetDateTime::now_utc();
+                    for job in jobs
+                        .iter()
+                        .filter(|candidate| queued_task_ids.contains(&candidate.task_id))
+                    {
+                        let next_attempt_at =
+                            now + time::Duration::seconds(backoff_seconds(job.attempt_count));
+                        store
+                            .fail_search_index_job(job.task_id, &error_message, next_attempt_at)
+                            .await?;
+                    }
                 }
             }
         }
@@ -298,14 +334,9 @@ impl SearchRuntime {
             .collect())
     }
 
-    async fn process_job(&self, store: &SqliteStore, job: &SearchVectorJob) -> AppResult<()> {
-        let Some(document) = store.get_task_vector_document(job.task_id).await? else {
-            store.complete_search_index_job(job.task_id).await?;
-            return Ok(());
-        };
-
+    async fn process_job_batch(&self, documents: &[TaskVectorDocument]) -> AppResult<()> {
         self.ensure_vector_ready().await?;
-        self.upsert_document(&document).await
+        self.upsert_documents(documents).await
     }
 
     async fn ensure_vector_ready(&self) -> AppResult<()> {
@@ -332,24 +363,46 @@ impl SearchRuntime {
         }
     }
 
-    async fn upsert_document(&self, document: &TaskVectorDocument) -> AppResult<()> {
+    async fn upsert_documents(&self, documents: &[TaskVectorDocument]) -> AppResult<()> {
+        if documents.is_empty() {
+            return Ok(());
+        }
+
         let collection_id = self.ensure_collection_id().await?;
-        let embedding = self.embed_text(&document.document).await?;
-        let metadata = json!({
-            "project_id": document.project_id,
-            "project_slug": document.project_slug,
-            "version_id": document.version_id,
-            "task_kind": document.task_kind,
-            "status": document.status,
-            "priority": document.priority,
-            "knowledge_status": document.knowledge_status,
-            "updated_at": document.updated_at,
-        });
+        let inputs = documents
+            .iter()
+            .map(|document| document.document.clone())
+            .collect::<Vec<_>>();
+        let embeddings = self.embed_texts(&inputs).await?;
+        if embeddings.len() != documents.len() {
+            return Err(AppError::Io(format!(
+                "embedding response count mismatch: expected {}, got {}",
+                documents.len(),
+                embeddings.len()
+            )));
+        }
         let payload = json!({
-            "ids": [document.task_id],
-            "embeddings": [embedding],
-            "documents": [document.document],
-            "metadatas": [metadata],
+            "ids": documents
+                .iter()
+                .map(|document| document.task_id.clone())
+                .collect::<Vec<_>>(),
+            "embeddings": embeddings,
+            "documents": inputs,
+            "metadatas": documents
+                .iter()
+                .map(|document| {
+                    json!({
+                        "project_id": document.project_id,
+                        "project_slug": document.project_slug,
+                        "version_id": document.version_id,
+                        "task_kind": document.task_kind,
+                        "status": document.status,
+                        "priority": document.priority,
+                        "knowledge_status": document.knowledge_status,
+                        "updated_at": document.updated_at,
+                    })
+                })
+                .collect::<Vec<_>>(),
         });
         let response = self
             .inner
@@ -404,8 +457,20 @@ impl SearchRuntime {
     }
 
     async fn embed_text(&self, input: &str) -> AppResult<Vec<f32>> {
+        let embeddings = self.embed_texts(&[input.to_string()]).await?;
+        embeddings
+            .into_iter()
+            .next()
+            .ok_or_else(|| AppError::Io("embedding response missing vector".to_string()))
+    }
+
+    async fn embed_texts(&self, inputs: &[String]) -> AppResult<Vec<Vec<f32>>> {
         match self.inner.config.embedding.provider {
             SearchEmbeddingProvider::OpenAiCompatible => {}
+        }
+
+        if inputs.is_empty() {
+            return Ok(Vec::new());
         }
 
         let response = self
@@ -422,7 +487,7 @@ impl SearchRuntime {
             ))
             .json(&json!({
                 "model": self.inner.config.embedding.model,
-                "input": [input],
+                "input": inputs,
             }))
             .send()
             .await
@@ -438,12 +503,11 @@ impl SearchRuntime {
             .json::<OpenAiEmbeddingResponse>()
             .await
             .map_err(|error| AppError::Io(format!("invalid embedding response: {error}")))?;
-        payload
+        Ok(payload
             .data
             .into_iter()
-            .next()
             .map(|item| item.embedding)
-            .ok_or_else(|| AppError::Io("embedding response missing vector".to_string()))
+            .collect())
     }
 
     async fn heartbeat(&self) -> bool {
