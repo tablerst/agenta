@@ -17,6 +17,8 @@ use crate::storage::{SqliteStore, TaskListFilter};
 
 const INDEX_JOB_BATCH_SIZE: usize = 10;
 const MAX_INDEX_JOB_BATCH_SIZE: usize = 200;
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 #[derive(Clone, Debug)]
 pub struct SearchVectorJob {
@@ -75,6 +77,15 @@ struct OpenAiEmbeddingResponse {
 #[derive(Deserialize)]
 struct OpenAiEmbeddingItem {
     embedding: Vec<f32>,
+}
+
+fn configure_sidecar_command(command: &mut Command) -> &mut Command {
+    #[cfg(windows)]
+    {
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    command
 }
 
 impl SearchRuntime {
@@ -260,7 +271,10 @@ impl SearchRuntime {
             .unwrap_or(8000)
             .to_string();
 
-        let mut child = Command::new("chroma")
+        let mut command = Command::new("chroma");
+        configure_sidecar_command(&mut command);
+
+        let mut child = command
             .arg("run")
             .arg("--host")
             .arg(host)

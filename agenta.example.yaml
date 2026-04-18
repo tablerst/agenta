@@ -27,7 +27,7 @@ sync:
       dsn: ${POSTGRES_DSN}
       max_conns: 30
       min_conns: 5
-      max_conn_lifetime: 3600      
+      max_conn_lifetime: 1h
 
 search:
   vector:
