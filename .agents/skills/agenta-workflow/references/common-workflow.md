@@ -1,145 +1,145 @@
 # Agenta Common Workflow
 
-本文件放 CLI / MCP 共用的工作流规则。无论入口是什么，都按这里组织 Agenta 中的项目、版本、任务和笔记。
+This file defines workflow rules shared by CLI mode and MCP mode. Regardless of the entry point, organize Agenta projects, versions, tasks, and notes according to these rules.
 
-## 1. 先判断当前属于哪类场景
+## 1. Classify The Scenario
 
-优先判断当前请求属于哪一类：
+First decide which scenario the request belongs to:
 
-- 项目初始化：仓库还没有对应 Agenta 项目或版本
-- 上下文建设：需要为某些模块创建初始化任务并沉淀导航信息
-- 任务推进：已有任务，需要补充阅读结论、设计结论或执行进度
-- 任务收口：当前任务已完成，需要更新状态、补齐总结、确认闭环
-- 索引沉淀：前面已经积累了多份上下文，需要汇总成常驻入口
+- Project initialization: the repository does not yet have a matching Agenta project or version.
+- Context setup: module-level tasks and navigation notes need to be created.
+- Task progress: an existing task needs reading conclusions, design conclusions, or implementation progress.
+- Task closeout: the current task is done and needs status, summary, and closure verification.
+- Index capture: multiple pieces of context need to be summarized into a persistent entry point.
 
-## 2. 初始化项目前先读现状
+## 2. Read Current State Before Initialization
 
-如果目标是初始化：
+If the goal is initialization:
 
-1. 先查看现有项目列表
-2. 查找是否已有与当前仓库对应的项目或近似 slug
-3. 若存在，优先复用现有项目
-4. 若不存在，再创建项目
-5. 创建版本基线，并设置为默认版本
+1. List existing projects first.
+2. Check whether a project or similar slug already matches the current repository.
+3. Reuse the existing project if one exists.
+4. Create a project only when no suitable project exists.
+5. Create a baseline version and set it as the default version when appropriate.
 
-建议命名：
+Recommended naming:
 
-- 项目：仓库名或对外可读名称
-- slug：稳定、简短、便于脚本或工具引用
-- 版本：`workspace-baseline-YYYY-MM-DD` 之类的基线名
+- Project: repository name or a readable product/project name.
+- Slug: stable, short, and convenient for scripts or tools.
+- Version: a baseline name such as `workspace-baseline-YYYY-MM-DD`.
 
-## 3. 任务拆分优先服务恢复上下文
+## 3. Decompose Tasks Around Context Recovery
 
-不要只按目录平铺任务；优先按后续最常用的恢复入口组织：
+Do not flatten tasks only by directory. Prefer the recovery entry points future contributors will use most often:
 
-- 启动与运行基线
-- API 路由与领域边界
-- 图执行与组件初始化链路
-- Service 层与依赖注入
-- MCP / EDC / Skills / VFS 集成边界
-- AI Chat / 流式 / 上传边界
-- Tracing / Langfuse / 可观测性
-- Evaluations 能力与兼容边界
-- 测试入口与高风险回归点
-- 汇总型常驻上下文索引
+- Startup and runtime baseline.
+- API routes and domain boundaries.
+- Graph execution and component initialization chain.
+- Service layer and dependency injection.
+- MCP, EDC, Skills, and VFS integration boundaries.
+- AI chat, streaming, and upload boundaries.
+- Tracing, Langfuse, and observability.
+- Evaluations capability and compatibility boundaries.
+- Test entry points and high-risk regression areas.
+- Persistent summary or context index.
 
-创建任务时显式使用一等字段：
+Use first-class fields explicitly when creating tasks:
 
-- 编号任务：填写 `task_code`，例如 `InitCtx-01`
-- 普通执行任务：`task_kind=standard`
-- 模块上下文任务：`task_kind=context`
-- 汇总/导航/常驻索引任务：`task_kind=index`
+- Numbered tasks: set `task_code`, for example `InitCtx-01`.
+- Normal execution tasks: set `task_kind=standard`.
+- Module context tasks: set `task_kind=context`.
+- Summary, navigation, or persistent index tasks: set `task_kind=index`.
 
-恢复一批编号任务时，优先用“排序后的任务列表”或“按编号前缀搜索”，而不是靠标题模糊猜测。
+When restoring a numbered task set, prefer a sorted task list or task-code prefix search instead of guessing from fuzzy titles.
 
-## 4. 并行与串行
+## 4. Parallel And Serial Work
 
-可并行：
+Safe to parallelize:
 
-- 只读探索
-- 多模块信息收集
-- 子代理阅读与总结
+- Read-only exploration.
+- Multi-module information gathering.
+- Subagent reading and summarization.
 
-尽量串行：
+Keep mostly serial:
 
-- 创建项目 / 版本
-- 批量创建任务时的最终命名与顺序校验
-- 向任务写入笔记
-- 更新任务状态
-- 回读确认是否写入成功
+- Creating projects or versions.
+- Final naming and ordering checks when creating task batches.
+- Writing notes to tasks.
+- Updating task status.
+- Reading back state to confirm writes.
 
-## 5. 任务笔记写法
+## 5. Task Note Style
 
-追加笔记时，优先写可复用内容，而不是流水账。
+When appending notes, write reusable context rather than a chat transcript.
 
-显式标注 `note_kind`：
+Set `note_kind` explicitly:
 
-- `scratch`：临时草稿或过程记录
-- `finding`：已核实发现，默认选项
-- `conclusion`：可复用结论
+- `scratch`: temporary draft or process note.
+- `finding`: verified finding, usually the default.
+- `conclusion`: reusable conclusion.
 
-推荐结构：
+Recommended structure:
 
-1. 主题与日期
-2. 已核实的关键结论
-3. 推荐阅读顺序
-4. 关键文件
-5. 主要风险 / 契约 / 注意事项
-6. 必要时补充推荐验证路径
+1. Topic and date.
+2. Verified key conclusions.
+3. Recommended reading order.
+4. Key files.
+5. Main risks, contracts, or cautions.
+6. Recommended verification path when useful.
 
-写法要求：
+Writing rules:
 
-- 结论优先，不要只贴文件名
-- 文件路径要能直接帮助后续定位
-- 风险要写“为什么危险”
-- 形成可复用结论时，用 `note_kind=conclusion`
+- Lead with conclusions, not only file names.
+- File paths should help future readers locate the relevant code directly.
+- Explain why a risk is risky.
+- Use `note_kind=conclusion` when the note is reusable as a conclusion.
 
-## 6. 决策规则
+## 6. Decision Rules
 
-### 什么时候新建任务
+### When To Create A New Task
 
-如果满足任一情况，就新建任务：
+Create a new task if any condition is true:
 
-- 该模块会在后续被反复访问
-- 该主题有独立风险边界
-- 该结论足以成为下一轮工作的入口
-- 该内容不适合塞进别的任务作为附注
+- The module will be revisited repeatedly.
+- The topic has an independent risk boundary.
+- The conclusion is enough to become the entry point for the next work session.
+- The content does not fit cleanly as an addendum to another task.
 
-### 什么时候只追加笔记
+### When To Only Append A Note
 
-只追加笔记，如果：
+Only append a note if:
 
-- 本轮只是补充已有任务的上下文
-- 没有产生新的独立主题
-- 只是对已有导航任务做增量完善
+- This work only adds context to an existing task.
+- No new independent topic was produced.
+- The work only incrementally improves an existing navigation task.
 
-### 什么时候标记为 done
+### When To Mark Done
 
-只有当以下条件基本满足时再标记为 `done`：
+Mark a task as `done` only when these conditions are mostly true:
 
-- 已有足够支撑后续恢复上下文的笔记
-- 项目 / 版本 / 任务归属正确
-- 当前轮目标已经闭环
-- 已回读确认任务状态和笔记都写入成功
+- Notes contain enough context for future recovery.
+- Project, version, and task ownership are correct.
+- The current goal is closed.
+- Task status and notes were read back and confirmed after writing.
 
-如果只是刚创建任务但尚未沉淀有价值内容，保持 `ready` 或 `in_progress` 更合适。
+If the task was just created and does not yet contain useful context, keep it `ready` or `in_progress`.
 
-## 7. 完成前检查
+## 7. Final Checks
 
-- 项目是否存在且 slug 正确
-- 默认版本是否已经设置
-- 新任务是否挂在正确版本下
-- 编号任务是否已经写入 `task_code`
-- 上下文/索引任务是否已经写入正确的 `task_kind`
-- 笔记是否已经用 `note_kind` 标明草稿、发现或结论
-- 状态是否与真实完成度一致
-- 是否已经回读确认写入成功
+- The project exists and the slug is correct.
+- The default version is set when needed.
+- New tasks are attached to the correct version.
+- Numbered tasks have `task_code`.
+- Context and index tasks have the correct `task_kind`.
+- Notes use `note_kind` to mark scratch, finding, or conclusion.
+- Status matches the true completion state.
+- Writes were confirmed by reading back the resulting state.
 
-## 8. 避免这些反模式
+## 8. Avoid These Anti-Patterns
 
-- 只创建任务标题，不补任务笔记
-- 任务很多，但没有清晰顺序编号
-- 不回读就假设写入成功
-- 所有内容都塞进一个巨型任务
-- 并行执行多个写操作导致存储锁冲突
-- 把“探索中”的任务过早标为 `done`
+- Creating task titles without useful notes.
+- Creating many tasks without clear ordering or numbering.
+- Assuming writes succeeded without reading back.
+- Putting everything into one giant task.
+- Running multiple write operations in parallel and causing storage lock conflicts.
+- Marking exploratory tasks as `done` too early.

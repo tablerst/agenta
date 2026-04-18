@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agenta Workflow"
+  short_description: "Manage Agenta project, task context, and closeout flow"
+  default_prompt: "Use $agenta-workflow to initialize or reuse an Agenta project, organize task context, and close out work."

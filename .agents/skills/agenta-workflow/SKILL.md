@@ -1,68 +1,65 @@
 ---
 name: agenta-workflow
-description: Use when managing Agenta as a project/context ledger: initialize or reuse projects and baseline versions, organize module context tasks, restore task context, append findings/conclusions, verify task state, or close out work through either CLI or MCP.
-argument-hint: 要在 Agenta 中推进的目标，例如：初始化项目、补齐模块上下文、恢复任务上下文、收口任务状态
-user-invocable: true
-disable-model-invocation: false
+description: "Use when managing Agenta as a project/context ledger: initialize or reuse projects and baseline versions, organize module context tasks, restore task context, append findings/conclusions, verify task state, or close out work through either CLI or MCP."
 ---
 
 # Agenta Workflow
 
-用于把 Agenta 当作“项目上下文账本”和“任务收口器”来使用，而不是只把它当一个待办列表。
+Use Agenta as a project context ledger and task closeout surface, not just as a todo list.
 
-## 何时使用
+## When To Use
 
-在以下场景使用这个 Skill：
+Use this skill when the work needs one or more of these outcomes:
 
-- 需要为当前仓库初始化或复用 Agenta 项目
-- 需要创建或复用版本基线，并把后续任务挂到正确版本下
-- 需要把模块级探索沉淀成上下文任务、索引任务或结论笔记
-- 需要恢复某个 Agenta 任务的历史上下文并继续推进
-- 需要在多项并行探索后收口状态、结论和风险
+- Initialize or reuse an Agenta project for the current repository.
+- Create or reuse a stable baseline version and attach later tasks to it.
+- Turn module-level exploration into reusable context tasks, index tasks, or conclusion notes.
+- Restore historical context from an Agenta task and continue the work.
+- Close out state, conclusions, and risks after parallel exploration or implementation.
 
-## 工作方式
+## Operating Modes
 
-这个 Skill 只有两套主要操作模式：
+This skill has two operating modes:
 
-1. CLI 模式
-适用：本地脚本化、批量操作、快速验收，或当前环境没有更直接的 Agenta 工具。
+1. CLI mode
 
-2. MCP 模式
-适用：当前环境已经暴露 Agenta MCP tools，或者任务本身就是围绕 tool contract / 集成边界展开。
+Use this for local scripting, batch operations, quick verification, or when Agenta MCP tools are unavailable.
 
-不要预设 CLI 是默认方式。先判断当前最直接、最稳定的边界，再进入对应模式。
+2. MCP mode
 
-## 先读哪个参考
+Use this when Agenta MCP tools are available in the current environment, or when the work is about tool contracts or integration boundaries.
 
-- 先读 `references/operating-surfaces.md`
-  用于判断当前该走 CLI 还是 MCP。
-- 再读 `references/common-workflow.md`
-  这里放所有模式共用的项目复用、任务拆分、笔记沉淀、状态收口规则。
-- 如果当前是 CLI 模式，再读 `references/cli-mode.md`
-- 如果当前是 MCP 模式，再读 `references/mcp-mode.md`
+Do not assume CLI is the default. Choose the most direct and stable boundary for the current environment before proceeding.
 
-## 产出目标
+## References To Read
 
-使用这个 Skill 后，应尽量产出以下一种或多种结果：
+- Read `references/operating-surfaces.md` first to decide between CLI and MCP.
+- Read `references/common-workflow.md` next for shared rules around project reuse, task decomposition, note capture, and status closeout.
+- If using CLI mode, read `references/cli-mode.md`.
+- If using MCP mode, read `references/mcp-mode.md`.
 
-- 一个已初始化或已确认可复用的 Agenta 项目
-- 一个稳定的默认版本基线
-- 一组按恢复入口组织好的任务
-- 绑定在任务上的 finding / conclusion 笔记
-- 可信的任务状态与知识状态
-- 一份适合后续恢复上下文的索引型任务
+## Expected Outputs
 
-## 核心约束
+After using this skill, produce one or more of these artifacts:
 
-- 先复用现有项目和版本，再创建新对象
-- 任务组织优先服务“后续如何恢复上下文”，而不是只按目录平铺
-- 显式使用 Agenta 一等字段：`task_code`、`task_kind`、`note_kind`
-- 只读探索可以并行；写入、状态更新、回读确认尽量串行
-- 每次写入后都要回读或以等价方式确认成功
+- A confirmed reusable Agenta project.
+- A stable default baseline version.
+- A set of tasks organized around future context recovery.
+- Findings or conclusion notes bound to Agenta tasks.
+- Trustworthy task state and knowledge state.
+- An index-style task suitable for restoring future context.
 
-## 直接可用的提示语
+## Constraints
 
-- `/agenta-workflow 初始化当前仓库的 Agenta 项目与基线版本`
-- `/agenta-workflow 为这个仓库排一组模块初始化上下文任务`
-- `/agenta-workflow 恢复这个 Agenta 任务的上下文并继续补充笔记`
-- `/agenta-workflow 收口本轮任务，把状态和结论同步到 Agenta`
+- Reuse existing projects and versions before creating new ones.
+- Organize tasks around how future contributors will restore context, not only around directory structure.
+- Use first-class Agenta fields explicitly: `task_code`, `task_kind`, and `note_kind`.
+- Parallelize read-only exploration when useful, but keep writes, status updates, and read-back verification serialized.
+- Confirm every write by reading back the task, note, attachment, or equivalent state.
+
+## Prompt Examples
+
+- `Use $agenta-workflow to initialize the Agenta project and baseline version for this repository.`
+- `Use $agenta-workflow to create module context tasks for this repository.`
+- `Use $agenta-workflow to restore this Agenta task context and append follow-up notes.`
+- `Use $agenta-workflow to close out this round of work and sync conclusions to Agenta.`

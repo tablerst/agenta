@@ -1,18 +1,18 @@
 # Agenta CLI Mode
 
-当 `operating-surfaces.md` 判定当前应走 CLI 时，使用本文件。
+Use this file when `operating-surfaces.md` selects CLI mode.
 
-## 基本原则
+## Principles
 
-- 正式入口：`agenta`
-- 兼容别名：`agenta-cli`
-- Standalone MCP：`agenta-mcp`
-- 除非用户明确要求兼容别名，否则优先使用 `agenta`
-- CLI 是本地脚本化、批量操作和验收边界，不是默认边界
+- Primary executable: `agenta`.
+- Compatibility alias: `agenta-cli`.
+- Standalone MCP executable: `agenta-mcp`.
+- Prefer `agenta` unless the user explicitly asks for a compatibility alias.
+- CLI is a local scripting, batch operation, and acceptance-check boundary. It is not the default boundary when MCP tools are available and appropriate.
 
-## 常见运行方式
+## Common Invocation
 
-已安装二进制：
+Installed binary:
 
 ```powershell
 agenta --help
@@ -20,7 +20,7 @@ agenta --human project list
 agenta --config agenta.local.yaml sync status
 ```
 
-仓库开发期：
+Repository development:
 
 ```powershell
 cargo run --manifest-path src-tauri/Cargo.toml --bin agenta -- --help
@@ -28,9 +28,9 @@ cargo run --manifest-path src-tauri/Cargo.toml --bin agenta -- --human project l
 cargo run --manifest-path src-tauri/Cargo.toml --bin agenta -- --config agenta.local.yaml sync status
 ```
 
-## 常用命令
+## Common Commands
 
-项目 / 版本 / 任务：
+Projects, versions, and tasks:
 
 ```powershell
 agenta project create --slug demo --name "Demo Project"
@@ -40,7 +40,7 @@ agenta task list --project demo
 agenta task update --task <task-id> --status done
 ```
 
-备注 / 附件：
+Notes and attachments:
 
 ```powershell
 agenta note create --task <task-id> --note-kind finding --content "Verified key behavior."
@@ -48,7 +48,7 @@ agenta note list --task <task-id>
 agenta attachment list --task <task-id>
 ```
 
-搜索：
+Search:
 
 ```powershell
 agenta search query --text localgpt --limit 10
@@ -56,7 +56,7 @@ agenta search query --project localgpt-langflow --task-code-prefix InitCtx- --li
 agenta search backfill --limit 1000 --batch-size 10
 ```
 
-同步：
+Sync:
 
 ```powershell
 agenta sync status
@@ -66,9 +66,9 @@ agenta sync push --limit 100
 agenta sync pull --limit 100
 ```
 
-## CLI 模式下的额外建议
+## CLI Mode Guidance
 
-- 需要批量核对结果时，用 CLI 很合适
-- 需要重复执行同一套操作时，优先保留命令序列
-- 每次写入后，优先用读取命令回看结果
-- 真正的任务组织、笔记写法和状态规则，仍然按 `common-workflow.md`
+- Use CLI mode for batch verification when it is the most stable boundary.
+- Preserve command sequences when the same operation must be repeated.
+- After each write, read back the result with the appropriate command.
+- Follow `common-workflow.md` for task organization, note style, and status rules.

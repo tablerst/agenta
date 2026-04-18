@@ -1,38 +1,38 @@
 # Agenta Operating Surfaces
 
-本文件只负责一件事：判断当前该走 CLI 还是 MCP。
+This file has one purpose: decide whether to use CLI mode or MCP mode.
 
-## 选择顺序
+## Selection Order
 
-优先选择当前环境里**最直接、最稳定、最少额外翻译层**的 Agenta 边界。
+Choose the most direct, stable Agenta boundary with the fewest translation layers in the current environment.
 
-### 1. MCP 模式
+### 1. MCP Mode
 
-优先使用 MCP，如果满足任一情况：
+Prefer MCP mode if any condition is true:
 
-- 当前环境已经直接暴露 Agenta MCP tools
-- 任务关注 tool contract、schema、集成兼容性或宿主行为
-- 用户明确要求通过 MCP / tools 方式操作
+- Agenta MCP tools are directly available in the current environment.
+- The task focuses on tool contracts, schemas, integration compatibility, or host behavior.
+- The user explicitly asks to operate through MCP or tools.
 
-进入后继续读：`mcp-mode.md`
+After choosing MCP mode, read `mcp-mode.md`.
 
-### 2. CLI 模式
+### 2. CLI Mode
 
-使用 CLI，如果满足任一情况：
+Use CLI mode if any condition is true:
 
-- 当前环境没有更直接的 Agenta 工具
-- 需要本地脚本化、批量操作或快速验收
-- 需要稳定复现一组本地命令
-- 用户明确要求命令行方式
+- No more direct Agenta tool boundary is available.
+- The task needs local scripting, batch operations, or quick acceptance checks.
+- The task needs a stable command sequence that can be repeated.
+- The user explicitly asks for command-line operation.
 
-进入后继续读：`cli-mode.md`
+After choosing CLI mode, read `cli-mode.md`.
 
-## 不要这样做
+## Avoid
 
-- 不要因为“统一”而默认绕到 CLI
-- 不要在已提供 MCP tools 的环境里再手工拼 shell 命令
-- 不要把“调用入口”当成核心目标；真正的目标是把项目、版本、任务、笔记和状态组织正确
+- Do not default to CLI only for consistency.
+- Do not hand-build shell commands when MCP tools are already available and appropriate.
+- Do not treat the invocation surface as the goal. The goal is to organize projects, versions, tasks, notes, and state correctly.
 
-## 无论哪种模式都要读
+## Always Read
 
-模式选定后，都继续读：`common-workflow.md`
+After selecting a mode, also read `common-workflow.md`.
