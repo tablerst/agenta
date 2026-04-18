@@ -11,6 +11,8 @@ pub type AppResult<T> = Result<T, AppError>;
 pub enum AppError {
     #[error("configuration error: {0}")]
     Config(String),
+    #[error("ambiguous context: {0}")]
+    AmbiguousContext(String),
     #[error("invalid arguments: {0}")]
     InvalidArguments(String),
     #[error("invalid action: {0}")]
@@ -41,6 +43,7 @@ impl AppError {
     pub fn code(&self) -> &'static str {
         match self {
             Self::Config(_) => "invalid_arguments",
+            Self::AmbiguousContext(_) => "ambiguous_context",
             Self::InvalidArguments(_) => "invalid_arguments",
             Self::InvalidAction(_) => "invalid_action",
             Self::NotFound { .. } => "not_found",
@@ -62,6 +65,7 @@ impl AppError {
     pub fn details(&self) -> serde_json::Value {
         match self {
             Self::Config(message)
+            | Self::AmbiguousContext(message)
             | Self::InvalidArguments(message)
             | Self::InvalidAction(message)
             | Self::Conflict(message)

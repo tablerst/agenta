@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { BadgeCheck } from "@lucide/vue";
+import { BadgeCheck, FolderCog, FolderOpen } from "@lucide/vue";
 import { computed, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
@@ -9,7 +9,7 @@ import { formatDesktopError } from "../lib/errorMessage";
 import { formatDateTime } from "../lib/format";
 import { projectStatusOptions } from "../lib/options";
 import { buildProjectWorkspacePath } from "../lib/projectWorkspace";
-import type { ProjectStatus, Task } from "../lib/types";
+import type { ContextInitResult, ProjectStatus, Task } from "../lib/types";
 import { useProjectsStore } from "../stores/projects";
 import { useShellStore } from "../stores/shell";
 
@@ -25,6 +25,13 @@ const projectForm = reactive({
   description: "",
   status: "active" as ProjectStatus,
 });
+
+const contextForm = reactive({
+  contextDir: "",
+  force: false,
+});
+
+const contextResult = ref<ContextInitResult | null>(null);
 
 const counts = ref({
   approvals: 0,
@@ -50,6 +57,9 @@ watch(
       projectForm.name = "";
       projectForm.description = "";
       projectForm.status = "active";
+      contextForm.contextDir = "";
+      contextForm.force = false;
+      contextResult.value = null;
       return;
     }
 
@@ -57,6 +67,7 @@ watch(
     projectForm.name = project.name;
     projectForm.description = project.description ?? "";
     projectForm.status = project.status;
+    contextResult.value = null;
 
     await projectsStore.loadVersions(project.slug);
     const [taskEnvelope, approvalEnvelope] = await Promise.all([
@@ -115,6 +126,44 @@ async function submitProjectUpdate() {
     if (await jumpToQueuedApproval(error)) {
       return;
     }
+    shell.pushNotice("error", formatDesktopError(error, t));
+  }
+}
+
+async function initProjectContext() {
+  if (!selectedProject.value) {
+    return;
+  }
+
+  try {
+    const envelope = await desktopBridge.context({
+      action: "init",
+      project: selectedProject.value.slug,
+      context_dir: contextForm.contextDir || null,
+      force: contextForm.force,
+    });
+    const result = envelope.result as ContextInitResult;
+    contextResult.value = result;
+    if (result.status === "updated") {
+      shell.pushNotice("success", t("notices.projectContextUpdated"));
+    } else if (result.status === "unchanged") {
+      shell.pushNotice("info", t("notices.projectContextUnchanged"));
+    } else {
+      shell.pushNotice("success", t("notices.projectContextInitialized"));
+    }
+  } catch (error) {
+    shell.pushNotice("error", formatDesktopError(error, t));
+  }
+}
+
+async function openContextFolder() {
+  if (!contextResult.value) {
+    return;
+  }
+
+  try {
+    await desktopBridge.openPath(contextResult.value.context_dir);
+  } catch (error) {
     shell.pushNotice("error", formatDesktopError(error, t));
   }
 }
@@ -220,6 +269,50 @@ function openSection(section: "versions" | "tasks" | "approvals") {
             <button class="primary-action spotlight-surface" @click="submitProjectUpdate">
               <BadgeCheck :size="15" />
               {{ t("projects.saveProject") }}
+            </button>
+          </div>
+        </section>
+
+        <section class="overview-meta-block">
+          <div class="overview-editor-copy">
+            <p class="section-label">{{ t("projects.contextSummary") }}</p>
+            <h3 class="overview-editor-title">{{ t("projects.contextInit") }}</h3>
+            <p class="overview-editor-summary">{{ t("projects.contextHelp") }}</p>
+          </div>
+
+          <div class="overview-field-grid">
+            <label class="form-field overview-field-wide">
+              <span class="field-label">{{ t("projects.fields.contextDir") }}</span>
+              <input
+                v-model="contextForm.contextDir"
+                class="quiet-control-input"
+                :placeholder="t('projects.placeholders.contextDir')"
+              />
+            </label>
+          </div>
+
+          <label class="inline-flex items-center gap-2 text-sm text-[var(--text-muted)]">
+            <input v-model="contextForm.force" type="checkbox" />
+            <span>{{ t("projects.contextForce") }}</span>
+          </label>
+
+          <p v-if="contextResult" class="mt-3 text-xs text-[var(--text-muted)]">
+            {{ contextResult.manifest_path }}
+          </p>
+
+          <div class="overview-editor-actions gap-2">
+            <button class="primary-action spotlight-surface" type="button" @click="initProjectContext">
+              <FolderCog :size="15" />
+              {{ t("projects.contextInit") }}
+            </button>
+            <button
+              v-if="contextResult"
+              class="secondary-action spotlight-surface"
+              type="button"
+              @click="openContextFolder"
+            >
+              <FolderOpen :size="15" />
+              {{ t("projects.contextOpenFolder") }}
             </button>
           </div>
         </section>

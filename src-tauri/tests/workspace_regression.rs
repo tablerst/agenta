@@ -20,9 +20,10 @@ use agenta_lib::{
     },
     error::AppError,
     service::{
-        CreateAttachmentInput, CreateNoteInput, CreateProjectInput, CreateTaskInput,
-        CreateVersionInput, PageRequest, SearchInput, SortOrder, TaskQuery, TaskSortBy,
-        UpdateProjectInput, UpdateTaskInput, UpdateVersionInput,
+        ApprovalQuery, ContextInitInput, ContextInitStatus, CreateAttachmentInput,
+        CreateNoteInput, CreateProjectInput, CreateTaskInput, CreateVersionInput, PageRequest,
+        SearchInput, SortOrder, TaskQuery, TaskSortBy, UpdateProjectInput, UpdateTaskInput,
+        UpdateVersionInput,
     },
 };
 
@@ -307,6 +308,7 @@ async fn workspace_flow_persists_updates_filters_and_paginates(
                 title_prefix: None,
                 sort_by: None,
                 sort_order: None,
+                all_projects: false,
             },
             PageRequest {
                 limit: Some(10),
@@ -338,6 +340,21 @@ fn write_test_config(tempdir: &TempDir) -> Result<std::path::PathBuf, Box<dyn st
     let yaml = format!(
         "paths:\n  data_dir: {}\nmcp:\n  bind: \"127.0.0.1:8787\"\n  path: \"/mcp\"\n",
         normalize_path_for_yaml(&data_dir),
+    );
+    std::fs::write(&config_path, yaml)?;
+    Ok(config_path)
+}
+
+fn write_test_config_with_project_context(
+    tempdir: &TempDir,
+    context_dir: &std::path::Path,
+) -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
+    let config_path = tempdir.path().join("agenta.local.yaml");
+    let data_dir = tempdir.path().join("data");
+    let yaml = format!(
+        "paths:\n  data_dir: {}\nproject_context:\n  paths:\n    - {}\n  manifest: project.yaml\nmcp:\n  bind: \"127.0.0.1:8787\"\n  path: \"/mcp\"\n",
+        normalize_path_for_yaml(&data_dir),
+        normalize_path_for_yaml(context_dir),
     );
     std::fs::write(&config_path, yaml)?;
     Ok(config_path)
@@ -560,6 +577,7 @@ async fn task_context_retrieval_fields_sort_summary_and_search(
                 title_prefix: None,
                 sort_by: Some(TaskSortBy::TaskCode),
                 sort_order: Some(SortOrder::Asc),
+                all_projects: false,
             },
             PageRequest {
                 limit: None,
@@ -616,6 +634,7 @@ async fn task_context_retrieval_fields_sort_summary_and_search(
             task_code_prefix: Some("InitCtx-".to_string()),
             title_prefix: None,
             limit: Some(10),
+            all_projects: false,
         })
         .await?;
     assert_eq!(filtered_search.query, None);
@@ -631,6 +650,7 @@ async fn task_context_retrieval_fields_sort_summary_and_search(
             task_code_prefix: None,
             title_prefix: None,
             limit: Some(10),
+            all_projects: false,
         })
         .await?;
     assert!(note_search
@@ -1153,6 +1173,271 @@ async fn cross_connection_write_lock_returns_storage_busy() -> Result<(), Box<dy
         Err(other) => panic!("expected storage busy error, got {other:?}"),
         Ok(task) => panic!("expected storage busy error, got task {}", task.task_id),
     }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn multiple_projects_without_scope_return_ambiguous_context(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let tempdir = TempDir::new()?;
+    let config_path = write_test_config(&tempdir)?;
+    let runtime = AppRuntime::bootstrap(BootstrapOptions {
+        config_path: Some(config_path),
+    })
+    .await?;
+
+    let alpha = runtime
+        .service
+        .create_project(CreateProjectInput {
+            slug: "scope-alpha".to_string(),
+            name: "Scope Alpha".to_string(),
+            description: None,
+        })
+        .await?;
+    let beta = runtime
+        .service
+        .create_project(CreateProjectInput {
+            slug: "scope-beta".to_string(),
+            name: "Scope Beta".to_string(),
+            description: None,
+        })
+        .await?;
+
+    for project in [&alpha, &beta] {
+        runtime
+            .service
+            .create_task(CreateTaskInput {
+                project: project.slug.clone(),
+                version: None,
+                task_code: None,
+                task_kind: None,
+                title: format!("{} task", project.name),
+                summary: Some("ambiguous scope".to_string()),
+                description: None,
+                status: Some(TaskStatus::Ready),
+                priority: Some(TaskPriority::Normal),
+                created_by: Some("scope-test".to_string()),
+            })
+            .await?;
+    }
+
+    let task_error = runtime
+        .service
+        .list_tasks(TaskQuery::default())
+        .await
+        .expect_err("task query should require an explicit scope");
+    assert!(matches!(task_error, AppError::AmbiguousContext(_)));
+
+    let search_error = runtime
+        .service
+        .search(SearchInput {
+            text: Some("task".to_string()),
+            project: None,
+            version: None,
+            task_kind: None,
+            task_code_prefix: None,
+            title_prefix: None,
+            limit: Some(10),
+            all_projects: false,
+        })
+        .await
+        .expect_err("search should require an explicit scope");
+    assert!(matches!(search_error, AppError::AmbiguousContext(_)));
+
+    let approval_error = runtime
+        .service
+        .list_approval_requests(ApprovalQuery::default())
+        .await
+        .expect_err("approval list should require an explicit scope");
+    assert!(matches!(approval_error, AppError::AmbiguousContext(_)));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn context_init_creates_and_updates_manifest() -> Result<(), Box<dyn std::error::Error>> {
+    let tempdir = TempDir::new()?;
+    let context_dir = tempdir.path().join("workspace").join("custom-context");
+    let config_path = write_test_config_with_project_context(&tempdir, &context_dir)?;
+    let runtime = AppRuntime::bootstrap(BootstrapOptions {
+        config_path: Some(config_path),
+    })
+    .await?;
+
+    let project = runtime
+        .service
+        .create_project(CreateProjectInput {
+            slug: "context-init-demo".to_string(),
+            name: "Context Init Demo".to_string(),
+            description: None,
+        })
+        .await?;
+
+    let created = runtime
+        .service
+        .init_project_context(ContextInitInput {
+            project: None,
+            workspace_root: Some(tempdir.path().join("workspace")),
+            context_dir: None,
+            instructions: None,
+            memory_dir: None,
+            force: false,
+            dry_run: false,
+        })
+        .await?;
+    assert_eq!(created.project, project.slug);
+    assert_eq!(created.status, ContextInitStatus::Created);
+    assert!(created.manifest_path.exists());
+    assert!(created.context_dir.join("memory").exists());
+    let manifest = std::fs::read_to_string(&created.manifest_path)?;
+    assert!(manifest.contains("project: context-init-demo"));
+    assert!(manifest.contains("instructions: README.md"));
+    assert!(manifest.contains("memory_dir: memory"));
+
+    let conflict = runtime
+        .service
+        .init_project_context(ContextInitInput {
+            project: Some(project.slug.clone()),
+            workspace_root: Some(tempdir.path().join("workspace")),
+            context_dir: None,
+            instructions: Some("docs/overview.md".to_string()),
+            memory_dir: Some("notes".to_string()),
+            force: false,
+            dry_run: false,
+        })
+        .await
+        .expect_err("different manifest should require force");
+    assert!(matches!(conflict, AppError::Conflict(_)));
+
+    let updated = runtime
+        .service
+        .init_project_context(ContextInitInput {
+            project: Some(project.slug),
+            workspace_root: Some(tempdir.path().join("workspace")),
+            context_dir: None,
+            instructions: Some("docs/overview.md".to_string()),
+            memory_dir: Some("notes".to_string()),
+            force: true,
+            dry_run: false,
+        })
+        .await?;
+    assert_eq!(updated.status, ContextInitStatus::Updated);
+    assert!(updated.context_dir.join("notes").exists());
+    let updated_manifest = std::fs::read_to_string(&updated.manifest_path)?;
+    assert!(updated_manifest.contains("instructions: docs/overview.md"));
+    assert!(updated_manifest.contains("memory_dir: notes"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn context_manifest_scopes_queries_and_all_projects_opt_in(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let tempdir = TempDir::new()?;
+    let context_dir = tempdir.path().join("workspace").join(".agenta");
+    std::fs::create_dir_all(&context_dir)?;
+    std::fs::write(
+        context_dir.join("project.yaml"),
+        "project: manifest-alpha\ninstructions: README.md\nmemory_dir: memory\n",
+    )?;
+    let config_path = write_test_config_with_project_context(&tempdir, &context_dir)?;
+    let runtime = AppRuntime::bootstrap(BootstrapOptions {
+        config_path: Some(config_path),
+    })
+    .await?;
+
+    let alpha = runtime
+        .service
+        .create_project(CreateProjectInput {
+            slug: "manifest-alpha".to_string(),
+            name: "Manifest Alpha".to_string(),
+            description: None,
+        })
+        .await?;
+    let beta = runtime
+        .service
+        .create_project(CreateProjectInput {
+            slug: "manifest-beta".to_string(),
+            name: "Manifest Beta".to_string(),
+            description: None,
+        })
+        .await?;
+
+    runtime
+        .service
+        .create_task(CreateTaskInput {
+            project: alpha.slug.clone(),
+            version: None,
+            task_code: None,
+            task_kind: None,
+            title: "Scoped alpha task".to_string(),
+            summary: Some("manifest scoped".to_string()),
+            description: None,
+            status: Some(TaskStatus::Ready),
+            priority: Some(TaskPriority::Normal),
+            created_by: Some("manifest-test".to_string()),
+        })
+        .await?;
+    runtime
+        .service
+        .create_task(CreateTaskInput {
+            project: beta.slug.clone(),
+            version: None,
+            task_code: None,
+            task_kind: None,
+            title: "Scoped beta task".to_string(),
+            summary: Some("manifest scoped".to_string()),
+            description: None,
+            status: Some(TaskStatus::Ready),
+            priority: Some(TaskPriority::Normal),
+            created_by: Some("manifest-test".to_string()),
+        })
+        .await?;
+
+    let scoped_tasks = runtime.service.list_tasks(TaskQuery::default()).await?;
+    assert_eq!(scoped_tasks.len(), 1);
+    assert_eq!(scoped_tasks[0].title, "Scoped alpha task");
+
+    let scoped_search = runtime
+        .service
+        .search(SearchInput {
+            text: None,
+            project: None,
+            version: None,
+            task_kind: None,
+            task_code_prefix: None,
+            title_prefix: None,
+            limit: Some(10),
+            all_projects: false,
+        })
+        .await?;
+    assert_eq!(scoped_search.tasks.len(), 1);
+    assert_eq!(scoped_search.tasks[0].title, "Scoped alpha task");
+
+    let global_tasks = runtime
+        .service
+        .list_tasks(TaskQuery {
+            all_projects: true,
+            ..Default::default()
+        })
+        .await?;
+    assert_eq!(global_tasks.len(), 2);
+
+    let global_search = runtime
+        .service
+        .search(SearchInput {
+            text: Some("Scoped".to_string()),
+            project: None,
+            version: None,
+            task_kind: None,
+            task_code_prefix: None,
+            title_prefix: None,
+            limit: Some(10),
+            all_projects: true,
+        })
+        .await?;
+    assert_eq!(global_search.tasks.len(), 2);
 
     Ok(())
 }

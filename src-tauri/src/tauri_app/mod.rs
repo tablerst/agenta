@@ -15,11 +15,11 @@ use crate::domain::ApprovalStatus;
 use crate::error::AppError;
 use crate::interface::response::{error, success, ErrorEnvelope, SuccessEnvelope};
 use crate::service::{
-    AddTaskBlockerInput, ApprovalQuery, AttachChildTaskInput, CreateAttachmentInput,
-    CreateChildTaskInput, CreateNoteInput, CreateProjectInput, CreateTaskInput, CreateVersionInput,
-    DetachChildTaskInput, PageRequest, RequestOrigin, ResolveTaskBlockerInput, ReviewApprovalInput,
-    SearchInput, SortOrder, TaskQuery, TaskSortBy, UpdateProjectInput, UpdateTaskInput,
-    UpdateVersionInput,
+    AddTaskBlockerInput, ApprovalQuery, AttachChildTaskInput, ContextInitInput,
+    ContextInitResult, CreateAttachmentInput, CreateChildTaskInput, CreateNoteInput,
+    CreateProjectInput, CreateTaskInput, CreateVersionInput, DetachChildTaskInput, PageRequest,
+    RequestOrigin, ResolveTaskBlockerInput, ReviewApprovalInput, SearchInput, SortOrder,
+    TaskQuery, TaskSortBy, UpdateProjectInput, UpdateTaskInput, UpdateVersionInput,
 };
 
 #[derive(Debug, Serialize)]
@@ -103,6 +103,18 @@ struct DesktopProjectInput {
 }
 
 #[derive(Debug, Deserialize, Default)]
+struct DesktopContextInput {
+    action: String,
+    project: Option<String>,
+    workspace_root: Option<String>,
+    context_dir: Option<String>,
+    instructions: Option<String>,
+    memory_dir: Option<String>,
+    force: Option<bool>,
+    dry_run: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, Default)]
 struct DesktopVersionInput {
     action: String,
     version: Option<String>,
@@ -117,6 +129,7 @@ struct DesktopTaskInput {
     action: String,
     task: Option<String>,
     project: Option<String>,
+    all_projects: Option<bool>,
     version: Option<String>,
     kind: Option<String>,
     task_code: Option<String>,
@@ -164,6 +177,7 @@ struct DesktopSearchInput {
     text: Option<String>,
     query: Option<String>,
     project: Option<String>,
+    all_projects: Option<bool>,
     version: Option<String>,
     task_kind: Option<String>,
     task_code_prefix: Option<String>,
@@ -176,6 +190,7 @@ struct DesktopSearchInput {
 struct DesktopApprovalInput {
     action: String,
     project: Option<String>,
+    all_projects: Option<bool>,
     request_id: Option<String>,
     status: Option<String>,
     reviewed_by: Option<String>,
@@ -248,6 +263,7 @@ async fn desktop_status(
         .list_approval_requests(ApprovalQuery {
             project: None,
             status: Some(ApprovalStatus::Pending),
+            all_projects: true,
         })
         .await
         .map_err(|app_error| error(&app_error))?;
@@ -333,6 +349,38 @@ async fn desktop_project(
             ),
             other => Err(AppError::InvalidAction(format!(
                 "unsupported project action: {other}"
+            ))),
+        }
+    }
+    .await;
+
+    result.map_err(|app_error| error(&app_error))
+}
+
+#[tauri::command]
+async fn desktop_context(
+    state: State<'_, Arc<DesktopAppState>>,
+    input: DesktopContextInput,
+) -> Result<SuccessEnvelope, ErrorEnvelope> {
+    let result: Result<SuccessEnvelope, AppError> = async {
+        match input.action.as_str() {
+            "init" => {
+                let result: ContextInitResult = state
+                    .service
+                    .init_project_context(ContextInitInput {
+                        project: input.project,
+                        workspace_root: input.workspace_root.map(PathBuf::from),
+                        context_dir: input.context_dir.map(PathBuf::from),
+                        instructions: input.instructions,
+                        memory_dir: input.memory_dir,
+                        force: input.force.unwrap_or(false),
+                        dry_run: input.dry_run.unwrap_or(false),
+                    })
+                    .await?;
+                success("context.init", result, "Initialized project context")
+            }
+            other => Err(AppError::InvalidAction(format!(
+                "unsupported context action: {other}"
             ))),
         }
     }
@@ -486,6 +534,7 @@ async fn desktop_task(
                             title_prefix: input.title_prefix,
                             sort_by: parse_optional_enum::<TaskSortBy>(input.sort_by)?,
                             sort_order: parse_optional_enum::<SortOrder>(input.sort_order)?,
+                            all_projects: input.all_projects.unwrap_or(false),
                         },
                         PageRequest::default(),
                     )
@@ -719,6 +768,7 @@ async fn desktop_search(
                         task_code_prefix: input.task_code_prefix,
                         title_prefix: input.title_prefix,
                         limit: input.limit,
+                        all_projects: input.all_projects.unwrap_or(false),
                     })
                     .await?,
                 "Completed search",
@@ -754,6 +804,7 @@ async fn desktop_approval(
                     .list_approval_requests(ApprovalQuery {
                         project: input.project,
                         status: parse_optional_enum(input.status)?,
+                        all_projects: input.all_projects.unwrap_or(false),
                     })
                     .await?;
                 success(
@@ -1009,6 +1060,7 @@ pub fn run(runtime: Arc<AppRuntime>) {
             desktop_sync_backfill,
             desktop_sync_push,
             desktop_sync_pull,
+            desktop_context,
             desktop_project,
             desktop_version,
             desktop_task,

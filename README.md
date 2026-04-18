@@ -23,6 +23,7 @@ Agenta is a local-first task and context service for agent hosts. The local desk
 - `bun run build`
 - `cargo check --manifest-path src-tauri/Cargo.toml`
 - `cargo test --manifest-path src-tauri/Cargo.toml`
+- `cargo run --manifest-path src-tauri/Cargo.toml --bin agenta -- context init --project demo`
 - `cargo run --manifest-path src-tauri/Cargo.toml --bin agenta -- sync status`
 - `cargo run --manifest-path src-tauri/Cargo.toml --bin agenta -- sync outbox list --limit 20`
 - `cargo run --manifest-path src-tauri/Cargo.toml --bin agenta -- --help`
@@ -51,6 +52,13 @@ Use `agenta.example.yaml` as the committed template. The MCP section now support
 - `mcp.log.file.path`
 - `mcp.log.ui.buffer_lines`
 
+The project context section now supports:
+
+- `project_context.paths`
+- `project_context.manifest`
+
+Agenta reads these paths as project-local context hints only. It does not own or synchronize the files inside those directories.
+
 The sync foundation section now supports:
 
 - `sync.enabled`
@@ -72,6 +80,24 @@ Current sync defaults stay intentionally conservative:
 - Only one global remote is modeled
 - Sync uses manual `status / outbox / backfill / push / pull`; background auto-sync is still disabled
 - Status output redacts PostgreSQL credentials, and Runtime exposes the same manual sync actions inside Desktop
+
+## Project Context Scoping
+
+Agenta is a task ledger, not a project memory system. In multi-project environments:
+
+- `task list` and `search query` no longer default to cross-project results
+- if the current project context directory resolves a unique project, queries scope to that project automatically
+- if only one project exists, queries still scope to it for compatibility
+- if multiple projects exist and no unique scope can be resolved, Agenta returns `ambiguous_context`
+- cross-project list/search must be explicit via `--all-projects` or `all_projects=true`
+
+Agenta also exposes a unified `context_init` action through CLI, Desktop, and MCP:
+
+- CLI: `agenta context init`
+- Desktop: project overview action
+- MCP: `context_init`
+
+Use it when a project needs an initial or migrated context directory, especially when the target path does not match the default candidates.
 
 ## Search / Chroma Prerequisites
 

@@ -44,6 +44,12 @@ export type AttachmentKind =
 export type ApprovalStatus = "pending" | "approved" | "denied" | "failed";
 export type ApprovalRequestedVia = "cli" | "mcp" | "desktop";
 export type ApprovalScope = "project" | "all";
+export type ContextInitStatus =
+  | "created"
+  | "updated"
+  | "unchanged"
+  | "would_create"
+  | "would_update";
 
 export interface Project {
   project_id: string;
@@ -64,6 +70,14 @@ export interface Version {
   status: VersionStatus;
   created_at: string;
   updated_at: string;
+}
+
+export interface ContextInitResult {
+  project: string;
+  context_dir: string;
+  manifest_path: string;
+  status: ContextInitStatus;
+  used_defaults: boolean;
 }
 
 export interface Task {

@@ -104,6 +104,7 @@ async fn runtime_service_flow_covers_core_objects_and_search(
             task_code_prefix: None,
             title_prefix: None,
             limit: Some(10),
+            all_projects: false,
         })
         .await?;
     let notes = runtime
@@ -727,6 +728,60 @@ async fn shared_runtime_serializes_service_and_mcp_writes() -> Result<(), Box<dy
         })
         .await?;
     assert_eq!(tasks.len(), 10);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn mcp_context_init_creates_manifest_in_explicit_directory(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let tempdir = TempDir::new()?;
+    let config_path = write_test_config(&tempdir)?;
+    let runtime = Arc::new(
+        AppRuntime::bootstrap(BootstrapOptions {
+            config_path: Some(config_path),
+        })
+        .await?,
+    );
+
+    let project = runtime
+        .service
+        .create_project(CreateProjectInput {
+            slug: "mcp-context-demo".to_string(),
+            name: "MCP Context Demo".to_string(),
+            description: None,
+        })
+        .await?;
+
+    let logger = McpSessionLogger::new(
+        "context-init-session".to_string(),
+        runtime
+            .config
+            .resolve_mcp_session(McpHostKind::Standalone, &McpLaunchOverrides::default())?,
+        None,
+    );
+    let server = AgentaMcpServer::new(runtime.service.clone(), logger);
+    let context_dir = tempdir.path().join("workspace").join("custom");
+
+    let output = server
+        .context_init(Parameters(
+            agenta_lib::interface::mcp::ContextInitToolInput {
+                project: Some(project.slug.clone()),
+                workspace_root: None,
+                context_dir: Some(context_dir.display().to_string()),
+                instructions: Some("README.md".to_string()),
+                memory_dir: Some("memory".to_string()),
+                force: Some(false),
+                dry_run: Some(false),
+            },
+        ))
+        .await?
+        .0;
+
+    assert_eq!(output.context.project, project.slug);
+    assert_eq!(output.context.status, "created");
+    assert!(context_dir.join("project.yaml").exists());
+    assert!(context_dir.join("memory").exists());
 
     Ok(())
 }

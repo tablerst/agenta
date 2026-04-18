@@ -6,6 +6,7 @@ import type {
   AppBridgeError,
   ApprovalRequest,
   Attachment,
+  ContextInitResult,
   McpLaunchOverrides,
   McpLogEntry,
   McpLogSnapshot,
@@ -364,6 +365,11 @@ export const desktopBridge = {
     return resolveBridgeMode() === "desktop"
       ? callDesktop<Project | Project[]>("desktop_project", input)
       : callPreview<Project | Project[]>(() => mockDesktopBridge.project(input));
+  },
+  context(input: Record<string, unknown>) {
+    return resolveBridgeMode() === "desktop"
+      ? callDesktop<ContextInitResult>("desktop_context", input)
+      : callPreview<ContextInitResult>(() => mockDesktopBridge.context(input));
   },
   version(input: Record<string, unknown>) {
     return resolveBridgeMode() === "desktop"

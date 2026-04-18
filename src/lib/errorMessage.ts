@@ -96,6 +96,9 @@ export function formatDesktopError(error: unknown, t: Translate): string {
         : t("notices.errors.invalidArguments");
     }
 
+    case "ambiguous_context":
+      return t("notices.errors.ambiguousContext");
+
     case "not_found": {
       const entity =
         typeof details?.entity === "string"

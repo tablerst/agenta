@@ -29,10 +29,34 @@ agenta --human project list
 agenta --config agenta.local.yaml sync status
 ```
 
+## 项目上下文目录
+
+Agenta 只维护 task ledger，不接管项目级记忆或说明文档。推荐在用户项目里保留一个上下文目录，例如：
+
+- `.dev_doc/.agenta`
+- `.agenta`
+- `dev_docs/.agenta`
+
+Agenta 会按配置的候选目录查找 `project.yaml`。这个 manifest 只需要提供最小项目绑定信息：
+
+```yaml
+project: demo
+instructions: README.md
+memory_dir: memory
+```
+
+Agent 推荐工作流：
+
+1. 先读取当前项目的上下文目录和 `project.yaml`
+2. 再调用 Agenta 的 `task / note / attachment / search` 工具处理账本对象
+
+如果 `project.yaml` 可解析出唯一项目，而 CLI/MCP 调用没有显式传 `project`，Agenta 会默认把查询收窄到该项目。
+
 ## 命令族
 
 当前顶层命令：
 
+- `context`: 项目上下文目录初始化
 - `project`: 项目创建、读取、列表、更新
 - `version`: 版本创建、读取、列表、更新
 - `task`: 任务创建、读取、列表、更新，以及任务关系维护
@@ -40,6 +64,29 @@ agenta --config agenta.local.yaml sync status
 - `attachment`: 任务附件创建、读取和列表
 - `search`: 任务/活动搜索，以及搜索索引回填
 - `sync`: 远端同步状态、outbox、回填、推送、拉取
+
+## 项目上下文
+
+初始化项目上下文目录：
+
+```powershell
+agenta context init --project demo
+agenta context init --project demo --workspace-root D:\repo
+agenta context init --project demo --context-dir D:\repo\.agenta --force
+agenta context init --project demo --context-dir D:\repo\.agenta --dry-run
+```
+
+参数：
+
+- `--project`: 项目标识；如果 manifest 已存在或当前数据库中只有一个项目，可省略
+- `--workspace-root`: 用来解析配置中的候选 context 目录
+- `--context-dir`: 显式指定目标上下文目录，优先级最高
+- `--instructions`: 写入 manifest 的入口文档，默认 `README.md`
+- `--memory-dir`: 写入 manifest 的记忆目录，默认 `memory`
+- `--force`: 已有 manifest 不一致时允许覆盖
+- `--dry-run`: 只返回目标路径和状态，不写文件
+
+`context init` 会创建 `project.yaml`，并在 `memory_dir` 非空时创建对应目录。
 
 ## 项目与任务
 
@@ -69,6 +116,7 @@ agenta task create `
 ```powershell
 agenta task list --project demo
 agenta task list --project demo --version <version-id> --sort-by task_code --sort-order asc
+agenta task list --all-projects
 ```
 
 更新任务：
@@ -131,7 +179,15 @@ agenta search query --text localgpt --limit 10
 agenta search query --project localgpt-langflow --text tracing --limit 10
 agenta search query --project localgpt-langflow --task-code-prefix InitCtx- --limit 20
 agenta search query --project demo --task-kind context
+agenta search query --text tracing --all-projects
 ```
+
+多项目环境下，`task list` 和 `search query` 在未显式传 `project` 时默认不会跨项目返回结果：
+
+- 如果当前项目上下文目录能解析出唯一项目，会自动收窄到该项目
+- 如果数据库里只有一个项目，也会兼容性地使用该项目
+- 如果存在多个项目且无法唯一解析，返回 `ambiguous_context`
+- 只有显式传 `--all-projects` 时才允许跨项目查询
 
 搜索结果的 `meta` 字段会说明当前检索模式：
 

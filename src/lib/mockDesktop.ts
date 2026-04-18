@@ -4,6 +4,7 @@ import type {
   ApprovalStatus,
   Attachment,
   AttachmentKind,
+  ContextInitResult,
   McpLaunchOverrides,
   McpLogEntry,
   McpLogSnapshot,
@@ -1031,6 +1032,7 @@ function buildTaskSummary(tasks: Task[]) {
 function listTasks(filters: JsonMap): TaskListPayload {
   refreshTasksDerivedFields(state.tasks.map((item) => item.task_id));
   const projectReference = typeof filters.project === "string" ? filters.project.trim() : "";
+  const allProjects = filters.all_projects === true;
   const versionReference = typeof filters.version === "string" ? filters.version.trim() : "";
   const status = typeof filters.status === "string" ? (filters.status.trim() as TaskStatus) : undefined;
   const kind = typeof filters.kind === "string" ? (filters.kind.trim() as TaskKind) : undefined;
@@ -1042,6 +1044,11 @@ function listTasks(filters: JsonMap): TaskListPayload {
     typeof filters.title_prefix === "string" && filters.title_prefix.trim() ? filters.title_prefix.trim() : "";
 
   let nextTasks = [...state.tasks];
+  if (!projectReference && !versionReference && !allProjects && state.projects.length > 1) {
+    bridgeError("ambiguous_context", "Multiple projects are available; pass project explicitly or set all_projects=true.", {
+      project_count: state.projects.length,
+    });
+  }
   if (projectReference) {
     const project = findProject(projectReference);
     nextTasks = nextTasks.filter((item) => item.project_id === project.project_id);
@@ -1186,6 +1193,37 @@ function updateVersion(input: JsonMap) {
   version.updated_at = new Date().toISOString();
   enqueuePreviewMutation(version, "update");
   return version;
+}
+
+function initProjectContext(input: JsonMap): ContextInitResult {
+  const projectReference =
+    typeof input.project === "string" && input.project.trim() ? input.project.trim() : null;
+  if (!projectReference && state.projects.length > 1) {
+    bridgeError("ambiguous_context", "Project must be provided when multiple projects are available.");
+  }
+  const project = projectReference ? findProject(projectReference) : state.projects[0];
+  if (!project) {
+    bridgeError("ambiguous_context", "Project must be provided when multiple projects are available.");
+  }
+  const workspaceRoot =
+    typeof input.workspace_root === "string" && input.workspace_root.trim()
+      ? input.workspace_root.trim()
+      : `D:/preview/workspaces/${project.slug}`;
+  const contextDir =
+    typeof input.context_dir === "string" && input.context_dir.trim()
+      ? input.context_dir.trim()
+      : `${workspaceRoot}/.agenta`;
+  const manifestPath = `${contextDir}/project.yaml`;
+  const dryRun = input.dry_run === true;
+  const force = input.force === true;
+  return {
+    project: project.slug,
+    context_dir: contextDir,
+    manifest_path: manifestPath,
+    status: dryRun ? (force ? "would_update" : "would_create") : force ? "updated" : "created",
+    used_defaults:
+      !("context_dir" in input) || !("instructions" in input) || !("memory_dir" in input),
+  };
 }
 
 function resolveTaskVersion(projectId: string, versionReference: unknown) {
@@ -1924,6 +1962,16 @@ export const mockDesktopBridge = {
       case "list":
       default:
         return Promise.resolve(envelope("desktop_project", listProjects(), "Loaded preview projects."));
+    }
+  },
+  context(input: JsonMap = {}) {
+    const action = typeof input.action === "string" ? input.action : "init";
+    switch (action) {
+      case "init":
+      default:
+        return Promise.resolve(
+          envelope("desktop_context", initProjectContext(input), "Initialized preview project context."),
+        );
     }
   },
   version(input: JsonMap = {}) {

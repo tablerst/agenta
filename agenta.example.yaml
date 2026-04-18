@@ -3,6 +3,13 @@ paths:
   database_path: ./local-data/agenta.sqlite3
   attachments_dir: ./local-data/attachments
 
+project_context:
+  paths:
+    - .dev_doc/.agenta
+    - .agenta
+    - dev_docs/.agenta
+  manifest: project.yaml
+
 mcp:
   bind: 127.0.0.1:8787
   path: /mcp

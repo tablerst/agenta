@@ -17,6 +17,25 @@ Agenta 采用 YAML-first 配置：
 - 模板：`agenta.example.yaml`
 - 本地覆盖：`agenta.local.yaml`
 
+项目上下文目录配置如下：
+
+```yaml
+project_context:
+  paths:
+    - .dev_doc/.agenta
+    - .agenta
+    - dev_docs/.agenta
+  manifest: project.yaml
+```
+
+`project.yaml` 由用户或 Agent 直接维护，Agenta 只读取，不负责初始化或同步。推荐最小内容：
+
+```yaml
+project: demo
+instructions: README.md
+memory_dir: memory
+```
+
 MCP 配置面如下：
 
 ```yaml
@@ -61,6 +80,13 @@ cargo run --manifest-path src-tauri/Cargo.toml --bin agenta-cli -- --help
 ```powershell
 cargo run --manifest-path src-tauri/Cargo.toml --bin agenta -- `
   project create --slug demo --name "Demo Project"
+```
+
+初始化项目上下文目录：
+
+```powershell
+cargo run --manifest-path src-tauri/Cargo.toml --bin agenta -- `
+  context init --project demo
 ```
 
 创建任务：
@@ -125,6 +151,7 @@ Standalone `agenta-mcp` 默认走 `stdout` 日志；若显式配置 `mcp.log.des
 
 当前工具清单：
 
+- `context_init`：初始化或更新项目上下文 manifest
 - `project_create`：创建项目
 - `project_get`：按 UUID 或 slug 读取项目
 - `project_list`：列出项目
@@ -136,7 +163,7 @@ Standalone `agenta-mcp` 默认走 `stdout` 日志；若显式配置 `mcp.log.des
 - `task_create`：创建任务，支持 `task_code`、`task_kind`
 - `task_create_child`：在父任务下创建子任务
 - `task_get`：读取任务
-- `task_list`：列出任务，支持 `project/version/status/kind/task_code_prefix/title_prefix` 过滤，以及 `sort_by/sort_order` 排序；返回 `summary`
+- `task_list`：列出任务，支持 `project/version/status/kind/task_code_prefix/title_prefix/all_projects` 过滤，以及 `sort_by/sort_order` 排序；返回 `summary`
 - `task_update`：更新任务，支持 `task_code`、`task_kind`
 - `task_attach_child`：把已有任务绑定为子任务
 - `task_detach_child`：解除父子任务关系
@@ -147,7 +174,7 @@ Standalone `agenta-mcp` 默认走 `stdout` 日志；若显式配置 `mcp.log.des
 - `attachment_create`：为任务添加附件
 - `attachment_get`：读取附件
 - `attachment_list`：列出任务附件
-- `search_query`：用结构化过滤 + 可选 query 搜索任务与任务活动；支持 `project/version/task_kind/task_code_prefix/title_prefix`
+- `search_query`：用结构化过滤 + 可选 query 搜索任务与任务活动；支持 `project/version/task_kind/task_code_prefix/title_prefix/all_projects`
 
 当前对外 contract 约束：
 
@@ -163,7 +190,21 @@ Standalone `agenta-mcp` 默认走 `stdout` 日志；若显式配置 `mcp.log.des
 - 只看上下文任务：`task_list(..., kind=context)`
 - 判断沉淀状态时优先看：`task.latest_note_summary`、`task.knowledge_status`、`task_list.summary`
 
+多项目环境下的默认行为：
+
+- `task_list`、`search_query` 在未显式传 `project` 时，不会默认跨项目返回结果
+- 如果当前项目上下文目录能解析出唯一项目，Agenta 会自动使用该项目范围
+- 如果存在多个项目且无法唯一解析，调用会返回 `ambiguous_context`
+- 只有显式传 `all_projects=true` 或 CLI `--all-projects` 时，才会跨项目查询
+
+上下文初始化建议：
+
+- Agent 或客户端先调用 `context_init`
+- 如果项目上下文目录位置不固定，显式传 `context_dir` 或 `workspace_root`
+- Desktop、CLI 和 MCP 都应复用这同一个动作，而不是各自手写目录规则
+
 接入建议：
 
 - 客户端应优先读取 `tools/list` 中的 `description`、`inputSchema`、`outputSchema`、`annotations`
 - 不要假设仍存在旧的 `project` / `version` / `task` / `note` / `attachment` / `search` 多路复用工具
+- Agent 应先读取当前项目的上下文目录，再调用 Agenta 的 task ledger tools；Agenta 不负责维护项目全局记忆

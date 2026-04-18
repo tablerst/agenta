@@ -23,10 +23,11 @@ use crate::interface::response::error_to_rmcp;
 use crate::search::SearchResponse;
 use crate::service::{
     AddTaskBlockerInput, AgentaService, AttachChildTaskInput, CreateAttachmentInput,
-    CreateChildTaskInput, CreateNoteInput, CreateProjectInput, CreateTaskInput, CreateVersionInput,
-    DetachChildTaskInput, PageCursor, PageRequest, PageResult, RequestOrigin,
-    ResolveTaskBlockerInput, SearchInput, SortOrder, TaskDetail, TaskLink, TaskListPageResult,
-    TaskQuery, TaskSortBy, UpdateProjectInput, UpdateTaskInput, UpdateVersionInput,
+    ContextInitInput, ContextInitResult, CreateChildTaskInput, CreateNoteInput,
+    CreateProjectInput, CreateTaskInput, CreateVersionInput, DetachChildTaskInput, PageCursor,
+    PageRequest, PageResult, RequestOrigin, ResolveTaskBlockerInput, SearchInput, SortOrder,
+    TaskDetail, TaskLink, TaskListPageResult, TaskQuery, TaskSortBy, UpdateProjectInput,
+    UpdateTaskInput, UpdateVersionInput,
 };
 
 #[derive(Clone)]
@@ -114,6 +115,39 @@ pub struct PageInfo {
     pub sort_by: String,
     /// Stable sort order used to produce the page.
     pub sort_order: String,
+}
+
+/// Initialize or update a project context manifest in a workspace directory.
+#[derive(Debug, Deserialize, JsonSchema, Default)]
+pub struct ContextInitToolInput {
+    /// Optional project reference. Supported values: project_id UUID or slug.
+    pub project: Option<String>,
+    /// Optional workspace root used to resolve configured context paths.
+    pub workspace_root: Option<String>,
+    /// Optional explicit context directory. Relative paths resolve against workspace_root when provided.
+    pub context_dir: Option<String>,
+    /// Optional instructions entrypoint written into the manifest. Defaults to `README.md`.
+    pub instructions: Option<String>,
+    /// Optional memory directory written into the manifest. Defaults to `memory`.
+    pub memory_dir: Option<String>,
+    /// When true, overwrite an existing manifest if its contents differ.
+    pub force: Option<bool>,
+    /// When true, do not write files and only report the resolved target and outcome.
+    pub dry_run: Option<bool>,
+}
+
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+pub struct ContextInitRecord {
+    pub project: String,
+    pub context_dir: String,
+    pub manifest_path: String,
+    pub status: String,
+    pub used_defaults: bool,
+}
+
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+pub struct ContextInitToolOutput {
+    pub context: ContextInitRecord,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -226,6 +260,18 @@ impl From<Project> for ProjectRecord {
             default_version_id: project.default_version_id.map(|value| value.to_string()),
             created_at: format_timestamp(project.created_at),
             updated_at: format_timestamp(project.updated_at),
+        }
+    }
+}
+
+impl From<ContextInitResult> for ContextInitRecord {
+    fn from(result: ContextInitResult) -> Self {
+        Self {
+            project: result.project,
+            context_dir: result.context_dir.display().to_string(),
+            manifest_path: result.manifest_path.display().to_string(),
+            status: result.status.to_string(),
+            used_defaults: result.used_defaults,
         }
     }
 }
@@ -401,6 +447,8 @@ pub struct TaskListToolInput {
         description = "Optional project filter. Supported values: project_id UUID or slug."
     )]
     pub project: Option<String>,
+    /// When true, allow listing across every project instead of requiring a single current project scope.
+    pub all_projects: Option<bool>,
     /// Optional version filter. Supported values: version_id UUID only.
     #[schemars(description = "Optional version filter. Supported values: version_id UUID only.")]
     pub version: Option<String>,
@@ -1069,6 +1117,8 @@ pub struct SearchQueryToolInput {
     pub query: Option<String>,
     /// Optional project filter. Supported values: project_id UUID or slug.
     pub project: Option<String>,
+    /// When true, allow searching across every project instead of requiring a single current project scope.
+    pub all_projects: Option<bool>,
     /// Optional version filter. Supported values: version_id UUID only.
     pub version: Option<String>,
     /// Optional task role filter. Allowed values: `standard`, `context`, `index`.
@@ -1275,6 +1325,50 @@ fn note_kind_for_activity(activity: &TaskActivity) -> NoteKind {
 
 #[tool_router(router = tool_router)]
 impl AgentaMcpServer {
+    #[tool(
+        name = "context_init",
+        description = "Initialize or update a project context manifest in a workspace or explicit context directory.",
+        annotations(
+            title = "Context Init",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    pub async fn context_init(
+        &self,
+        Parameters(params): Parameters<ContextInitToolInput>,
+    ) -> Result<Json<ContextInitToolOutput>, ErrorData> {
+        let action = "init";
+        self.log_tool_call("context_init", action).await;
+        let result = self
+            .service
+            .init_project_context(ContextInitInput {
+                project: optional_trimmed(params.project),
+                workspace_root: optional_trimmed(params.workspace_root).map(PathBuf::from),
+                context_dir: optional_trimmed(params.context_dir).map(PathBuf::from),
+                instructions: optional_trimmed(params.instructions),
+                memory_dir: optional_trimmed(params.memory_dir),
+                force: params.force.unwrap_or(false),
+                dry_run: params.dry_run.unwrap_or(false),
+            })
+            .await
+            .map(|result| ContextInitToolOutput {
+                context: ContextInitRecord::from(result),
+            })
+            .map_err(error_to_rmcp);
+        self.log_structured_tool_result(
+            "context_init",
+            action,
+            "Initialized project context",
+            &result,
+        )
+        .await;
+
+        result.map(Json)
+    }
+
     #[tool(
         name = "project_create",
         description = "Create a new project.",
@@ -1746,6 +1840,7 @@ impl AgentaMcpServer {
                     title_prefix: optional_trimmed(params.title_prefix),
                     sort_by: parse_task_sort_by(params.sort_by)?,
                     sort_order: parse_sort_order(params.sort_order)?,
+                    all_projects: params.all_projects.unwrap_or(false),
                 },
                 page_request,
             )
@@ -2282,6 +2377,7 @@ impl AgentaMcpServer {
                 task_code_prefix: optional_trimmed(params.task_code_prefix),
                 title_prefix: optional_trimmed(params.title_prefix),
                 limit: params.limit,
+                all_projects: params.all_projects.unwrap_or(false),
             })
             .await
             .map(|response| SearchQueryToolOutput::from_response(response, applied_limit))
@@ -2436,6 +2532,7 @@ mod tests {
     #[test]
     fn project_tools_follow_min_compat_contract() {
         let tools = [
+            AgentaMcpServer::context_init_tool_attr(),
             AgentaMcpServer::project_create_tool_attr(),
             AgentaMcpServer::project_get_tool_attr(),
             AgentaMcpServer::project_list_tool_attr(),

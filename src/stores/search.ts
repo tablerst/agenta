@@ -22,6 +22,7 @@ export const useSearchStore = defineStore("search", () => {
         action: "query",
         query: nextQuery,
         limit: 8,
+        all_projects: true,
       });
       results.value = envelope.result as SearchResponse;
       return results.value;

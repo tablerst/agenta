@@ -50,6 +50,7 @@ async fn require_human_creates_pending_request_and_replay_approves(
         .list_approval_requests(ApprovalQuery {
             project: Some("approval-demo".to_string()),
             status: Some(agenta_lib::domain::ApprovalStatus::Pending),
+            all_projects: false,
         })
         .await?;
     assert_eq!(pending.len(), 1);
@@ -265,6 +266,7 @@ async fn pending_approvals_survive_restart() -> Result<(), Box<dyn std::error::E
         .list_approval_requests(ApprovalQuery {
             project: Some("restart-demo".to_string()),
             status: Some(agenta_lib::domain::ApprovalStatus::Pending),
+            all_projects: false,
         })
         .await?;
 

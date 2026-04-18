@@ -120,6 +120,7 @@ async fn service_flow_persists_and_searches() {
             task_code_prefix: None,
             title_prefix: None,
             limit: Some(10),
+            all_projects: false,
         })
         .await
         .expect("search");

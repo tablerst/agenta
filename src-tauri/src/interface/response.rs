@@ -57,7 +57,9 @@ pub fn error(error: &AppError) -> ErrorEnvelope {
 pub fn error_to_rmcp(error: AppError) -> ErrorData {
     let data = Some(error.details());
     match error.code() {
-        "invalid_arguments" => ErrorData::invalid_params(error.message(), data),
+        "ambiguous_context" | "invalid_arguments" => {
+            ErrorData::invalid_params(error.message(), data)
+        }
         "not_found" => ErrorData::resource_not_found(error.message(), data),
         _ => ErrorData::internal_error(error.message(), data),
     }

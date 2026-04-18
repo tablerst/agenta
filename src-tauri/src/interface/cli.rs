@@ -7,9 +7,9 @@ use crate::error::{AppError, AppResult};
 use crate::interface::response::{error, success, SuccessEnvelope};
 use crate::service::{
     AddTaskBlockerInput, AttachChildTaskInput, CreateAttachmentInput, CreateChildTaskInput,
-    CreateNoteInput, CreateProjectInput, CreateTaskInput, CreateVersionInput, DetachChildTaskInput,
-    RequestOrigin, ResolveTaskBlockerInput, SearchInput, TaskQuery, UpdateProjectInput,
-    UpdateTaskInput, UpdateVersionInput,
+    ContextInitInput, ContextInitResult, CreateNoteInput, CreateProjectInput, CreateTaskInput,
+    CreateVersionInput, DetachChildTaskInput, RequestOrigin, ResolveTaskBlockerInput, SearchInput,
+    TaskQuery, UpdateProjectInput, UpdateTaskInput, UpdateVersionInput,
 };
 
 #[derive(Debug, Parser)]
@@ -27,6 +27,8 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum TopLevelCommand {
     #[command(subcommand)]
+    Context(ContextCommand),
+    #[command(subcommand)]
     Project(ProjectCommand),
     #[command(subcommand)]
     Version(VersionCommand),
@@ -40,6 +42,11 @@ enum TopLevelCommand {
     Search(SearchCommand),
     #[command(subcommand)]
     Sync(SyncCommand),
+}
+
+#[derive(Debug, Subcommand)]
+enum ContextCommand {
+    Init(ContextInitArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -113,6 +120,24 @@ struct ProjectCreateArgs {
     name: String,
     #[arg(long)]
     description: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct ContextInitArgs {
+    #[arg(long)]
+    project: Option<String>,
+    #[arg(long = "workspace-root")]
+    workspace_root: Option<std::path::PathBuf>,
+    #[arg(long = "context-dir")]
+    context_dir: Option<std::path::PathBuf>,
+    #[arg(long)]
+    instructions: Option<String>,
+    #[arg(long = "memory-dir")]
+    memory_dir: Option<String>,
+    #[arg(long)]
+    force: bool,
+    #[arg(long = "dry-run")]
+    dry_run: bool,
 }
 
 #[derive(Debug, Args)]
@@ -231,6 +256,8 @@ struct TaskRefArgs {
 struct TaskListArgs {
     #[arg(long)]
     project: Option<String>,
+    #[arg(long = "all-projects")]
+    all_projects: bool,
     #[arg(long)]
     version: Option<String>,
     #[arg(long)]
@@ -351,6 +378,8 @@ struct SearchQueryArgs {
     text: Option<String>,
     #[arg(long)]
     project: Option<String>,
+    #[arg(long = "all-projects")]
+    all_projects: bool,
     #[arg(long)]
     version: Option<String>,
     #[arg(long = "task-kind")]
@@ -428,6 +457,7 @@ fn cli_binary_name() -> String {
 
 async fn execute(app: AgentaApp, command: TopLevelCommand) -> AppResult<SuccessEnvelope> {
     match command {
+        TopLevelCommand::Context(command) => execute_context(app, command).await,
         TopLevelCommand::Project(command) => execute_project(app, command).await,
         TopLevelCommand::Version(command) => execute_version(app, command).await,
         TopLevelCommand::Task(command) => execute_task(app, command).await,
@@ -435,6 +465,30 @@ async fn execute(app: AgentaApp, command: TopLevelCommand) -> AppResult<SuccessE
         TopLevelCommand::Attachment(command) => execute_attachment(app, command).await,
         TopLevelCommand::Search(command) => execute_search(app, command).await,
         TopLevelCommand::Sync(command) => execute_sync(app, command).await,
+    }
+}
+
+async fn execute_context(app: AgentaApp, command: ContextCommand) -> AppResult<SuccessEnvelope> {
+    match command {
+        ContextCommand::Init(args) => {
+            let result: ContextInitResult = app
+                .service
+                .init_project_context(ContextInitInput {
+                    project: args.project,
+                    workspace_root: args.workspace_root,
+                    context_dir: args.context_dir,
+                    instructions: args.instructions,
+                    memory_dir: args.memory_dir,
+                    force: args.force,
+                    dry_run: args.dry_run,
+                })
+                .await?;
+            success(
+                "context.init",
+                result,
+                "Initialized project context",
+            )
+        }
     }
 }
 
@@ -601,6 +655,7 @@ async fn execute_task(app: AgentaApp, command: TaskCommand) -> AppResult<Success
                     title_prefix: args.title_prefix,
                     sort_by: parse_optional_enum(args.sort_by)?,
                     sort_order: parse_optional_enum(args.sort_order)?,
+                    all_projects: args.all_projects,
                 })
                 .await?;
             success(
@@ -771,6 +826,7 @@ async fn execute_search(app: AgentaApp, command: SearchCommand) -> AppResult<Suc
                     task_code_prefix: args.task_code_prefix,
                     title_prefix: args.title_prefix,
                     limit: args.limit,
+                    all_projects: args.all_projects,
                 })
                 .await?;
             success("search.query", result, "Completed search")

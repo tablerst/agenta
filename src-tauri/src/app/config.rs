@@ -21,6 +21,9 @@ const DEFAULT_SYNC_POSTGRES_MAX_CONNS: u32 = 30;
 const DEFAULT_SYNC_POSTGRES_MIN_CONNS: u32 = 5;
 const DEFAULT_SYNC_POSTGRES_MAX_CONN_LIFETIME: &str = "1h";
 const LOCAL_CONFIG_FILE: &str = "agenta.local.yaml";
+const DEFAULT_PROJECT_CONTEXT_MANIFEST: &str = "project.yaml";
+const DEFAULT_PROJECT_CONTEXT_PATHS: [&str; 3] =
+    [".dev_doc/.agenta", ".agenta", "dev_docs/.agenta"];
 
 #[derive(Clone, Debug)]
 pub struct AppPaths {
@@ -223,8 +226,15 @@ pub struct SearchConfig {
 }
 
 #[derive(Clone, Debug)]
+pub struct ProjectContextConfig {
+    pub paths: Vec<PathBuf>,
+    pub manifest: String,
+}
+
+#[derive(Clone, Debug)]
 pub struct RuntimeConfig {
     pub paths: AppPaths,
+    pub project_context: ProjectContextConfig,
     pub policy: PolicyConfig,
     pub mcp: McpConfig,
     pub sync: SyncConfig,
@@ -323,6 +333,7 @@ impl RuntimeConfig {
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 struct RawConfig {
     paths: Option<RawPaths>,
+    project_context: Option<RawProjectContextConfig>,
     policy: Option<RawPolicyConfig>,
     mcp: Option<RawMcpConfig>,
     sync: Option<RawSyncConfig>,
@@ -334,6 +345,12 @@ struct RawPaths {
     data_dir: Option<PathBuf>,
     database_path: Option<PathBuf>,
     attachments_dir: Option<PathBuf>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+struct RawProjectContextConfig {
+    paths: Option<Vec<PathBuf>>,
+    manifest: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -450,6 +467,27 @@ pub fn load_runtime_config(explicit_config_path: Option<PathBuf>) -> AppResult<R
         .map(|path| expand_path_vars(path).map(|path| resolve_path(&path, &config_base_dir)))
         .transpose()?
         .unwrap_or_else(|| data_dir.join("attachments"));
+
+    let raw_project_context = raw_config.project_context.unwrap_or_default();
+    let project_context_paths = match raw_project_context.paths {
+        Some(paths) if !paths.is_empty() => paths,
+        _ => DEFAULT_PROJECT_CONTEXT_PATHS
+            .iter()
+            .map(PathBuf::from)
+            .collect::<Vec<_>>(),
+    }
+    .into_iter()
+    .map(|path| expand_path_vars(&path))
+    .collect::<AppResult<Vec<_>>>()?;
+    let project_context_manifest = sanitize_non_empty(
+        &expand_env_vars(
+            raw_project_context
+                .manifest
+                .as_deref()
+                .unwrap_or(DEFAULT_PROJECT_CONTEXT_MANIFEST),
+        )?,
+        "project_context.manifest",
+    )?;
 
     let raw_search = raw_config.search.clone().unwrap_or_default();
     let raw_vector = raw_search.vector.unwrap_or_default();
@@ -637,6 +675,10 @@ pub fn load_runtime_config(explicit_config_path: Option<PathBuf>) -> AppResult<R
             database_path,
             attachments_dir,
             loaded_config_path: config_path,
+        },
+        project_context: ProjectContextConfig {
+            paths: project_context_paths,
+            manifest: project_context_manifest,
         },
         policy: PolicyConfig::from_raw(raw_config.policy.unwrap_or_default()),
         mcp: McpConfig {
@@ -886,6 +928,48 @@ mod tests {
             tempdir.path().join("data").join("custom.sqlite3")
         );
         assert_eq!(config.paths.attachments_dir, tempdir.path().join("files"));
+    }
+
+    #[test]
+    fn project_context_defaults_when_omitted() {
+        let tempdir = tempdir().expect("tempdir");
+        let config_path = tempdir.path().join("agenta.local.yaml");
+        std::fs::write(&config_path, "paths:\n  data_dir: ./data\n").expect("write config");
+
+        let config = load_runtime_config(Some(config_path)).expect("load config");
+        assert_eq!(config.project_context.manifest, "project.yaml");
+        assert_eq!(
+            config.project_context.paths,
+            vec![
+                PathBuf::from(".dev_doc/.agenta"),
+                PathBuf::from(".agenta"),
+                PathBuf::from("dev_docs/.agenta"),
+            ]
+        );
+    }
+
+    #[test]
+    fn project_context_expands_configured_paths_and_manifest() {
+        let _guard = environment_lock().lock().expect("lock test environment");
+        let tempdir = tempdir().expect("tempdir");
+        let config_path = tempdir.path().join("agenta.local.yaml");
+        std::env::set_var("AGENTA_CONTEXT_PATH", "context/.agenta");
+        std::env::set_var("AGENTA_CONTEXT_MANIFEST", "workspace.yaml");
+        std::fs::write(
+            &config_path,
+            "project_context:\n  paths:\n    - ${AGENTA_CONTEXT_PATH}\n    - .agenta\n  manifest: ${AGENTA_CONTEXT_MANIFEST}\n",
+        )
+        .expect("write config");
+
+        let config = load_runtime_config(Some(config_path)).expect("load config");
+        assert_eq!(
+            config.project_context.paths,
+            vec![PathBuf::from("context/.agenta"), PathBuf::from(".agenta")]
+        );
+        assert_eq!(config.project_context.manifest, "workspace.yaml");
+
+        std::env::remove_var("AGENTA_CONTEXT_PATH");
+        std::env::remove_var("AGENTA_CONTEXT_MANIFEST");
     }
 
     #[test]

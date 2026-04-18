@@ -1,7 +1,7 @@
-use std::sync::Arc;
-
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::fs as std_fs;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -12,7 +12,7 @@ use tokio::sync::Mutex;
 use url::Url;
 use uuid::Uuid;
 
-use crate::app::{SearchConfig, SyncConfig, SyncRemoteConfig, SyncRemoteKind};
+use crate::app::{ProjectContextConfig, SearchConfig, SyncConfig, SyncRemoteConfig, SyncRemoteKind};
 use crate::domain::{
     ApprovalRequest, ApprovalRequestedVia, ApprovalStatus, Attachment, AttachmentKind,
     KnowledgeStatus, NoteKind, Project, ProjectStatus, SyncCheckpointKind, SyncEntityKind,
@@ -37,6 +37,7 @@ pub struct AgentaService {
     policy: PolicyEngine,
     sync: SyncConfig,
     search: SearchRuntime,
+    project_context: ProjectContextConfig,
     write_queue: Arc<Mutex<()>>,
 }
 
@@ -134,6 +135,54 @@ pub struct SearchBackfillSummary {
     pub skipped: usize,
     pub pending_after: usize,
     pub processing_error: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextInitStatus {
+    Created,
+    Updated,
+    Unchanged,
+    WouldCreate,
+    WouldUpdate,
+}
+
+impl ContextInitStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Created => "created",
+            Self::Updated => "updated",
+            Self::Unchanged => "unchanged",
+            Self::WouldCreate => "would_create",
+            Self::WouldUpdate => "would_update",
+        }
+    }
+}
+
+impl std::fmt::Display for ContextInitStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct ContextInitInput {
+    pub project: Option<String>,
+    pub workspace_root: Option<PathBuf>,
+    pub context_dir: Option<PathBuf>,
+    pub instructions: Option<String>,
+    pub memory_dir: Option<String>,
+    pub force: bool,
+    pub dry_run: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ContextInitResult {
+    pub project: String,
+    pub context_dir: PathBuf,
+    pub manifest_path: PathBuf,
+    pub status: ContextInitStatus,
+    pub used_defaults: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -264,6 +313,7 @@ pub struct TaskQuery {
     pub title_prefix: Option<String>,
     pub sort_by: Option<TaskSortBy>,
     pub sort_order: Option<SortOrder>,
+    pub all_projects: bool,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -451,12 +501,27 @@ pub struct SearchInput {
     pub task_code_prefix: Option<String>,
     pub title_prefix: Option<String>,
     pub limit: Option<usize>,
+    pub all_projects: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct ApprovalQuery {
     pub project: Option<String>,
     pub status: Option<ApprovalStatus>,
+    pub all_projects: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct ProjectContextManifest {
+    project: Option<String>,
+    instructions: Option<String>,
+    memory_dir: Option<String>,
+}
+
+#[derive(Debug)]
+struct ContextInitTarget {
+    context_dir: PathBuf,
+    manifest_path: PathBuf,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -513,6 +578,7 @@ impl AgentaService {
         policy: PolicyEngine,
         sync: SyncConfig,
         search_config: SearchConfig,
+        project_context: ProjectContextConfig,
         _data_dir: PathBuf,
     ) -> AppResult<Self> {
         let search = SearchRuntime::new(search_config)?;
@@ -522,6 +588,7 @@ impl AgentaService {
             policy,
             sync,
             search,
+            project_context,
             write_queue: Arc::new(Mutex::new(())),
         })
     }
@@ -530,6 +597,82 @@ impl AgentaService {
         Ok(ServiceOverview {
             project_count: self.store.project_count().await?,
             task_count: self.store.task_count().await?,
+        })
+    }
+
+    pub async fn init_project_context(&self, input: ContextInitInput) -> AppResult<ContextInitResult> {
+        let _write_guard = self.write_queue.lock().await;
+
+        let target = self.resolve_context_init_target(
+            input.workspace_root.as_deref(),
+            input.context_dir.as_deref(),
+        )?;
+        let existing_manifest = if target.manifest_path.is_file() {
+            Some(self.read_project_context_manifest(&target.manifest_path)?)
+        } else {
+            None
+        };
+        let project = self
+            .resolve_context_init_project(input.project.as_deref(), existing_manifest.as_ref())
+            .await?;
+
+        let instructions = input
+            .instructions
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("README.md")
+            .to_string();
+        let memory_dir = input
+            .memory_dir
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("memory")
+            .to_string();
+        let desired_manifest = ProjectContextManifest {
+            project: Some(project.clone()),
+            instructions: Some(instructions.clone()),
+            memory_dir: Some(memory_dir.clone()),
+        };
+        let used_defaults =
+            input.context_dir.is_none() || input.instructions.is_none() || input.memory_dir.is_none();
+
+        let status = match existing_manifest {
+            Some(existing) => {
+                let unchanged = manifests_match(&existing, &desired_manifest);
+                if unchanged {
+                    ContextInitStatus::Unchanged
+                } else if input.dry_run {
+                    ContextInitStatus::WouldUpdate
+                } else if input.force {
+                    self.write_project_context(&target.context_dir, &target.manifest_path, &desired_manifest)
+                        .await?;
+                    ContextInitStatus::Updated
+                } else {
+                    return Err(AppError::Conflict(
+                        "context manifest already exists with different values; pass force to update"
+                            .to_string(),
+                    ));
+                }
+            }
+            None => {
+                if input.dry_run {
+                    ContextInitStatus::WouldCreate
+                } else {
+                    self.write_project_context(&target.context_dir, &target.manifest_path, &desired_manifest)
+                        .await?;
+                    ContextInitStatus::Created
+                }
+            }
+        };
+
+        Ok(ContextInitResult {
+            project,
+            context_dir: target.context_dir,
+            manifest_path: target.manifest_path,
+            status,
+            used_defaults,
         })
     }
 
@@ -641,7 +784,12 @@ impl AgentaService {
             }
         }
 
-        let tasks = self.list_tasks(TaskQuery::default()).await?;
+        let tasks = self
+            .list_tasks(TaskQuery {
+                all_projects: true,
+                ..TaskQuery::default()
+            })
+            .await?;
         for task in &tasks {
             let queued = self
                 .backfill_entity_if_untracked(
@@ -1617,17 +1765,6 @@ impl AgentaService {
     pub async fn search(&self, input: SearchInput) -> AppResult<SearchResponse> {
         let query_text = input.text.and_then(|value| clean_optional(Some(value)));
         let normalized_query = query_text.as_deref().and_then(normalize_search_query);
-        if normalized_query.is_none()
-            && input.project.is_none()
-            && input.version.is_none()
-            && input.task_kind.is_none()
-            && input.task_code_prefix.is_none()
-            && input.title_prefix.is_none()
-        {
-            return Err(AppError::InvalidArguments(
-                "search requires query text or at least one structured filter".to_string(),
-            ));
-        }
 
         let limit = input
             .limit
@@ -1642,8 +1779,22 @@ impl AgentaService {
             title_prefix: input.title_prefix,
             sort_by: None,
             sort_order: None,
+            all_projects: input.all_projects,
         };
         let filter = self.resolve_task_filter(&task_query).await?;
+        if normalized_query.is_none()
+            && filter.project_id.is_none()
+            && filter.version_id.is_none()
+            && filter.status.is_none()
+            && filter.task_kind.is_none()
+            && filter.task_code_prefix.is_none()
+            && filter.title_prefix.is_none()
+        {
+            return Err(AppError::InvalidArguments(
+                "search requires query text, a project context, or at least one structured filter"
+                    .to_string(),
+            ));
+        }
         let pending_index_jobs = self.store.pending_search_index_job_count().await?;
         let retrieval_mode = if normalized_query.is_none() {
             "structured_only".to_string()
@@ -1777,7 +1928,10 @@ impl AgentaService {
         &self,
         query: ApprovalQuery,
     ) -> AppResult<Vec<ApprovalRequest>> {
-        let (project_slug_filter, project_id_filter) = match query.project.as_deref() {
+        let project_scope = self
+            .resolve_project_scope(query.project.as_deref(), None, query.all_projects)
+            .await?;
+        let (project_slug_filter, project_id_filter) = match project_scope.as_deref() {
             Some(reference) => match self.store.get_project_by_ref(reference).await {
                 Ok(project) => (Some(project.slug), Some(project.project_id.to_string())),
                 Err(AppError::NotFound { .. }) => (Some(reference.to_string()), None),
@@ -4041,8 +4195,13 @@ impl AgentaService {
     }
 
     async fn resolve_task_filter(&self, query: &TaskQuery) -> AppResult<TaskListFilter> {
+        let project_ref = self.resolve_project_scope(
+            query.project.as_deref(),
+            query.version.as_deref(),
+            query.all_projects,
+        ).await?;
         Ok(TaskListFilter {
-            project_id: match query.project.as_deref() {
+            project_id: match project_ref.as_deref() {
                 Some(reference) => Some(self.store.get_project_by_ref(reference).await?.project_id),
                 None => None,
             },
@@ -4055,6 +4214,190 @@ impl AgentaService {
             task_code_prefix: query.task_code_prefix.clone(),
             title_prefix: query.title_prefix.clone(),
         })
+    }
+
+    async fn resolve_context_init_project(
+        &self,
+        explicit_project: Option<&str>,
+        existing_manifest: Option<&ProjectContextManifest>,
+    ) -> AppResult<String> {
+        if let Some(project) = explicit_project
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return Ok(project.to_string());
+        }
+        if let Some(project) = existing_manifest
+            .and_then(|manifest| manifest.project.as_deref())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return Ok(project.to_string());
+        }
+        self.single_project_scope().await?.ok_or_else(|| {
+            AppError::AmbiguousContext(
+                "project must be provided when multiple projects are available".to_string(),
+            )
+        })
+    }
+
+    fn resolve_context_init_target(
+        &self,
+        workspace_root: Option<&Path>,
+        context_dir: Option<&Path>,
+    ) -> AppResult<ContextInitTarget> {
+        if let Some(context_dir) = context_dir {
+            let base_dir = workspace_root
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+            let resolved_context_dir = if context_dir.is_absolute() {
+                context_dir.to_path_buf()
+            } else {
+                base_dir.join(context_dir)
+            };
+            let manifest_path = resolved_context_dir.join(&self.project_context.manifest);
+            return Ok(ContextInitTarget {
+                context_dir: resolved_context_dir,
+                manifest_path,
+            });
+        }
+
+        let workspace_root = workspace_root
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+        if let Some(manifest_path) = self.find_context_manifest_from_base(&workspace_root)? {
+            let context_dir = manifest_path
+                .parent()
+                .map(Path::to_path_buf)
+                .ok_or_else(|| AppError::Config("context manifest must have a parent directory".to_string()))?;
+            return Ok(ContextInitTarget {
+                context_dir,
+                manifest_path,
+            });
+        }
+
+        let candidate = self
+            .project_context
+            .paths
+            .first()
+            .cloned()
+            .ok_or_else(|| AppError::Config("project_context.paths must not be empty".to_string()))?;
+        let context_dir = if candidate.is_absolute() {
+            candidate
+        } else {
+            workspace_root.join(candidate)
+        };
+        let manifest_path = context_dir.join(&self.project_context.manifest);
+        Ok(ContextInitTarget {
+            context_dir,
+            manifest_path,
+        })
+    }
+
+    async fn write_project_context(
+        &self,
+        context_dir: &Path,
+        manifest_path: &Path,
+        manifest: &ProjectContextManifest,
+    ) -> AppResult<()> {
+        fs::create_dir_all(context_dir).await?;
+        if let Some(memory_dir) = manifest
+            .memory_dir
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            fs::create_dir_all(context_dir.join(memory_dir)).await?;
+        }
+        let serialized = serde_yaml::to_string(manifest)?;
+        fs::write(manifest_path, serialized).await.map_err(AppError::from)
+    }
+
+    fn read_project_context_manifest(&self, manifest_path: &Path) -> AppResult<ProjectContextManifest> {
+        let content = std_fs::read_to_string(manifest_path).map_err(AppError::from)?;
+        serde_yaml::from_str::<ProjectContextManifest>(&content).map_err(AppError::from)
+    }
+
+    async fn resolve_project_scope(
+        &self,
+        explicit_project: Option<&str>,
+        version_ref: Option<&str>,
+        all_projects: bool,
+    ) -> AppResult<Option<String>> {
+        if let Some(project) = explicit_project
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return Ok(Some(project.to_string()));
+        }
+        if all_projects || version_ref.is_some_and(|value| !value.trim().is_empty()) {
+            return Ok(None);
+        }
+        if let Some(project) = self.project_from_context_manifest()? {
+            return Ok(Some(project));
+        }
+        self.single_project_scope().await
+    }
+
+    async fn single_project_scope(&self) -> AppResult<Option<String>> {
+        let projects = self.store.list_projects().await?;
+        if projects.is_empty() {
+            return Ok(None);
+        }
+        let active_projects = projects
+            .iter()
+            .filter(|project| project.status == ProjectStatus::Active)
+            .collect::<Vec<_>>();
+        if active_projects.len() == 1 {
+            return Ok(Some(active_projects[0].slug.clone()));
+        }
+        if active_projects.is_empty() && projects.len() == 1 {
+            return Ok(Some(projects[0].slug.clone()));
+        }
+        Err(AppError::AmbiguousContext(
+            "multiple projects are available; pass project explicitly or set all_projects=true"
+                .to_string(),
+        ))
+    }
+
+    fn project_from_context_manifest(&self) -> AppResult<Option<String>> {
+        let Some(manifest_path) = self.find_project_context_manifest()? else {
+            return Ok(None);
+        };
+        let manifest = self.read_project_context_manifest(&manifest_path)?;
+        Ok(manifest.project.and_then(|value| {
+            let trimmed = value.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        }))
+    }
+
+    fn find_project_context_manifest(&self) -> AppResult<Option<PathBuf>> {
+        let current_dir = std::env::current_dir().map_err(AppError::from)?;
+        self.find_context_manifest_from_ancestors(&current_dir)
+    }
+
+    fn find_context_manifest_from_base(&self, base_dir: &Path) -> AppResult<Option<PathBuf>> {
+        for context_path in &self.project_context.paths {
+            let context_dir = if context_path.is_absolute() {
+                context_path.clone()
+            } else {
+                base_dir.join(context_path)
+            };
+            let manifest_path = context_dir.join(&self.project_context.manifest);
+            if manifest_path.is_file() {
+                return Ok(Some(manifest_path));
+            }
+        }
+        Ok(None)
+    }
+
+    fn find_context_manifest_from_ancestors(&self, current_dir: &Path) -> AppResult<Option<PathBuf>> {
+        for base_dir in current_dir.ancestors() {
+            if let Some(manifest_path) = self.find_context_manifest_from_base(base_dir)? {
+                return Ok(Some(manifest_path));
+            }
+        }
+        Ok(None)
     }
 }
 
@@ -4083,6 +4426,21 @@ fn clean_optional(value: Option<String>) -> Option<String> {
             Some(trimmed.to_string())
         }
     })
+}
+
+fn manifests_match(left: &ProjectContextManifest, right: &ProjectContextManifest) -> bool {
+    normalize_manifest_value(left.project.as_deref()) == normalize_manifest_value(right.project.as_deref())
+        && normalize_manifest_value(left.instructions.as_deref())
+            == normalize_manifest_value(right.instructions.as_deref())
+        && normalize_manifest_value(left.memory_dir.as_deref())
+            == normalize_manifest_value(right.memory_dir.as_deref())
+}
+
+fn normalize_manifest_value(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 fn require_non_empty(value: String, field: &str) -> AppResult<String> {

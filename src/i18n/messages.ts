@@ -96,6 +96,13 @@ const baseMessages = {
       createProjectSummary: "Open a new project shell without crowding the registry list.",
       createVersion: "Create Version",
       created: "Created",
+      contextDir: "Context directory",
+      contextForce: "Overwrite existing manifest",
+      contextHelp:
+        "Initialize a project context manifest for agents. Use a full path when this project binds to a non-default location.",
+      contextInit: "Initialize context",
+      contextOpenFolder: "Open context folder",
+      contextSummary: "Project context",
       defaultVersion: "Default Version",
       defaultVersionSet: "Default version set",
       editProject: "Edit Project",
@@ -103,6 +110,7 @@ const baseMessages = {
       emptySelection: "Select a project from the list to inspect metadata and manage versions.",
       emptyVersionDescription: "No version description.",
       fields: {
+        contextDir: "Context directory",
         description: "Project description",
         name: "Project name",
         slug: "Project slug",
@@ -123,6 +131,7 @@ const baseMessages = {
       pendingProjectSummary: "This project is still waiting on approval. Review the queued request to continue.",
       pendingProjectTitle: "Project {project} is not available yet",
       placeholders: {
+        contextDir: "For example: D:/repo/.agenta",
         projectName: "Displayed project name",
         projectDescription: "Short project description",
         releaseNotes: "Scope, highlights, or release notes",
@@ -380,6 +389,8 @@ const baseMessages = {
       approvalProcessed: "Approval processed.",
       attachmentAdded: "Attachment added.",
       errors: {
+        ambiguousContext:
+          "Agenta could not determine a single project context. Set the project or context path explicitly.",
         conflict: "This request conflicts with existing data.",
         desktopBridgeError: "Desktop bridge returned an error.",
         invalidAction: "This action is not supported.",
@@ -392,6 +403,9 @@ const baseMessages = {
         versionProjectConflict: "The selected version does not belong to the current project.",
       },
       noteAdded: "Note added.",
+      projectContextInitialized: "Project context initialized.",
+      projectContextUpdated: "Project context updated.",
+      projectContextUnchanged: "Project context is already up to date.",
       projectCreated: "Project created.",
       projectUpdated: "Project updated.",
       requestDenied: "Request denied.",
@@ -501,6 +515,13 @@ const baseMessages = {
       createProjectSummary: "在不挤占注册表浏览空间的前提下创建新项目工作区。",
       createVersion: "创建版本",
       created: "创建时间",
+      contextDir: "上下文目录",
+      contextForce: "覆盖已有 manifest",
+      contextHelp:
+        "为 Agent 初始化项目上下文 manifest；如果这个项目绑定到非默认位置，请直接填写完整路径。",
+      contextInit: "初始化上下文",
+      contextOpenFolder: "打开上下文目录",
+      contextSummary: "项目上下文",
       defaultVersion: "默认版本",
       defaultVersionSet: "已设置默认版本",
       editProject: "编辑项目",
@@ -508,6 +529,7 @@ const baseMessages = {
       emptySelection: "从列表中选择一个项目，查看元数据并管理版本。",
       emptyVersionDescription: "暂未填写版本描述。",
       fields: {
+        contextDir: "上下文目录",
         description: "项目说明",
         name: "项目名称",
         slug: "项目标识",
@@ -528,6 +550,7 @@ const baseMessages = {
       pendingProjectSummary: "该项目仍在等待人工审批，可在审批区段查看排队请求并继续处理。",
       pendingProjectTitle: "项目 {project} 暂不可用",
       placeholders: {
+        contextDir: "例如 D:/repo/.agenta",
         projectName: "对外显示的项目名称",
         projectDescription: "用一句话说明项目目标或背景",
         releaseNotes: "填写范围、亮点或发布说明",
@@ -784,6 +807,7 @@ const baseMessages = {
       approvalProcessed: "审批已处理。",
       attachmentAdded: "附件已添加。",
       errors: {
+        ambiguousContext: "Agenta 无法确定唯一的项目上下文，请显式指定项目或上下文路径。",
         conflict: "当前请求与现有数据冲突。",
         desktopBridgeError: "桌面桥接返回了错误。",
         invalidAction: "当前操作暂不支持。",
@@ -796,6 +820,9 @@ const baseMessages = {
         versionProjectConflict: "所选版本不属于当前项目。",
       },
       noteAdded: "备注已添加。",
+      projectContextInitialized: "项目上下文已初始化。",
+      projectContextUpdated: "项目上下文已更新。",
+      projectContextUnchanged: "项目上下文已经是最新状态。",
       projectCreated: "项目已创建。",
       projectUpdated: "项目已更新。",
       requestDenied: "请求已拒绝。",

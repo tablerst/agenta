@@ -35,6 +35,7 @@ impl AgentaApp {
             policy,
             config.sync.clone(),
             config.search.clone(),
+            config.project_context.clone(),
             config.paths.data_dir.clone(),
         )?;
 
