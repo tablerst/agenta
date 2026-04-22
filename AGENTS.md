@@ -30,6 +30,13 @@ Current Tauri config points at Bun:
 - The TODO tracker must record completion status for every tracked item; remarks are optional but recommended when a task is blocked, descoped, or needs follow-up.
 - Prefer practical, handoff-friendly headings in active plans such as `背景`, `方案`, `执行步骤`, and `TODO 追踪` so the document stays easy to scan and keep current.
 
+## Workflow Ergonomics
+- When adjacent execution-plan tasks share one code path or one implementation batch, it is acceptable to advance them as a phase bundle instead of pretending only one task moved.
+- After each substantive phase, keep three surfaces synchronized: code and verification artifacts, active execution-plan status, and Agenta task notes/statuses.
+- When changing an Agenta contract that spans multiple surfaces, update the affected service/domain/storage code, CLI, MCP, desktop bridge or mock bridge, frontend types, and tests in the same batch unless the user explicitly wants an intermediate partial state.
+- Before adding a new SQL migration under `src-tauri/migrations/`, verify that the numeric prefix is not already taken.
+- For tests that bootstrap isolated runtime configs, pin `project_context.paths` to a temp-local directory so repository-level `.agenta/project.yaml` files do not leak into scope resolution.
+
 ## Configuration Conventions
 - Prefer YAML for persisted runtime configuration across apps, packages, tools, and local services.
 - Commit safe templates as `*.example.yaml` or `*.example.yml`; keep machine-local or secret-bearing overrides in `*.local.yaml` or `*.local.yml`.

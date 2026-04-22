@@ -52,10 +52,13 @@ Search:
 ## MCP Usage Habits
 
 - Use `project_list` or `project_get` first to decide whether to reuse an existing project.
+- If a new version is supposed to be the active lane, verify and update `version.status` plus `project.default_version` before implementation starts.
 - When restoring context, prefer `task_list` or `search_query`.
 - Set `task_code` explicitly when creating numbered tasks.
 - Set `task_kind` explicitly when creating context or index tasks.
 - Set `note_kind` explicitly when writing notes.
+- When one batch advances multiple adjacent tasks, issue explicit `task_update` and `note_create` calls for each affected task instead of only updating the first one.
+- After serialized writes, read back the updated task or note state before moving on.
 
 ## MCP Mode Guidance
 

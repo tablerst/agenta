@@ -28,6 +28,12 @@ Recommended naming:
 - Slug: stable, short, and convenient for scripts or tools.
 - Version: a baseline name such as `workspace-baseline-YYYY-MM-DD`.
 
+If the request assumes a new version is now the active lane:
+
+1. Read the current project default version and relevant version statuses first.
+2. If the previous version was intentionally closed, verify that state instead of assuming it.
+3. Mark the target version `active` and update the project default version before starting implementation, so later tasks inherit the correct lane.
+
 ## 3. Decompose Tasks Around Context Recovery
 
 Do not flatten tasks only by directory. Prefer the recovery entry points future contributors will use most often:
@@ -52,6 +58,12 @@ Use first-class fields explicitly when creating tasks:
 
 When restoring a numbered task set, prefer a sorted task list or task-code prefix search instead of guessing from fuzzy titles.
 
+When adjacent tasks share one code path or one implementation batch:
+
+- It is acceptable to progress them together as a phase bundle.
+- Keep ownership explicit: note which tasks were directly advanced and which ones only received enabling work.
+- Update every affected task after the batch; do not leave nearby tasks stale just because the code change started from one task.
+
 ## 4. Parallel And Serial Work
 
 Safe to parallelize:
@@ -67,6 +79,25 @@ Keep mostly serial:
 - Writing notes to tasks.
 - Updating task status.
 - Reading back state to confirm writes.
+
+When a phase-level batch finishes, sync these surfaces in order:
+
+1. Code and verification artifacts.
+2. Local execution plan status if one exists.
+3. Agenta task statuses and notes.
+
+Do not defer this synchronization for long-running threads unless there is a strong reason.
+
+For Agenta repository work specifically, treat cross-surface contract changes as one batch:
+
+- service/domain/storage
+- CLI
+- MCP
+- desktop bridge / mock bridge
+- frontend types or filters
+- tests and regression fixtures
+
+Avoid landing only one surface and planning to “catch up later” unless the user explicitly wants an intermediate partial state.
 
 ## 5. Task Note Style
 

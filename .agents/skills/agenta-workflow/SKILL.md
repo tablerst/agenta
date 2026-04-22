@@ -1,6 +1,6 @@
 ---
 name: agenta-workflow
-description: "Use when managing Agenta as a project/context ledger: initialize or reuse projects and baseline versions, organize module context tasks, restore task context, append findings/conclusions, verify task state, or close out work through either CLI or MCP."
+description: "Use when managing Agenta as a project/context ledger: initialize or activate projects and versions, organize context or implementation tasks, restore task context, advance adjacent tasks in phase-sized batches, append findings/conclusions, sync Agenta state with local execution plans, verify task state, or close out work through either CLI or MCP."
 ---
 
 # Agenta Workflow
@@ -54,6 +54,8 @@ After using this skill, produce one or more of these artifacts:
 - Reuse existing projects and versions before creating new ones.
 - Organize tasks around how future contributors will restore context, not only around directory structure.
 - Use first-class Agenta fields explicitly: `task_code`, `task_kind`, and `note_kind`.
+- When a single implementation batch advances multiple adjacent tasks, update every affected task and note rather than pretending only one task moved.
+- Treat local execution plans and Agenta task state as one workflow surface; do not let code, plan docs, and task notes drift for long.
 - Parallelize read-only exploration when useful, but keep writes, status updates, and read-back verification serialized.
 - Confirm every write by reading back the task, note, attachment, or equivalent state.
 
