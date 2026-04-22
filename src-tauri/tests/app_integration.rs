@@ -98,7 +98,7 @@ async fn runtime_service_flow_covers_core_objects_and_search(
         .service
         .search(SearchInput {
             text: Some("dashboard".to_string()),
-            project: None,
+            project: Some(project.slug.clone()),
             version: None,
             task_kind: None,
             task_code_prefix: None,
@@ -1193,6 +1193,7 @@ async fn standalone_agenta_mcp_binary_exposes_explicit_tools_and_runs_smoke_flow
                 "name": "search_query",
                 "arguments": {
                     "query": "Binary",
+                    "project": project_id.clone(),
                     "limit": 1
                 }
             }

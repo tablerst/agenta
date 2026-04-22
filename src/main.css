@@ -556,6 +556,11 @@ html[data-theme="dark"] {
     max-width: 220px;
   }
 
+  .compact-field-wide {
+    flex-basis: 280px;
+    max-width: 360px;
+  }
+
   .compact-control {
     min-height: 32px;
   }

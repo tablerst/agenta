@@ -114,7 +114,7 @@ async fn service_flow_persists_and_searches() {
         .service
         .search(SearchInput {
             text: Some("Alpha".to_string()),
-            project: None,
+            project: Some(project.slug.clone()),
             version: None,
             task_kind: None,
             task_code_prefix: None,

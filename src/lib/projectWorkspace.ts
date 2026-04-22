@@ -66,6 +66,7 @@ export function sanitizeSectionQuery(
       });
     case "tasks":
       return mergeWorkspaceQuery({
+        q: readRouteString(query.q),
         version: readRouteString(query.version),
         task: readRouteString(query.task),
         status: readRouteString(query.status),

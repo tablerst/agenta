@@ -377,6 +377,15 @@ export interface SearchBackfillSummary {
   processing_error: string | null;
 }
 
+export interface ProjectSearchFilters {
+  project: string;
+  query: string;
+  version?: string;
+  task_kind?: TaskKind;
+  task_code_prefix?: string;
+  limit?: number;
+}
+
 export interface SearchTaskHit {
   task_id: string;
   task_code: string | null;

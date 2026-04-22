@@ -7,6 +7,7 @@ import {
   ListFilter,
   Paperclip,
   Plus,
+  Search,
   SquareKanban,
   X,
 } from "@lucide/vue";
@@ -26,7 +27,7 @@ import {
   taskStatusOptions,
   type TaskDetailTab,
 } from "../lib/options";
-import type { NoteKind, TaskKind, TaskPriority, TaskStatus } from "../lib/types";
+import type { NoteKind, ProjectSearchFilters, SearchResponse, TaskKind, TaskPriority, TaskStatus } from "../lib/types";
 import { useApprovalsStore } from "../stores/approvals";
 import { useProjectsStore } from "../stores/projects";
 import { useShellStore } from "../stores/shell";
@@ -45,6 +46,12 @@ const tabRefs = new Map<TaskDetailTab, HTMLButtonElement>();
 const isCreatingTask = ref(false);
 const createTaskTitleInput = ref<HTMLInputElement | null>(null);
 const taskCreateTrigger = ref<HTMLElement | null>(null);
+const projectSearchInput = ref("");
+const projectSearchResults = ref<SearchResponse | null>(null);
+const projectSearchLoading = ref(false);
+const projectSearchError = ref("");
+let projectSearchTimer: number | undefined;
+let projectSearchRequestId = 0;
 
 const createTaskForm = reactive({
   task_code: "",
@@ -88,6 +95,7 @@ const selectedProjectSlug = computed(() => String(route.params.projectSlug ?? ""
 const selectedVersionId = computed(() => readRouteString(route.query.version) ?? "");
 const selectedTaskId = computed(() => readRouteString(route.query.task) ?? "");
 const selectedStatus = computed(() => readRouteString(route.query.status) ?? "");
+const selectedSearchQuery = computed(() => readRouteString(route.query.q) ?? "");
 const selectedTaskKindFilter = ref("");
 const taskCodePrefixFilter = ref("");
 const selectedSortBy = ref("task_code");
@@ -115,25 +123,57 @@ const selectedTask = computed(() => {
   );
 });
 const selectedProjectLabel = computed(() => selectedProject.value?.name || selectedProjectSlug.value);
+const isProjectSearchActive = computed(() => Boolean(selectedSearchQuery.value));
+const projectSearchResultTaskIds = computed(() => {
+  const taskIds = new Set<string>();
+  projectSearchResults.value?.tasks.forEach((item) => taskIds.add(item.task_id));
+  projectSearchResults.value?.activities.forEach((item) => taskIds.add(item.task_id));
+  return Array.from(taskIds);
+});
+const projectSearchPrimaryTaskId = computed(
+  () => projectSearchResults.value?.tasks[0]?.task_id ?? projectSearchResults.value?.activities[0]?.task_id ?? null,
+);
+const projectSearchTaskMap = computed(
+  () => new Map((projectSearchResults.value?.tasks ?? []).map((item) => [item.task_id, item])),
+);
+const projectSearchRetrievalStatus = computed(() => {
+  if (!projectSearchResults.value) {
+    return "";
+  }
+
+  if (projectSearchResults.value.meta.retrieval_mode === "structured_only") {
+    return t("search.retrieval.structuredOnly");
+  }
+  if (projectSearchResults.value.meta.vector_status === "indexing") {
+    return t("search.retrieval.indexing");
+  }
+  if (projectSearchResults.value.meta.retrieval_mode === "hybrid") {
+    return t("search.retrieval.hybrid");
+  }
+  return t("search.retrieval.lexicalFallback");
+});
+
+type TaskQueryKey = "q" | "status" | "task" | "version";
 
 function queryValue(
-  overrides: Record<"status" | "task" | "version", string | undefined>,
-  key: "status" | "task" | "version",
+  overrides: Record<TaskQueryKey, string | undefined>,
+  key: TaskQueryKey,
   current: string,
 ) {
   return key in overrides ? overrides[key] : current || undefined;
 }
 
-function buildTaskQuery(overrides: Partial<Record<"status" | "task" | "version", string | undefined>> = {}) {
+function buildTaskQuery(overrides: Partial<Record<TaskQueryKey, string | undefined>> = {}) {
   return mergeWorkspaceQuery({
-    status: queryValue(overrides as Record<"status" | "task" | "version", string | undefined>, "status", selectedStatus.value),
-    task: queryValue(overrides as Record<"status" | "task" | "version", string | undefined>, "task", selectedTaskId.value),
-    version: queryValue(overrides as Record<"status" | "task" | "version", string | undefined>, "version", selectedVersionId.value),
+    q: queryValue(overrides as Record<TaskQueryKey, string | undefined>, "q", selectedSearchQuery.value),
+    status: queryValue(overrides as Record<TaskQueryKey, string | undefined>, "status", selectedStatus.value),
+    task: queryValue(overrides as Record<TaskQueryKey, string | undefined>, "task", selectedTaskId.value),
+    version: queryValue(overrides as Record<TaskQueryKey, string | undefined>, "version", selectedVersionId.value),
   });
 }
 
 async function updateQuery(
-  overrides: Partial<Record<"status" | "task" | "version", string | undefined>>,
+  overrides: Partial<Record<TaskQueryKey, string | undefined>>,
   replace = false,
 ) {
   if (!selectedProjectSlug.value) {
@@ -151,6 +191,65 @@ async function updateQuery(
   }
 
   await router.push(location);
+}
+
+function buildTaskListFilters() {
+  return {
+    project: selectedProjectSlug.value || undefined,
+    kind: selectedTaskKindFilter.value || undefined,
+    status: selectedStatus.value || undefined,
+    task_code_prefix: taskCodePrefixFilter.value || undefined,
+    sort_by: selectedSortBy.value || undefined,
+    sort_order: selectedSortOrder.value || undefined,
+    version: selectedVersionId.value || undefined,
+  };
+}
+
+function buildProjectSearchFilters(): ProjectSearchFilters {
+  return {
+    project: selectedProjectSlug.value,
+    query: selectedSearchQuery.value,
+    version: selectedVersionId.value || undefined,
+    task_kind: selectedTaskKindFilter.value ? (selectedTaskKindFilter.value as TaskKind) : undefined,
+    task_code_prefix: taskCodePrefixFilter.value || undefined,
+    limit: 20,
+  };
+}
+
+async function runProjectSearch() {
+  if (!selectedProjectSlug.value || !selectedSearchQuery.value) {
+    projectSearchRequestId += 1;
+    projectSearchLoading.value = false;
+    projectSearchResults.value = null;
+    projectSearchError.value = "";
+    return;
+  }
+
+  const requestId = projectSearchRequestId + 1;
+  projectSearchRequestId = requestId;
+  projectSearchLoading.value = true;
+  projectSearchResults.value = null;
+  projectSearchError.value = "";
+
+  try {
+    const envelope = await desktopBridge.search({
+      action: "query",
+      ...buildProjectSearchFilters(),
+    });
+    if (requestId !== projectSearchRequestId) {
+      return;
+    }
+    projectSearchResults.value = envelope.result as SearchResponse;
+  } catch (error) {
+    if (requestId !== projectSearchRequestId) {
+      return;
+    }
+    projectSearchError.value = formatDesktopError(error, t);
+  } finally {
+    if (requestId === projectSearchRequestId) {
+      projectSearchLoading.value = false;
+    }
+  }
 }
 
 function registerTabRef(
@@ -299,6 +398,27 @@ watch(
 );
 
 watch(
+  selectedSearchQuery,
+  (value) => {
+    if (projectSearchInput.value !== value) {
+      projectSearchInput.value = value;
+    }
+  },
+  { immediate: true },
+);
+
+watch(projectSearchInput, (value) => {
+  window.clearTimeout(projectSearchTimer);
+  projectSearchTimer = window.setTimeout(() => {
+    const normalized = value.trim();
+    if (normalized === selectedSearchQuery.value) {
+      return;
+    }
+    void updateQuery({ q: normalized || undefined, task: undefined }, true);
+  }, 160);
+});
+
+watch(
   () => selectedProjectSlug.value,
   async (projectSlug) => {
     if (!projectSlug) {
@@ -314,6 +434,7 @@ watch(
   () =>
     [
       selectedProjectSlug.value,
+      selectedSearchQuery.value,
       selectedVersionId.value,
       selectedStatus.value,
       selectedTaskKindFilter.value,
@@ -321,37 +442,43 @@ watch(
       selectedSortBy.value,
       selectedSortOrder.value,
     ] as const,
-  async ([projectSlug, version, status, kind, taskCodePrefix, sortBy, sortOrder]) => {
+  async ([projectSlug]) => {
     if (!projectSlug) {
       tasksStore.tasks = [];
       tasksStore.clearTaskDetail();
+      projectSearchResults.value = null;
+      projectSearchError.value = "";
       return;
     }
 
-    await tasksStore.loadTasks({
-      project: projectSlug,
-      kind: kind || undefined,
-      status: status || undefined,
-      task_code_prefix: taskCodePrefix || undefined,
-      sort_by: sortBy || undefined,
-      sort_order: sortOrder || undefined,
-      version: version || undefined,
-    });
+    await reloadVisibleTasks();
   },
   { immediate: true },
 );
 
 watch(
-  () => tasksStore.tasks.map((item) => item.task_id).join("|"),
+  () => [
+    isProjectSearchActive.value ? "search" : "list",
+    projectSearchLoading.value ? "loading" : "idle",
+    projectSearchResults.value?.tasks.map((item) => item.task_id).join("|") ?? "",
+    projectSearchResults.value?.activities.map((item) => `${item.activity_id}:${item.task_id}`).join("|") ?? "",
+    projectSearchError.value,
+    tasksStore.tasks.map((item) => item.task_id).join("|"),
+  ] as const,
   async () => {
-    if (tasksStore.loadingTasks) {
+    if (isProjectSearchActive.value) {
+      if (projectSearchLoading.value || (!projectSearchResults.value && !projectSearchError.value)) {
+        return;
+      }
+    } else if (tasksStore.loadingTasks) {
       return;
     }
 
-    const firstTask = tasksStore.tasks[0] ?? null;
+    const visibleTaskIds = isProjectSearchActive.value ? projectSearchResultTaskIds.value : tasksStore.tasks.map((item) => item.task_id);
+    const firstTask = isProjectSearchActive.value ? projectSearchPrimaryTaskId.value : tasksStore.tasks[0]?.task_id ?? null;
     const hasSelection = Boolean(
       selectedTaskId.value &&
-      tasksStore.tasks.some((item) => item.task_id === selectedTaskId.value),
+      visibleTaskIds.includes(selectedTaskId.value),
     );
 
     if (!firstTask) {
@@ -363,7 +490,7 @@ watch(
     }
 
     if (!hasSelection) {
-      await updateQuery({ task: firstTask.task_id }, true);
+      await updateQuery({ task: firstTask }, true);
     }
   },
   { immediate: true },
@@ -404,15 +531,7 @@ async function submitCreateTask() {
       task_code: createTaskForm.task_code || null,
       version: selectedVersionId.value || undefined,
     });
-    await tasksStore.loadTasks({
-      project: selectedProject.value.slug,
-      kind: selectedTaskKindFilter.value || undefined,
-      status: selectedStatus.value || undefined,
-      task_code_prefix: taskCodePrefixFilter.value || undefined,
-      sort_by: selectedSortBy.value || undefined,
-      sort_order: selectedSortOrder.value || undefined,
-      version: selectedVersionId.value || undefined,
-    });
+    await reloadVisibleTasks();
     await approvalsStore.refreshPendingCount();
     shell.pushNotice("success", t("notices.taskSubmitted"));
     resetCreateTaskForm();
@@ -444,15 +563,7 @@ async function submitTaskUpdate() {
       updated_by: taskForm.updated_by,
       version: selectedVersionId.value || selectedTask.value.version_id || undefined,
     });
-    await tasksStore.loadTasks({
-      project: selectedProjectSlug.value || undefined,
-      kind: selectedTaskKindFilter.value || undefined,
-      status: selectedStatus.value || undefined,
-      task_code_prefix: taskCodePrefixFilter.value || undefined,
-      sort_by: selectedSortBy.value || undefined,
-      sort_order: selectedSortOrder.value || undefined,
-      version: selectedVersionId.value || undefined,
-    });
+    await reloadVisibleTasks();
     await approvalsStore.refreshPendingCount();
     shell.pushNotice("success", t("notices.taskUpdated"));
   } catch (error) {
@@ -518,15 +629,14 @@ async function openAttachment(path: string) {
 }
 
 async function reloadVisibleTasks() {
-  await tasksStore.loadTasks({
-    project: selectedProjectSlug.value || undefined,
-    kind: selectedTaskKindFilter.value || undefined,
-    status: selectedStatus.value || undefined,
-    task_code_prefix: taskCodePrefixFilter.value || undefined,
-    sort_by: selectedSortBy.value || undefined,
-    sort_order: selectedSortOrder.value || undefined,
-    version: selectedVersionId.value || undefined,
-  });
+  if (isProjectSearchActive.value) {
+    await runProjectSearch();
+    return;
+  }
+
+  projectSearchResults.value = null;
+  projectSearchError.value = "";
+  await tasksStore.loadTasks(buildTaskListFilters());
 }
 
 async function jumpToLinkedTask(taskId: string) {
@@ -642,16 +752,33 @@ async function jumpToQueuedApproval(error: unknown) {
             </div>
             <div class="flex flex-wrap items-center gap-2">
               <span v-if="selectedProjectLabel" class="status-pill">{{ selectedProjectLabel }}</span>
-              <span class="status-pill">{{ tasksStore.tasks.length }}</span>
-              <span v-if="tasksStore.taskSummary" class="status-pill">
-                {{ t("tasks.summaryReady", { count: tasksStore.taskSummary.status_counts.ready }) }}
-              </span>
-              <span v-if="tasksStore.taskSummary" class="status-pill">
-                {{ t("tasks.summaryDone", { count: tasksStore.taskSummary.status_counts.done }) }}
-              </span>
-              <span v-if="tasksStore.taskSummary" class="status-pill">
-                {{ t("tasks.summaryReusable", { count: tasksStore.taskSummary.knowledge_counts.reusable }) }}
-              </span>
+              <template v-if="isProjectSearchActive">
+                <span v-if="projectSearchLoading" class="status-pill">{{ t("search.loading") }}</span>
+                <template v-else-if="projectSearchResults">
+                  <span class="status-pill">
+                    {{ t("tasks.projectSearch.taskHits", { count: projectSearchResults.tasks.length }) }}
+                  </span>
+                  <span class="status-pill">
+                    {{ t("tasks.projectSearch.activityHits", { count: projectSearchResults.activities.length }) }}
+                  </span>
+                  <span class="status-pill">{{ projectSearchRetrievalStatus }}</span>
+                  <span v-if="projectSearchResults.meta.pending_index_jobs > 0" class="status-pill">
+                    {{ t("tasks.projectSearch.pendingJobs", { count: projectSearchResults.meta.pending_index_jobs }) }}
+                  </span>
+                </template>
+              </template>
+              <template v-else>
+                <span class="status-pill">{{ tasksStore.tasks.length }}</span>
+                <span v-if="tasksStore.taskSummary" class="status-pill">
+                  {{ t("tasks.summaryReady", { count: tasksStore.taskSummary.status_counts.ready }) }}
+                </span>
+                <span v-if="tasksStore.taskSummary" class="status-pill">
+                  {{ t("tasks.summaryDone", { count: tasksStore.taskSummary.status_counts.done }) }}
+                </span>
+                <span v-if="tasksStore.taskSummary" class="status-pill">
+                  {{ t("tasks.summaryReusable", { count: tasksStore.taskSummary.knowledge_counts.reusable }) }}
+                </span>
+              </template>
             </div>
           </div>
           <div class="workspace-filter-toolbar">
@@ -659,6 +786,20 @@ async function jumpToQueuedApproval(error: unknown) {
               <ListFilter :size="14" />
               <span>{{ t("tasks.filters") }}</span>
             </div>
+            <label class="compact-field compact-field-wide">
+              <span class="field-label">{{ t("tasks.projectSearch.label") }}</span>
+              <div class="relative">
+                <Search
+                  :size="14"
+                  class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)]"
+                />
+                <input
+                  v-model="projectSearchInput"
+                  class="control-input compact-control pl-9"
+                  :placeholder="t('tasks.projectSearch.placeholder')"
+                />
+              </div>
+            </label>
             <label class="compact-field">
               <span class="field-label">{{ t("routes.projects.sections.versions") }}</span>
               <select
@@ -725,7 +866,108 @@ async function jumpToQueuedApproval(error: unknown) {
         </section>
 
         <section class="workspace-list-region">
-          <div v-if="tasksStore.tasks.length === 0" class="empty-state">
+          <div v-if="isProjectSearchActive" class="space-y-4">
+            <div v-if="projectSearchLoading" class="empty-state">
+              {{ t("search.loading") }}
+            </div>
+            <div v-else-if="projectSearchError" class="empty-state">
+              {{ projectSearchError }}
+            </div>
+            <div
+              v-else-if="
+                !projectSearchResults ||
+                (projectSearchResults.tasks.length === 0 && projectSearchResults.activities.length === 0)
+              "
+              class="empty-state"
+            >
+              {{ t("tasks.projectSearch.noResults") }}
+            </div>
+            <template v-else>
+              <section class="space-y-2">
+                <div class="flex items-center justify-between gap-3">
+                  <p class="section-label">{{ t("search.tasks") }}</p>
+                  <span class="text-xs text-[var(--text-muted)]">
+                    {{ t("tasks.projectSearch.taskHits", { count: projectSearchResults.tasks.length }) }}
+                  </span>
+                </div>
+                <div v-if="projectSearchResults.tasks.length === 0" class="empty-state">
+                  {{ t("tasks.projectSearch.noTaskHits") }}
+                </div>
+                <div v-else class="workspace-row-list">
+                  <button
+                    v-for="task in projectSearchResults.tasks"
+                    :key="task.task_id"
+                    v-spotlight
+                    class="list-row spotlight-surface"
+                    :class="{ 'list-row-active': selectedTaskId === task.task_id }"
+                    @click="selectTask(task.task_id)"
+                  >
+                    <SquareKanban :size="16" />
+                    <div class="min-w-0 flex-1 space-y-2">
+                      <div class="flex items-center justify-between gap-3">
+                        <p class="truncate text-sm font-medium text-[var(--text-main)]">
+                          {{ task.task_code ? `${task.task_code} · ${task.title}` : task.title }}
+                        </p>
+                        <div class="flex flex-wrap items-center justify-end gap-2">
+                          <span v-if="task.task_code" class="status-pill">{{ task.task_code }}</span>
+                          <span class="status-pill">{{ t(`status.taskKind.${task.task_kind}`) }}</span>
+                          <span class="status-pill">{{ t(`status.task.${task.status}`) }}</span>
+                          <span class="status-pill">{{ t(`search.source.${task.retrieval_source}`) }}</span>
+                        </div>
+                      </div>
+                      <p class="truncate text-xs text-[var(--text-muted)]">{{ task.summary }}</p>
+                      <p v-if="task.matched_fields.length > 0" class="truncate text-[11px] text-[var(--text-muted)]">
+                        {{ t("tasks.projectSearch.matchedFields") }} {{ task.matched_fields.join(" · ") }}
+                      </p>
+                    </div>
+                    <div class="list-row-meta">
+                      <span>{{ t(`status.priority.${task.priority}`) }}</span>
+                      <span>{{ t(`status.knowledge.${task.knowledge_status}`) }}</span>
+                    </div>
+                  </button>
+                </div>
+              </section>
+
+              <section class="space-y-2">
+                <div class="flex items-center justify-between gap-3">
+                  <p class="section-label">{{ t("search.activity") }}</p>
+                  <span class="text-xs text-[var(--text-muted)]">
+                    {{ t("tasks.projectSearch.activityHits", { count: projectSearchResults.activities.length }) }}
+                  </span>
+                </div>
+                <div v-if="projectSearchResults.activities.length === 0" class="empty-state">
+                  {{ t("tasks.projectSearch.noActivityHits") }}
+                </div>
+                <div v-else class="workspace-row-list">
+                  <button
+                    v-for="item in projectSearchResults.activities"
+                    :key="item.activity_id"
+                    v-spotlight
+                    class="list-row spotlight-surface"
+                    :class="{ 'list-row-active': selectedTaskId === item.task_id }"
+                    @click="selectTask(item.task_id)"
+                  >
+                    <Search :size="16" />
+                    <div class="min-w-0 flex-1 space-y-2">
+                      <div class="flex items-center justify-between gap-3">
+                        <p class="truncate text-sm font-medium text-[var(--text-main)]">
+                          {{ t(`activityKind.${item.kind}`) }}
+                        </p>
+                        <div class="flex flex-wrap items-center justify-end gap-2">
+                          <span class="status-pill">{{ t(`activityKind.${item.kind}`) }}</span>
+                        </div>
+                      </div>
+                      <p class="truncate text-xs text-[var(--text-muted)]">{{ item.summary }}</p>
+                      <p class="truncate text-[11px] text-[var(--text-muted)]">
+                        {{ projectSearchTaskMap.get(item.task_id)?.title || item.task_id }}
+                      </p>
+                    </div>
+                  </button>
+                </div>
+              </section>
+            </template>
+          </div>
+          <div v-else-if="tasksStore.tasks.length === 0" class="empty-state">
             {{ t("tasks.noMatches") }}
           </div>
           <div v-else class="workspace-row-list">
