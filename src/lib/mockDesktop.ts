@@ -2109,6 +2109,9 @@ export const mockDesktopBridge = {
       ),
     );
   },
+  pickDirectory(_defaultPath?: string) {
+    return Promise.resolve<string | null>(null);
+  },
   openPath(_path?: string) {
     return Promise.resolve();
   },

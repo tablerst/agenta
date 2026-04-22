@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { BadgeCheck, FolderCog, FolderOpen } from "@lucide/vue";
+import { BadgeCheck, Folder, FolderCog, FolderOpen } from "@lucide/vue";
 import { computed, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
@@ -12,6 +12,16 @@ import { buildProjectWorkspacePath } from "../lib/projectWorkspace";
 import type { ContextInitResult, ProjectStatus, Task } from "../lib/types";
 import { useProjectsStore } from "../stores/projects";
 import { useShellStore } from "../stores/shell";
+
+const CONTEXT_STATE_STORAGE_KEY = "agenta.project_context_state";
+const DEFAULT_CONTEXT_SOURCE_KEY = "__DEFAULT__";
+
+interface PersistedProjectContextState {
+  contextDir: string;
+  workspaceRoot: string;
+  contextResult: ContextInitResult | null;
+  contextResultSourceKey: string | null;
+}
 
 const route = useRoute();
 const router = useRouter();
@@ -28,10 +38,12 @@ const projectForm = reactive({
 
 const contextForm = reactive({
   contextDir: "",
+  workspaceRoot: "",
   force: false,
 });
 
 const contextResult = ref<ContextInitResult | null>(null);
+const contextResultSourceKey = ref<string | null>(null);
 
 const counts = ref({
   approvals: 0,
@@ -39,10 +51,92 @@ const counts = ref({
   versions: 0,
 });
 
+let hydratingContextState = false;
+
 const selectedProjectSlug = computed(() => String(route.params.projectSlug ?? ""));
 const selectedProject = computed(() =>
   projectsStore.projects.find((item) => item.slug === selectedProjectSlug.value) ?? null,
 );
+const canOpenContextFolder = computed(() => Boolean(contextResult.value?.context_dir));
+
+function normalizeContextDir(path: string) {
+  return path.trim().replace(/\\/g, "/").replace(/\/+$/, "");
+}
+
+function buildContextSourceKey(contextDir: string, workspaceRoot: string) {
+  const normalizedContextDir = normalizeContextDir(contextDir);
+  if (normalizedContextDir) {
+    return `context:${normalizedContextDir}`;
+  }
+
+  const normalizedWorkspaceRoot = normalizeContextDir(workspaceRoot);
+  if (normalizedWorkspaceRoot) {
+    return `workspace:${normalizedWorkspaceRoot}`;
+  }
+
+  return DEFAULT_CONTEXT_SOURCE_KEY;
+}
+
+function readPersistedProjectContextMap(): Record<string, PersistedProjectContextState> {
+  try {
+    const raw = window.localStorage.getItem(CONTEXT_STATE_STORAGE_KEY);
+    if (!raw) {
+      return {};
+    }
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") {
+      return {};
+    }
+    return parsed as Record<string, PersistedProjectContextState>;
+  } catch {
+    return {};
+  }
+}
+
+function writePersistedProjectContextMap(nextState: Record<string, PersistedProjectContextState>) {
+  window.localStorage.setItem(CONTEXT_STATE_STORAGE_KEY, JSON.stringify(nextState));
+}
+
+function persistSelectedProjectContextState() {
+  if (!selectedProject.value) {
+    return;
+  }
+
+  const persistedState = readPersistedProjectContextMap();
+  persistedState[selectedProject.value.slug] = {
+    contextDir: contextForm.contextDir,
+    workspaceRoot: contextForm.workspaceRoot,
+    contextResult: contextResult.value,
+    contextResultSourceKey: contextResultSourceKey.value,
+  };
+  writePersistedProjectContextMap(persistedState);
+}
+
+function restoreProjectContextState(projectSlug: string) {
+  hydratingContextState = true;
+  try {
+    const persistedState = readPersistedProjectContextMap()[projectSlug];
+    contextForm.contextDir = persistedState?.contextDir ?? "";
+    contextForm.workspaceRoot = persistedState?.workspaceRoot ?? "";
+    contextResult.value = persistedState?.contextResult ?? null;
+    contextResultSourceKey.value = persistedState?.contextResultSourceKey ?? null;
+  } finally {
+    hydratingContextState = false;
+  }
+}
+
+function resetProjectContextState() {
+  hydratingContextState = true;
+  try {
+    contextForm.contextDir = "";
+    contextForm.workspaceRoot = "";
+    contextForm.force = false;
+    contextResult.value = null;
+    contextResultSourceKey.value = null;
+  } finally {
+    hydratingContextState = false;
+  }
+}
 
 watch(
   selectedProject,
@@ -57,9 +151,7 @@ watch(
       projectForm.name = "";
       projectForm.description = "";
       projectForm.status = "active";
-      contextForm.contextDir = "";
-      contextForm.force = false;
-      contextResult.value = null;
+      resetProjectContextState();
       return;
     }
 
@@ -67,7 +159,7 @@ watch(
     projectForm.name = project.name;
     projectForm.description = project.description ?? "";
     projectForm.status = project.status;
-    contextResult.value = null;
+    restoreProjectContextState(project.slug);
 
     await projectsStore.loadVersions(project.slug);
     const [taskEnvelope, approvalEnvelope] = await Promise.all([
@@ -83,6 +175,34 @@ watch(
   },
   { immediate: true },
 );
+
+watch(
+  () => [contextForm.contextDir, contextForm.workspaceRoot],
+  () => {
+    if (hydratingContextState || !selectedProject.value) {
+      return;
+    }
+
+    const nextSourceKey = buildContextSourceKey(contextForm.contextDir, contextForm.workspaceRoot);
+    if (
+      contextResult.value &&
+      contextResultSourceKey.value &&
+      nextSourceKey !== contextResultSourceKey.value
+    ) {
+      contextResult.value = null;
+      contextResultSourceKey.value = null;
+    }
+
+    persistSelectedProjectContextState();
+  },
+);
+
+watch([contextResult, contextResultSourceKey], () => {
+  if (hydratingContextState || !selectedProject.value) {
+    return;
+  }
+  persistSelectedProjectContextState();
+});
 
 async function jumpToQueuedApproval(error: unknown) {
   if (
@@ -106,6 +226,21 @@ async function jumpToQueuedApproval(error: unknown) {
   }
 
   return false;
+}
+
+async function chooseContextFolder() {
+  try {
+    const selectedDirectory = await desktopBridge.pickDirectory(
+      contextForm.workspaceRoot.trim() || contextResult.value?.context_dir,
+    );
+    if (!selectedDirectory) {
+      return;
+    }
+    contextForm.workspaceRoot = selectedDirectory;
+    contextForm.contextDir = "";
+  } catch (error) {
+    shell.pushNotice("error", formatDesktopError(error, t));
+  }
 }
 
 async function submitProjectUpdate() {
@@ -139,11 +274,13 @@ async function initProjectContext() {
     const envelope = await desktopBridge.context({
       action: "init",
       project: selectedProject.value.slug,
+      workspace_root: contextForm.workspaceRoot || null,
       context_dir: contextForm.contextDir || null,
       force: contextForm.force,
     });
     const result = envelope.result as ContextInitResult;
     contextResult.value = result;
+    contextResultSourceKey.value = buildContextSourceKey(contextForm.contextDir, contextForm.workspaceRoot);
     if (result.status === "updated") {
       shell.pushNotice("success", t("notices.projectContextUpdated"));
     } else if (result.status === "unchanged") {
@@ -162,7 +299,7 @@ async function openContextFolder() {
   }
 
   try {
-    await desktopBridge.openPath(contextResult.value.context_dir);
+    await desktopBridge.revealItemInDir(contextResult.value.context_dir);
   } catch (error) {
     shell.pushNotice("error", formatDesktopError(error, t));
   }
@@ -283,13 +420,23 @@ function openSection(section: "versions" | "tasks" | "approvals") {
           <div class="overview-field-grid">
             <label class="form-field overview-field-wide">
               <span class="field-label">{{ t("projects.fields.contextDir") }}</span>
-              <input
-                v-model="contextForm.contextDir"
-                class="quiet-control-input"
-                :placeholder="t('projects.placeholders.contextDir')"
-              />
+              <div class="flex items-center gap-2">
+                <input
+                  v-model="contextForm.contextDir"
+                  class="quiet-control-input flex-1"
+                  :placeholder="t('projects.placeholders.contextDir')"
+                />
+                <button class="secondary-action spotlight-surface shrink-0" type="button" @click="chooseContextFolder">
+                  <Folder :size="15" />
+                  {{ t("projects.contextSelectWorkspace") }}
+                </button>
+              </div>
             </label>
           </div>
+
+          <p v-if="contextForm.workspaceRoot" class="mt-3 text-xs text-[var(--text-muted)]">
+            {{ t("projects.selectedWorkspaceRoot") }}: {{ contextForm.workspaceRoot }}
+          </p>
 
           <label class="inline-flex items-center gap-2 text-sm text-[var(--text-muted)]">
             <input v-model="contextForm.force" type="checkbox" />
@@ -306,7 +453,7 @@ function openSection(section: "versions" | "tasks" | "approvals") {
               {{ t("projects.contextInit") }}
             </button>
             <button
-              v-if="contextResult"
+              v-if="canOpenContextFolder"
               class="secondary-action spotlight-surface"
               type="button"
               @click="openContextFolder"

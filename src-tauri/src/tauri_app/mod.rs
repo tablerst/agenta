@@ -1033,6 +1033,7 @@ pub fn run(runtime: Arc<AppRuntime>) {
 
     tauri::Builder::default()
         .manage(state)
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(move |app| {
             let status_handle = app.handle().clone();

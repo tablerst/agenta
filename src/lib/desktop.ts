@@ -1,5 +1,6 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 
 import type {
@@ -414,6 +415,17 @@ export const desktopBridge = {
     return resolveBridgeMode() === "desktop"
       ? callDesktop<ApprovalRequest | ApprovalRequest[]>("desktop_approval", input)
       : callPreview<ApprovalRequest | ApprovalRequest[]>(() => mockDesktopBridge.approval(input));
+  },
+  async pickDirectory(defaultPath?: string) {
+    if (resolveBridgeMode() === "desktop") {
+      const selected = await openDialog({
+        directory: true,
+        multiple: false,
+        defaultPath: defaultPath?.trim() ? defaultPath : undefined,
+      });
+      return Array.isArray(selected) ? (selected[0] ?? null) : selected;
+    }
+    return mockDesktopBridge.pickDirectory(defaultPath);
   },
   async openPath(path: string) {
     if (resolveBridgeMode() === "desktop") {

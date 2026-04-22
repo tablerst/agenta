@@ -5,8 +5,8 @@ paths:
 
 project_context:
   paths:
-    - .dev_doc/.agenta
     - .agenta
+    - .dev_doc/.agenta
     - dev_docs/.agenta
   manifest: project.yaml
 
