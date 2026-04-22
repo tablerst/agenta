@@ -621,26 +621,34 @@ impl SearchRuntime {
 }
 
 fn chroma_where_clause(filter: &TaskListFilter) -> Option<Map<String, Value>> {
-    let mut output = Map::new();
+    let mut clauses = Vec::<Value>::new();
     if let Some(project_id) = filter.project_id {
-        output.insert(
-            "project_id".to_string(),
-            Value::String(project_id.to_string()),
-        );
+        let mut clause = Map::new();
+        clause.insert("project_id".to_string(), Value::String(project_id.to_string()));
+        clauses.push(Value::Object(clause));
     }
     if let Some(version_id) = filter.version_id {
-        output.insert(
-            "version_id".to_string(),
-            Value::String(version_id.to_string()),
-        );
+        let mut clause = Map::new();
+        clause.insert("version_id".to_string(), Value::String(version_id.to_string()));
+        clauses.push(Value::Object(clause));
     }
     if let Some(task_kind) = filter.task_kind {
-        output.insert(
-            "task_kind".to_string(),
-            Value::String(task_kind.to_string()),
-        );
+        let mut clause = Map::new();
+        clause.insert("task_kind".to_string(), Value::String(task_kind.to_string()));
+        clauses.push(Value::Object(clause));
     }
-    (!output.is_empty()).then_some(output)
+    match clauses.len() {
+        0 => None,
+        1 => clauses
+            .into_iter()
+            .next()
+            .and_then(|value| value.as_object().cloned()),
+        _ => {
+            let mut output = Map::new();
+            output.insert("$and".to_string(), Value::Array(clauses));
+            Some(output)
+        }
+    }
 }
 
 fn backoff_seconds(attempt_count: i64) -> i64 {
@@ -650,5 +658,65 @@ fn backoff_seconds(attempt_count: i64) -> i64 {
         2 => 60,
         3 => 5 * 60,
         _ => 15 * 60,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::Value;
+    use uuid::Uuid;
+
+    use super::chroma_where_clause;
+    use crate::domain::TaskKind;
+    use crate::storage::TaskListFilter;
+
+    #[test]
+    fn chroma_where_clause_returns_single_field_directly() {
+        let project_id = Uuid::nil();
+        let clause = chroma_where_clause(&TaskListFilter {
+            project_id: Some(project_id),
+            ..Default::default()
+        })
+        .expect("single clause");
+
+        assert_eq!(
+            clause.get("project_id"),
+            Some(&Value::String(project_id.to_string()))
+        );
+        assert!(!clause.contains_key("$and"));
+    }
+
+    #[test]
+    fn chroma_where_clause_uses_and_for_multiple_filters() {
+        let project_id = Uuid::nil();
+        let version_id = Uuid::from_u128(1);
+        let clause = chroma_where_clause(&TaskListFilter {
+            project_id: Some(project_id),
+            version_id: Some(version_id),
+            task_kind: Some(TaskKind::Standard),
+            ..Default::default()
+        })
+        .expect("compound clause");
+
+        let and_clauses = clause
+            .get("$and")
+            .and_then(Value::as_array)
+            .expect("$and array");
+        assert_eq!(and_clauses.len(), 3);
+        assert!(and_clauses.iter().any(|value| {
+            value.as_object()
+                .and_then(|item| item.get("project_id"))
+                == Some(&Value::String(project_id.to_string()))
+        }));
+        assert!(and_clauses.iter().any(|value| {
+            value.as_object()
+                .and_then(|item| item.get("version_id"))
+                == Some(&Value::String(version_id.to_string()))
+        }));
+        assert!(and_clauses.iter().any(|value| {
+            value.as_object()
+                .and_then(|item| item.get("task_kind"))
+                == Some(&Value::String("standard".to_string()))
+        }));
     }
 }
