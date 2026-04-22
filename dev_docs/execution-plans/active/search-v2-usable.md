@@ -67,12 +67,12 @@
 | [x] | 创建并启用 `v0.2.0-search-usable` 版本台账 | 已切换为 active，并设为项目默认版本 |
 | [x] | 建立 `SearchV2-00` 索引任务并维护统一导航说明 | 已在 Agenta 中创建索引任务并写入结论说明 |
 | [~] | 完成 `SearchV2-01` 查询理解与 lexical 召回升级 | 已完成 quoted phrase、identifier intent、FTS exact/prefix 级联、SQLite LIKE fallback，以及 identifier 查询禁用 semantic；后续继续补 fuzzy/CJK 评估 |
-| [~] | 完成 `SearchV2-03` note / attachment chunk 化检索 | 已完成第一批基础：`task_activities` 新增 `activity_search_text` 并进入 FTS，历史 note 内容可参与 activity/task 搜索；后续继续细化独立 chunk、snippet 和 attachment 正文策略 |
+| [~] | 完成 `SearchV2-02` 命中证据片段与 explainability | 已完成当前阶段收口：task/activity hit 返回 `evidence_source + evidence_snippet`，全局搜索与项目搜索已展示友好标签和简单高亮；后续继续补 semantic rationale、多证据聚合和更稳定的 snippet 排序 |
+| [~] | 完成 `SearchV2-03` note / attachment chunk 化检索 | 已完成当前阶段收口：`task_activities` 新增 `activity_search_text` 并进入 FTS，本地派生 `task_activity_chunks` 已落地并用于活动检索；历史 note、文本型 attachment 正文与长 note 深层内容可参与 activity/task 搜索并回流为 task evidence；后续继续细化非文本附件策略与 chunk 排序 |
 | [~] | 完成 `SearchV2-04` 搜索 API 过滤与排序扩展 | 已完成搜索侧 `status / priority / knowledge_status` 过滤贯通到 service、CLI、MCP、desktop 和 vector where clause；后续继续补更多 workflow 维度与前端收窄入口 |
-| [ ] | 完成 `SearchV2-02` 命中证据片段与 explainability | 结果必须能回答“为什么命中” |
 | [ ] | 完成 `SearchV2-05` 桌面搜索交互与二跳收窄 | Global Search 与项目搜索都要升级 |
 | [ ] | 完成 `SearchV2-06` 向量运行时与回填可靠性 | 重点是 sidecar 状态、失败恢复、fallback 清晰性 |
-| [ ] | 完成 `SearchV2-07` 检索评测集与验收基线 | 至少覆盖编号、中文、概念、状态意图和跨 note 召回 |
+| [~] | 完成 `SearchV2-07` 检索评测集与验收基线 | 已新增 golden queries 回归测试，覆盖编号查询、精确短语、旧 note 正文、文本型 attachment 正文、状态过滤、知识状态过滤，以及长 note 深层 chunk 命中；后续继续补中文查询、semantic explainability 与更多边界门槛 |
 | [ ] | 完成 `SearchV2-08` 发布闸口、迁移与文档收口 | 包含配置示例、文档、灰度与回滚 |
 
 ## 验收标准

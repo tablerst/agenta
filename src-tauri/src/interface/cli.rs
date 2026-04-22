@@ -6,10 +6,11 @@ use crate::app::runtime::{init_tracing, AgentaApp, BootstrapOptions};
 use crate::error::{AppError, AppResult};
 use crate::interface::response::{error, success, SuccessEnvelope};
 use crate::service::{
-    AddTaskBlockerInput, AttachChildTaskInput, CreateAttachmentInput, CreateChildTaskInput,
-    ContextInitInput, ContextInitResult, CreateNoteInput, CreateProjectInput, CreateTaskInput,
-    CreateVersionInput, DetachChildTaskInput, RequestOrigin, ResolveTaskBlockerInput, SearchInput,
-    TaskQuery, UpdateProjectInput, UpdateTaskInput, UpdateVersionInput,
+    AddTaskBlockerInput, AttachChildTaskInput, ContextInitInput, ContextInitResult,
+    CreateAttachmentInput, CreateChildTaskInput, CreateNoteInput, CreateProjectInput,
+    CreateTaskInput, CreateVersionInput, DetachChildTaskInput, RequestOrigin,
+    ResolveTaskBlockerInput, SearchInput, TaskQuery, UpdateProjectInput, UpdateTaskInput,
+    UpdateVersionInput,
 };
 
 #[derive(Debug, Parser)]
@@ -382,6 +383,12 @@ struct SearchQueryArgs {
     all_projects: bool,
     #[arg(long)]
     version: Option<String>,
+    #[arg(long)]
+    status: Option<String>,
+    #[arg(long)]
+    priority: Option<String>,
+    #[arg(long = "knowledge-status")]
+    knowledge_status: Option<String>,
     #[arg(long = "task-kind")]
     task_kind: Option<String>,
     #[arg(long = "task-code-prefix")]
@@ -483,11 +490,7 @@ async fn execute_context(app: AgentaApp, command: ContextCommand) -> AppResult<S
                     dry_run: args.dry_run,
                 })
                 .await?;
-            success(
-                "context.init",
-                result,
-                "Initialized project context",
-            )
+            success("context.init", result, "Initialized project context")
         }
     }
 }
@@ -822,6 +825,9 @@ async fn execute_search(app: AgentaApp, command: SearchCommand) -> AppResult<Suc
                     text: args.text,
                     project: args.project,
                     version: args.version,
+                    status: parse_optional_enum(args.status)?,
+                    priority: parse_optional_enum(args.priority)?,
+                    knowledge_status: parse_optional_enum(args.knowledge_status)?,
                     task_kind: parse_optional_enum(args.task_kind)?,
                     task_code_prefix: args.task_code_prefix,
                     title_prefix: args.title_prefix,

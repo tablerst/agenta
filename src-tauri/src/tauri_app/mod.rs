@@ -15,11 +15,11 @@ use crate::domain::ApprovalStatus;
 use crate::error::AppError;
 use crate::interface::response::{error, success, ErrorEnvelope, SuccessEnvelope};
 use crate::service::{
-    AddTaskBlockerInput, ApprovalQuery, AttachChildTaskInput, ContextInitInput,
-    ContextInitResult, CreateAttachmentInput, CreateChildTaskInput, CreateNoteInput,
-    CreateProjectInput, CreateTaskInput, CreateVersionInput, DetachChildTaskInput, PageRequest,
-    RequestOrigin, ResolveTaskBlockerInput, ReviewApprovalInput, SearchInput, SortOrder,
-    TaskQuery, TaskSortBy, UpdateProjectInput, UpdateTaskInput, UpdateVersionInput,
+    AddTaskBlockerInput, ApprovalQuery, AttachChildTaskInput, ContextInitInput, ContextInitResult,
+    CreateAttachmentInput, CreateChildTaskInput, CreateNoteInput, CreateProjectInput,
+    CreateTaskInput, CreateVersionInput, DetachChildTaskInput, PageRequest, RequestOrigin,
+    ResolveTaskBlockerInput, ReviewApprovalInput, SearchInput, SortOrder, TaskQuery, TaskSortBy,
+    UpdateProjectInput, UpdateTaskInput, UpdateVersionInput,
 };
 
 #[derive(Debug, Serialize)]
@@ -179,6 +179,9 @@ struct DesktopSearchInput {
     project: Option<String>,
     all_projects: Option<bool>,
     version: Option<String>,
+    status: Option<String>,
+    priority: Option<String>,
+    knowledge_status: Option<String>,
     task_kind: Option<String>,
     task_code_prefix: Option<String>,
     title_prefix: Option<String>,
@@ -764,6 +767,9 @@ async fn desktop_search(
                         text: optional_search_text(input.text, input.query),
                         project: input.project,
                         version: input.version,
+                        status: parse_optional_enum(input.status)?,
+                        priority: parse_optional_enum(input.priority)?,
+                        knowledge_status: parse_optional_enum(input.knowledge_status)?,
                         task_kind: parse_optional_enum(input.task_kind)?,
                         task_code_prefix: input.task_code_prefix,
                         title_prefix: input.title_prefix,

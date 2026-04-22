@@ -144,6 +144,8 @@ impl SqliteStore {
         let mime = mime_guess::from_path(source_path)
             .first_or_octet_stream()
             .to_string();
+        let extracted_search_text =
+            self.extract_attachment_search_text(&bytes, &mime, &original_filename);
 
         Ok(StoredAttachmentFile {
             mime,
@@ -152,6 +154,146 @@ impl SqliteStore {
             storage_path,
             sha256,
             size_bytes: bytes.len() as i64,
+            extracted_search_text,
         })
     }
+
+    pub fn extract_attachment_search_text(
+        &self,
+        bytes: &[u8],
+        mime: &str,
+        original_filename: &str,
+    ) -> Option<String> {
+        extract_attachment_search_text(bytes, mime, original_filename)
+    }
+}
+
+const MAX_ATTACHMENT_TEXT_BYTES: usize = 256 * 1024;
+const MAX_ATTACHMENT_SEARCH_TEXT_CHARS: usize = 12_000;
+
+fn extract_attachment_search_text(
+    bytes: &[u8],
+    mime: &str,
+    original_filename: &str,
+) -> Option<String> {
+    if bytes.is_empty() || !is_probably_text_attachment(mime, original_filename) {
+        return None;
+    }
+
+    let sample = &bytes[..bytes.len().min(MAX_ATTACHMENT_TEXT_BYTES)];
+    let binary_signals = sample
+        .iter()
+        .filter(|byte| matches!(byte, 0x00..=0x08 | 0x0B | 0x0C | 0x0E..=0x1A | 0x1C..=0x1F))
+        .count();
+    if binary_signals > sample.len() / 20 {
+        return None;
+    }
+
+    let decoded = String::from_utf8_lossy(sample);
+    let normalized = decoded
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if normalized.is_empty() {
+        return None;
+    }
+
+    Some(sample_attachment_text(
+        &normalized,
+        MAX_ATTACHMENT_SEARCH_TEXT_CHARS,
+    ))
+}
+
+fn is_probably_text_attachment(mime: &str, original_filename: &str) -> bool {
+    if mime.starts_with("text/") {
+        return true;
+    }
+    let lower_mime = mime.to_ascii_lowercase();
+    if [
+        "json",
+        "xml",
+        "yaml",
+        "javascript",
+        "typescript",
+        "x-sh",
+        "sql",
+        "csv",
+    ]
+    .iter()
+    .any(|needle| lower_mime.contains(needle))
+    {
+        return true;
+    }
+
+    let extension = Path::new(original_filename)
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase());
+    matches!(
+        extension.as_deref(),
+        Some(
+            "txt"
+                | "md"
+                | "markdown"
+                | "log"
+                | "rst"
+                | "json"
+                | "yaml"
+                | "yml"
+                | "toml"
+                | "ini"
+                | "cfg"
+                | "conf"
+                | "csv"
+                | "tsv"
+                | "xml"
+                | "html"
+                | "htm"
+                | "css"
+                | "js"
+                | "ts"
+                | "tsx"
+                | "jsx"
+                | "rs"
+                | "py"
+                | "java"
+                | "kt"
+                | "go"
+                | "sql"
+                | "sh"
+                | "ps1"
+                | "bat"
+                | "cmd"
+                | "vue"
+        )
+    )
+}
+
+fn sample_attachment_text(value: &str, limit: usize) -> String {
+    let chars = value.chars().collect::<Vec<_>>();
+    if chars.len() <= limit {
+        return value.to_string();
+    }
+
+    let window = (limit / 3).max(512);
+    let start = chars.iter().take(window).collect::<String>();
+    let middle_start = chars.len().saturating_sub(window) / 2;
+    let middle = chars
+        .iter()
+        .skip(middle_start)
+        .take(window)
+        .collect::<String>();
+    let end = chars
+        .iter()
+        .rev()
+        .take(window)
+        .copied()
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<String>();
+
+    format!("{start}\n...\n{middle}\n...\n{end}")
 }

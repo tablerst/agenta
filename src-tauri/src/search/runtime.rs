@@ -624,17 +624,44 @@ fn chroma_where_clause(filter: &TaskListFilter) -> Option<Map<String, Value>> {
     let mut clauses = Vec::<Value>::new();
     if let Some(project_id) = filter.project_id {
         let mut clause = Map::new();
-        clause.insert("project_id".to_string(), Value::String(project_id.to_string()));
+        clause.insert(
+            "project_id".to_string(),
+            Value::String(project_id.to_string()),
+        );
         clauses.push(Value::Object(clause));
     }
     if let Some(version_id) = filter.version_id {
         let mut clause = Map::new();
-        clause.insert("version_id".to_string(), Value::String(version_id.to_string()));
+        clause.insert(
+            "version_id".to_string(),
+            Value::String(version_id.to_string()),
+        );
+        clauses.push(Value::Object(clause));
+    }
+    if let Some(status) = filter.status {
+        let mut clause = Map::new();
+        clause.insert("status".to_string(), Value::String(status.to_string()));
+        clauses.push(Value::Object(clause));
+    }
+    if let Some(priority) = filter.priority {
+        let mut clause = Map::new();
+        clause.insert("priority".to_string(), Value::String(priority.to_string()));
+        clauses.push(Value::Object(clause));
+    }
+    if let Some(knowledge_status) = filter.knowledge_status {
+        let mut clause = Map::new();
+        clause.insert(
+            "knowledge_status".to_string(),
+            Value::String(knowledge_status.to_string()),
+        );
         clauses.push(Value::Object(clause));
     }
     if let Some(task_kind) = filter.task_kind {
         let mut clause = Map::new();
-        clause.insert("task_kind".to_string(), Value::String(task_kind.to_string()));
+        clause.insert(
+            "task_kind".to_string(),
+            Value::String(task_kind.to_string()),
+        );
         clauses.push(Value::Object(clause));
     }
     match clauses.len() {
@@ -667,7 +694,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::chroma_where_clause;
-    use crate::domain::TaskKind;
+    use crate::domain::{KnowledgeStatus, TaskKind, TaskPriority, TaskStatus};
     use crate::storage::TaskListFilter;
 
     #[test]
@@ -693,6 +720,9 @@ mod tests {
         let clause = chroma_where_clause(&TaskListFilter {
             project_id: Some(project_id),
             version_id: Some(version_id),
+            status: Some(TaskStatus::Ready),
+            priority: Some(TaskPriority::High),
+            knowledge_status: Some(KnowledgeStatus::Reusable),
             task_kind: Some(TaskKind::Standard),
             ..Default::default()
         })
@@ -702,21 +732,32 @@ mod tests {
             .get("$and")
             .and_then(Value::as_array)
             .expect("$and array");
-        assert_eq!(and_clauses.len(), 3);
+        assert_eq!(and_clauses.len(), 6);
         assert!(and_clauses.iter().any(|value| {
-            value.as_object()
-                .and_then(|item| item.get("project_id"))
+            value.as_object().and_then(|item| item.get("project_id"))
                 == Some(&Value::String(project_id.to_string()))
         }));
         assert!(and_clauses.iter().any(|value| {
-            value.as_object()
-                .and_then(|item| item.get("version_id"))
+            value.as_object().and_then(|item| item.get("version_id"))
                 == Some(&Value::String(version_id.to_string()))
         }));
         assert!(and_clauses.iter().any(|value| {
-            value.as_object()
-                .and_then(|item| item.get("task_kind"))
+            value.as_object().and_then(|item| item.get("task_kind"))
                 == Some(&Value::String("standard".to_string()))
+        }));
+        assert!(and_clauses.iter().any(|value| {
+            value.as_object().and_then(|item| item.get("status"))
+                == Some(&Value::String("ready".to_string()))
+        }));
+        assert!(and_clauses.iter().any(|value| {
+            value.as_object().and_then(|item| item.get("priority"))
+                == Some(&Value::String("high".to_string()))
+        }));
+        assert!(and_clauses.iter().any(|value| {
+            value
+                .as_object()
+                .and_then(|item| item.get("knowledge_status"))
+                == Some(&Value::String("reusable".to_string()))
         }));
     }
 }

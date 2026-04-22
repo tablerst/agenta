@@ -2,10 +2,14 @@ use sqlx::{query, QueryBuilder, Row, Sqlite, Transaction};
 use uuid::Uuid;
 
 use time::OffsetDateTime;
+use tokio::fs;
 
 use crate::domain::{KnowledgeStatus, Task, TaskActivity, TaskActivityKind};
 use crate::error::{AppError, AppResult};
-use crate::search::{build_task_vector_document_text, SearchVectorJob, TaskVectorDocument};
+use crate::search::{
+    build_activity_search_chunks, build_task_vector_document_text, SearchVectorJob,
+    TaskVectorDocument,
+};
 
 use super::mapping::{format_time, map_activity, map_task, parse_time};
 use super::{ActivityLexicalSearchRow, SqliteStore, TaskLexicalSearchRow, TaskListFilter};
@@ -744,8 +748,8 @@ impl SqliteStore {
         query(
             r#"
             INSERT INTO task_activities (
-                activity_id, task_id, kind, content, activity_search_summary, created_by, created_at, metadata_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                activity_id, task_id, kind, content, activity_search_summary, activity_search_text, created_by, created_at, metadata_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(activity.activity_id.to_string())
@@ -753,6 +757,7 @@ impl SqliteStore {
         .bind(activity.kind.to_string())
         .bind(&activity.content)
         .bind(&activity.activity_search_summary)
+        .bind(&activity.activity_search_text)
         .bind(&activity.created_by)
         .bind(format_time(activity.created_at)?)
         .bind(activity.metadata_json.to_string())
@@ -774,10 +779,11 @@ impl SqliteStore {
                 kind,
                 content,
                 activity_search_summary,
+                activity_search_text,
                 created_by,
                 created_at,
                 metadata_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(activity.activity_id.to_string())
@@ -785,6 +791,7 @@ impl SqliteStore {
         .bind(activity.kind.to_string())
         .bind(&activity.content)
         .bind(&activity.activity_search_summary)
+        .bind(&activity.activity_search_text)
         .bind(&activity.created_by)
         .bind(format_time(activity.created_at)?)
         .bind(activity.metadata_json.to_string())
@@ -793,10 +800,130 @@ impl SqliteStore {
         Ok(())
     }
 
+    pub async fn replace_activity_chunks_tx(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        activity: &TaskActivity,
+        chunk_source_text: &str,
+    ) -> AppResult<()> {
+        query("DELETE FROM task_activity_chunks WHERE activity_id = ?")
+            .bind(activity.activity_id.to_string())
+            .execute(&mut **tx)
+            .await?;
+
+        let chunks = build_activity_search_chunks(chunk_source_text);
+        let fallback_chunk = if chunks.is_empty() {
+            activity.activity_search_summary.clone()
+        } else {
+            String::new()
+        };
+        let chunk_texts = if chunks.is_empty() {
+            vec![fallback_chunk]
+        } else {
+            chunks
+        };
+
+        for (index, chunk_text) in chunk_texts.into_iter().enumerate() {
+            query(
+                r#"
+                INSERT INTO task_activity_chunks (
+                    chunk_id,
+                    activity_id,
+                    task_id,
+                    chunk_index,
+                    chunk_text
+                ) VALUES (?, ?, ?, ?, ?)
+                "#,
+            )
+            .bind(format!("{}:{index}", activity.activity_id))
+            .bind(activity.activity_id.to_string())
+            .bind(activity.task_id.to_string())
+            .bind(index as i64)
+            .bind(chunk_text)
+            .execute(&mut **tx)
+            .await?;
+        }
+        Ok(())
+    }
+
+    pub async fn rebuild_activity_chunk_index(&self) -> AppResult<()> {
+        let activity_count = query("SELECT COUNT(*) AS count FROM task_activities")
+            .fetch_one(&self.pool)
+            .await?
+            .get::<i64, _>("count");
+        let chunked_activity_count =
+            query("SELECT COUNT(DISTINCT activity_id) AS count FROM task_activity_chunks")
+                .fetch_one(&self.pool)
+                .await?
+                .get::<i64, _>("count");
+        if activity_count == 0 || activity_count == chunked_activity_count {
+            return Ok(());
+        }
+
+        let rows = query(
+            r#"
+            SELECT activity_id, task_id, kind, content, activity_search_summary, activity_search_text, created_by, created_at, metadata_json
+            FROM task_activities
+            ORDER BY created_at ASC, activity_id ASC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        let activities = rows
+            .into_iter()
+            .map(map_activity)
+            .collect::<AppResult<Vec<_>>>()?;
+
+        let mut tx = self.pool.begin().await?;
+        query("DELETE FROM task_activity_chunks")
+            .execute(&mut *tx)
+            .await?;
+        for activity in &activities {
+            let chunk_source_text = self.activity_chunk_source_text(activity).await?;
+            self.replace_activity_chunks_tx(&mut tx, activity, &chunk_source_text)
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn activity_chunk_source_text(&self, activity: &TaskActivity) -> AppResult<String> {
+        if activity.kind != TaskActivityKind::AttachmentRef {
+            return Ok(activity.content.clone());
+        }
+
+        let storage_path = activity
+            .metadata_json
+            .get("storage_path")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let Some(storage_path) = storage_path else {
+            return Ok(activity.content.clone());
+        };
+
+        let attachment_path = self.attachments_dir.join(storage_path);
+        let bytes = match fs::read(&attachment_path).await {
+            Ok(bytes) => bytes,
+            Err(_) => return Ok(activity.content.clone()),
+        };
+        let mime = mime_guess::from_path(&attachment_path)
+            .first_or_octet_stream()
+            .to_string();
+        let original_filename = attachment_path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("attachment");
+        let extracted = self.extract_attachment_search_text(&bytes, &mime, original_filename);
+        Ok(extracted
+            .map(|text| format!("{}\n{text}", activity.content))
+            .unwrap_or_else(|| activity.content.clone()))
+    }
+
     pub async fn list_task_activities(&self, task_id: Uuid) -> AppResult<Vec<TaskActivity>> {
         let rows = query(
             r#"
-            SELECT activity_id, task_id, kind, content, activity_search_summary, created_by, created_at, metadata_json
+            SELECT activity_id, task_id, kind, content, activity_search_summary, activity_search_text, created_by, created_at, metadata_json
             FROM task_activities
             WHERE task_id = ?
             ORDER BY created_at DESC, activity_id DESC
@@ -846,6 +973,163 @@ impl SqliteStore {
             "#,
         );
         builder.push_bind(query_text);
+        push_task_filter_predicates(&mut builder, filter);
+        builder.push(" ORDER BY lexical_score ASC, latest_activity_at DESC, t.task_id ASC LIMIT ");
+        builder.push_bind(limit as i64);
+
+        let rows = builder.build().fetch_all(&self.pool).await?;
+        rows.into_iter()
+            .enumerate()
+            .map(|(index, row)| {
+                Ok(TaskLexicalSearchRow {
+                    task_id: row.get::<String, _>("task_id"),
+                    task_code: row.get::<Option<String>, _>("task_code"),
+                    task_kind: row.get::<String, _>("task_kind"),
+                    title: row.get::<String, _>("title"),
+                    status: row.get::<String, _>("status"),
+                    priority: row.get::<String, _>("priority"),
+                    knowledge_status: row.get::<String, _>("knowledge_status"),
+                    task_search_summary: row.get::<String, _>("task_search_summary"),
+                    task_context_digest: row.get::<String, _>("task_context_digest"),
+                    latest_note_summary: row.get::<Option<String>, _>("latest_note_summary"),
+                    lexical_score: row.get::<f64, _>("lexical_score"),
+                    lexical_rank: index,
+                    latest_activity_at: parse_time(
+                        row.get("latest_activity_at"),
+                        "latest_activity_at",
+                    )?,
+                })
+            })
+            .collect()
+    }
+
+    pub async fn search_tasks_by_like(
+        &self,
+        filter: &TaskListFilter,
+        raw_text: &str,
+        terms: &[String],
+        limit: usize,
+    ) -> AppResult<Vec<TaskLexicalSearchRow>> {
+        let normalized_raw_text = raw_text.trim();
+        if normalized_raw_text.is_empty() || terms.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let raw_exact = normalized_raw_text.to_string();
+        let raw_prefix = format!("{}%", escape_like_pattern(normalized_raw_text));
+        let raw_contains = format!("%{}%", escape_like_pattern(normalized_raw_text));
+
+        let mut builder = QueryBuilder::<Sqlite>::new(
+            r#"
+            SELECT
+                t.task_id,
+                t.task_code,
+                t.task_kind,
+                t.title,
+                t.status,
+                t.priority,
+                t.knowledge_status,
+                t.task_search_summary,
+                t.task_context_digest,
+                t.latest_note_summary,
+                CAST(
+                    CASE
+                        WHEN lower(COALESCE(t.task_code, '')) = 
+            "#,
+        );
+        builder.push_bind(raw_exact.clone());
+        builder.push(
+            r#"
+                        THEN 0
+                        WHEN lower(COALESCE(t.task_code, '')) LIKE 
+            "#,
+        );
+        builder.push_bind(raw_prefix.clone());
+        builder.push(
+            r#"
+                        ESCAPE '\'
+                        THEN 1
+                        WHEN lower(t.title) = 
+            "#,
+        );
+        builder.push_bind(raw_exact);
+        builder.push(
+            r#"
+                        THEN 2
+                        WHEN lower(t.title) LIKE 
+            "#,
+        );
+        builder.push_bind(raw_prefix);
+        builder.push(
+            r#"
+                        ESCAPE '\'
+                        THEN 3
+                        WHEN lower(t.title) LIKE 
+            "#,
+        );
+        builder.push_bind(raw_contains.clone());
+        builder.push(
+            r#"
+                        ESCAPE '\'
+                        THEN 4
+                        WHEN lower(t.task_search_summary) LIKE 
+            "#,
+        );
+        builder.push_bind(raw_contains.clone());
+        builder.push(
+            r#"
+                        ESCAPE '\'
+                        THEN 5
+                        WHEN lower(t.task_context_digest) LIKE 
+            "#,
+        );
+        builder.push_bind(raw_contains.clone());
+        builder.push(
+            r#"
+                        ESCAPE '\'
+                        THEN 6
+                        WHEN lower(COALESCE(t.latest_note_summary, '')) LIKE 
+            "#,
+        );
+        builder.push_bind(raw_contains);
+        builder.push(
+            r#"
+                        ESCAPE '\'
+                        THEN 7
+                        ELSE 8
+                    END AS REAL
+                ) AS lexical_score,
+                max(
+                    t.updated_at,
+                    COALESCE(
+                        (
+                            SELECT MAX(ta.created_at)
+                            FROM task_activities ta
+                            WHERE ta.task_id = t.task_id
+                        ),
+                        t.updated_at
+                    )
+                ) AS latest_activity_at
+            FROM tasks t
+            WHERE 1 = 1
+            "#,
+        );
+
+        for term in terms {
+            let pattern = format!("%{}%", escape_like_pattern(term));
+            builder.push(" AND (lower(COALESCE(t.task_code, '')) LIKE ");
+            builder.push_bind(pattern.clone());
+            builder.push(" ESCAPE '\\' OR lower(t.title) LIKE ");
+            builder.push_bind(pattern.clone());
+            builder.push(" ESCAPE '\\' OR lower(t.task_search_summary) LIKE ");
+            builder.push_bind(pattern.clone());
+            builder.push(" ESCAPE '\\' OR lower(t.task_context_digest) LIKE ");
+            builder.push_bind(pattern.clone());
+            builder.push(" ESCAPE '\\' OR lower(COALESCE(t.latest_note_summary, '')) LIKE ");
+            builder.push_bind(pattern);
+            builder.push(" ESCAPE '\\')");
+        }
+
         push_task_filter_predicates(&mut builder, filter);
         builder.push(" ORDER BY lexical_score ASC, latest_activity_at DESC, t.task_id ASC LIMIT ");
         builder.push_bind(limit as i64);
@@ -952,21 +1236,49 @@ impl SqliteStore {
     ) -> AppResult<Vec<ActivityLexicalSearchRow>> {
         let mut builder = QueryBuilder::<Sqlite>::new(
             r#"
-            SELECT
-                a.activity_id,
-                a.task_id,
-                a.kind,
-                a.activity_search_summary,
-                bm25(task_activities_fts, 1.0) AS lexical_score
-            FROM task_activities_fts f
-            JOIN task_activities a ON a.rowid = f.rowid
-            JOIN tasks t ON t.task_id = a.task_id
-            WHERE task_activities_fts MATCH
+            WITH matched_chunks AS (
+                SELECT
+                    c.activity_id,
+                    a.task_id,
+                    a.kind,
+                    a.activity_search_summary,
+                    c.chunk_text,
+                    c.chunk_index,
+                    a.created_at,
+                    bm25(task_activity_chunks_fts, 1.0) AS lexical_score
+                FROM task_activity_chunks_fts f
+                JOIN task_activity_chunks c ON c.rowid = f.rowid
+                JOIN task_activities a ON a.activity_id = c.activity_id
+                JOIN tasks t ON t.task_id = a.task_id
+                WHERE task_activity_chunks_fts MATCH
             "#,
         );
         builder.push_bind(query_text);
         push_task_filter_predicates(&mut builder, filter);
-        builder.push(" ORDER BY lexical_score ASC, a.created_at DESC, a.activity_id ASC LIMIT ");
+        builder.push(
+            r#"
+            ),
+            ranked_chunks AS (
+                SELECT
+                    *,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY activity_id
+                        ORDER BY lexical_score ASC, chunk_index ASC
+                    ) AS chunk_rank
+                FROM matched_chunks
+            )
+            SELECT
+                activity_id,
+                task_id,
+                kind,
+                activity_search_summary,
+                chunk_text,
+                lexical_score
+            FROM ranked_chunks
+            WHERE chunk_rank = 1
+            ORDER BY lexical_score ASC, created_at DESC, activity_id ASC LIMIT
+            "#,
+        );
         builder.push_bind(limit as i64);
 
         let rows = builder.build().fetch_all(&self.pool).await?;
@@ -977,6 +1289,7 @@ impl SqliteStore {
                 task_id: row.get::<String, _>("task_id"),
                 kind: row.get::<String, _>("kind"),
                 summary: row.get::<String, _>("activity_search_summary"),
+                search_text: row.get::<String, _>("chunk_text"),
                 score: row.get::<f64, _>("lexical_score"),
             })
             .collect())
@@ -1223,6 +1536,16 @@ fn push_task_filter_predicates(builder: &mut QueryBuilder<'_, Sqlite>, filter: &
             .push(" AND t.status = ")
             .push_bind(status.to_string());
     }
+    if let Some(priority) = filter.priority {
+        builder
+            .push(" AND t.priority = ")
+            .push_bind(priority.to_string());
+    }
+    if let Some(knowledge_status) = filter.knowledge_status {
+        builder
+            .push(" AND t.knowledge_status = ")
+            .push_bind(knowledge_status.to_string());
+    }
     if let Some(task_kind) = filter.task_kind {
         builder
             .push(" AND t.task_kind = ")
@@ -1238,6 +1561,13 @@ fn push_task_filter_predicates(builder: &mut QueryBuilder<'_, Sqlite>, filter: &
             .push(" AND t.title LIKE ")
             .push_bind(format!("{title_prefix}%"));
     }
+}
+
+fn escape_like_pattern(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
 }
 
 fn map_task_with_stats(

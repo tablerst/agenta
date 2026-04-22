@@ -72,6 +72,15 @@ const baseMessages = {
     },
     search: {
       activity: "Activity",
+      evidenceField: {
+        activity_search_summary: "Activity summary",
+        activity_search_text: "Activity text",
+        latest_note_summary: "Latest note",
+        task_code: "Task code",
+        task_context_digest: "Context digest",
+        task_search_summary: "Task summary",
+        title: "Title",
+      },
       empty: "Type a query to search task and activity summaries.",
       loading: "Searching...",
       placeholder: "Search tasks and activity summaries",
@@ -504,6 +513,15 @@ const baseMessages = {
     },
     search: {
       activity: "活动",
+      evidenceField: {
+        activity_search_summary: "活动摘要",
+        activity_search_text: "活动正文",
+        latest_note_summary: "最新笔记",
+        task_code: "任务编号",
+        task_context_digest: "上下文摘要",
+        task_search_summary: "任务摘要",
+        title: "标题",
+      },
       empty: "输入查询条件后，可搜索任务与活动摘要。",
       loading: "搜索中...",
       placeholder: "搜索任务和活动摘要",

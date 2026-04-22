@@ -100,6 +100,9 @@ async fn runtime_service_flow_covers_core_objects_and_search(
             text: Some("dashboard".to_string()),
             project: Some(project.slug.clone()),
             version: None,
+            status: None,
+            priority: None,
+            knowledge_status: None,
             task_kind: None,
             task_code_prefix: None,
             title_prefix: None,
@@ -1222,7 +1225,7 @@ async fn standalone_agenta_mcp_binary_exposes_explicit_tools_and_runs_smoke_flow
     );
     assert_eq!(
         search_payload["result"]["structuredContent"]["meta"]["task_sort"],
-        "sqlite fts5 bm25 with structured filters and recency tiebreaks"
+        "lexical cascade over sqlite fts5 exact/prefix plus sqlite like fallback with recency tiebreaks"
     );
     assert_eq!(
         search_payload["result"]["structuredContent"]["meta"]["retrieval_mode"],

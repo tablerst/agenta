@@ -22,12 +22,12 @@ use crate::domain::{
 use crate::interface::response::error_to_rmcp;
 use crate::search::SearchResponse;
 use crate::service::{
-    AddTaskBlockerInput, AgentaService, AttachChildTaskInput, CreateAttachmentInput,
-    ContextInitInput, ContextInitResult, CreateChildTaskInput, CreateNoteInput,
-    CreateProjectInput, CreateTaskInput, CreateVersionInput, DetachChildTaskInput, PageCursor,
-    PageRequest, PageResult, RequestOrigin, ResolveTaskBlockerInput, SearchInput, SortOrder,
-    TaskDetail, TaskLink, TaskListPageResult, TaskQuery, TaskSortBy, UpdateProjectInput,
-    UpdateTaskInput, UpdateVersionInput,
+    AddTaskBlockerInput, AgentaService, AttachChildTaskInput, ContextInitInput, ContextInitResult,
+    CreateAttachmentInput, CreateChildTaskInput, CreateNoteInput, CreateProjectInput,
+    CreateTaskInput, CreateVersionInput, DetachChildTaskInput, PageCursor, PageRequest, PageResult,
+    RequestOrigin, ResolveTaskBlockerInput, SearchInput, SortOrder, TaskDetail, TaskLink,
+    TaskListPageResult, TaskQuery, TaskSortBy, UpdateProjectInput, UpdateTaskInput,
+    UpdateVersionInput,
 };
 
 #[derive(Clone)]
@@ -1121,6 +1121,12 @@ pub struct SearchQueryToolInput {
     pub all_projects: Option<bool>,
     /// Optional version filter. Supported values: version_id UUID only.
     pub version: Option<String>,
+    /// Optional task lifecycle status filter.
+    pub status: Option<TaskStatus>,
+    /// Optional task priority filter.
+    pub priority: Option<TaskPriority>,
+    /// Optional knowledge rollup filter.
+    pub knowledge_status: Option<KnowledgeStatus>,
     /// Optional task role filter. Allowed values: `standard`, `context`, `index`.
     pub task_kind: Option<TaskKind>,
     /// Optional task code prefix filter such as `InitCtx-`.
@@ -1156,6 +1162,10 @@ pub struct SearchTaskHitRecord {
     pub score: Option<f64>,
     /// Indexed fields that matched the lexical query terms.
     pub matched_fields: Vec<String>,
+    /// Primary evidence field used to explain the hit.
+    pub evidence_source: Option<String>,
+    /// Short evidence snippet aligned with the primary evidence field.
+    pub evidence_snippet: Option<String>,
 }
 
 /// Structured MCP representation of an activity search hit.
@@ -1171,6 +1181,12 @@ pub struct SearchActivityHitRecord {
     pub summary: String,
     /// Optional lexical score used for ordering.
     pub score: Option<f64>,
+    /// Indexed fields that matched the lexical query terms.
+    pub matched_fields: Vec<String>,
+    /// Primary evidence field used to explain the hit.
+    pub evidence_source: Option<String>,
+    /// Short evidence snippet aligned with the primary evidence field.
+    pub evidence_snippet: Option<String>,
 }
 
 /// Structured MCP representation of indexed field coverage.
@@ -1248,6 +1264,8 @@ impl SearchQueryToolOutput {
                     retrieval_source: task.retrieval_source,
                     score: task.score,
                     matched_fields: task.matched_fields,
+                    evidence_source: task.evidence_source,
+                    evidence_snippet: task.evidence_snippet,
                 })
                 .collect(),
             activities: activities
@@ -1258,6 +1276,9 @@ impl SearchQueryToolOutput {
                     kind: activity.kind,
                     summary: activity.summary,
                     score: activity.score,
+                    matched_fields: activity.matched_fields,
+                    evidence_source: activity.evidence_source,
+                    evidence_snippet: activity.evidence_snippet,
                 })
                 .collect(),
             meta: SearchMetaRecord {
@@ -2373,6 +2394,9 @@ impl AgentaMcpServer {
                 text: optional_trimmed(params.query),
                 project: optional_trimmed(params.project),
                 version: optional_trimmed(params.version),
+                status: params.status,
+                priority: params.priority,
+                knowledge_status: params.knowledge_status,
                 task_kind: params.task_kind,
                 task_code_prefix: optional_trimmed(params.task_code_prefix),
                 title_prefix: optional_trimmed(params.title_prefix),

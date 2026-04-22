@@ -6,6 +6,7 @@ import { useRouter } from "vue-router";
 
 import { desktopBridge } from "../lib/desktop";
 import { buildProjectWorkspacePath, resolveProjectSlug } from "../lib/projectWorkspace";
+import { localizeEvidenceSource, renderHighlightedEvidence } from "../lib/searchEvidence";
 import type { Task } from "../lib/types";
 import { useProjectsStore } from "../stores/projects";
 import { useSearchStore } from "../stores/search";
@@ -215,6 +216,13 @@ async function jumpToTask(taskId: string) {
                     </span>
                   </div>
                   <p class="truncate text-xs text-[var(--text-muted)]">{{ item.summary }}</p>
+                  <p v-if="item.evidence_snippet" class="truncate text-[11px] text-[var(--text-muted)]/90">
+                    <span v-if="item.evidence_source" class="font-medium">
+                      {{ localizeEvidenceSource(item.evidence_source, t) }}
+                    </span>
+                    <span v-if="item.evidence_source"> · </span>
+                    <span v-html="renderHighlightedEvidence(item.evidence_snippet, search.results?.query)" />
+                  </p>
                 </div>
                 <span class="status-pill">{{ t(`status.task.${item.status}`) }}</span>
               </button>
@@ -237,6 +245,13 @@ async function jumpToTask(taskId: string) {
                     {{ t(`activityKind.${item.kind}`) }}
                   </p>
                   <p class="truncate text-xs text-[var(--text-muted)]">{{ item.summary }}</p>
+                  <p v-if="item.evidence_snippet" class="truncate text-[11px] text-[var(--text-muted)]/90">
+                    <span v-if="item.evidence_source" class="font-medium">
+                      {{ localizeEvidenceSource(item.evidence_source, t) }}
+                    </span>
+                    <span v-if="item.evidence_source"> · </span>
+                    <span v-html="renderHighlightedEvidence(item.evidence_snippet, search.results?.query)" />
+                  </p>
                 </div>
                 <span class="text-[11px] text-[var(--text-muted)]">{{ item.task_id }}</span>
               </button>

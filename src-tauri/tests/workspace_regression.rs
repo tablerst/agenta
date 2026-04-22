@@ -20,10 +20,9 @@ use agenta_lib::{
     },
     error::AppError,
     service::{
-        ApprovalQuery, ContextInitInput, ContextInitStatus, CreateAttachmentInput,
-        CreateNoteInput, CreateProjectInput, CreateTaskInput, CreateVersionInput, PageRequest,
-        SearchInput, SortOrder, TaskQuery, TaskSortBy, UpdateProjectInput, UpdateTaskInput,
-        UpdateVersionInput,
+        ApprovalQuery, ContextInitInput, ContextInitStatus, CreateAttachmentInput, CreateNoteInput,
+        CreateProjectInput, CreateTaskInput, CreateVersionInput, PageRequest, SearchInput,
+        SortOrder, TaskQuery, TaskSortBy, UpdateProjectInput, UpdateTaskInput, UpdateVersionInput,
     },
 };
 
@@ -337,9 +336,11 @@ async fn workspace_flow_persists_updates_filters_and_paginates(
 fn write_test_config(tempdir: &TempDir) -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
     let config_path = tempdir.path().join("agenta.local.yaml");
     let data_dir = tempdir.path().join("data");
+    let isolated_context_dir = tempdir.path().join("isolated-context");
     let yaml = format!(
-        "paths:\n  data_dir: {}\nmcp:\n  bind: \"127.0.0.1:8787\"\n  path: \"/mcp\"\n",
+        "paths:\n  data_dir: {}\nproject_context:\n  paths:\n    - {}\n  manifest: project.yaml\nmcp:\n  bind: \"127.0.0.1:8787\"\n  path: \"/mcp\"\n",
         normalize_path_for_yaml(&data_dir),
+        normalize_path_for_yaml(&isolated_context_dir),
     );
     std::fs::write(&config_path, yaml)?;
     Ok(config_path)
@@ -362,6 +363,22 @@ fn write_test_config_with_project_context(
 
 fn normalize_path_for_yaml(path: &std::path::Path) -> String {
     path.to_string_lossy().replace('\\', "/")
+}
+
+fn scoped_search_input(project: &str, version: &str, text: Option<&str>) -> SearchInput {
+    SearchInput {
+        text: text.map(ToOwned::to_owned),
+        project: Some(project.to_string()),
+        version: Some(version.to_string()),
+        status: None,
+        priority: None,
+        knowledge_status: None,
+        task_kind: None,
+        task_code_prefix: None,
+        title_prefix: None,
+        limit: Some(10),
+        all_projects: false,
+    }
 }
 
 async fn clear_search_index_jobs(runtime: &AppRuntime) -> Result<(), Box<dyn std::error::Error>> {
@@ -599,7 +616,16 @@ async fn task_context_retrieval_fields_sort_summary_and_search(
         .service
         .create_note(CreateNoteInput {
             task: ctx1.task_id.to_string(),
-            content: "Scratch context note".to_string(),
+            content: "Scratch context note with archival-keyword-alpha".to_string(),
+            note_kind: Some(NoteKind::Scratch),
+            created_by: Some("context-test".to_string()),
+        })
+        .await?;
+    runtime
+        .service
+        .create_note(CreateNoteInput {
+            task: ctx1.task_id.to_string(),
+            content: "Latest scratch update without the archival token".to_string(),
             note_kind: Some(NoteKind::Scratch),
             created_by: Some("context-test".to_string()),
         })
@@ -623,6 +649,21 @@ async fn task_context_retrieval_fields_sort_summary_and_search(
         .latest_note_summary
         .as_deref()
         .is_some_and(|summary| summary.contains("Reusable conclusion")));
+    let attachment_source = tempdir.path().join("context-evidence.md");
+    std::fs::write(
+        &attachment_source,
+        "# Context attachment\nThis file carries attachment-needle-omega for retrieval.\n",
+    )?;
+    runtime
+        .service
+        .create_attachment(CreateAttachmentInput {
+            task: ctx10.task_id.to_string(),
+            path: attachment_source,
+            kind: None,
+            created_by: Some("context-test".to_string()),
+            summary: Some("context-evidence.md".to_string()),
+        })
+        .await?;
 
     let filtered_search = runtime
         .service
@@ -630,6 +671,9 @@ async fn task_context_retrieval_fields_sort_summary_and_search(
             text: None,
             project: Some(project.slug.clone()),
             version: Some(version.version_id.to_string()),
+            status: None,
+            priority: None,
+            knowledge_status: None,
             task_kind: Some(TaskKind::Context),
             task_code_prefix: Some("InitCtx-".to_string()),
             title_prefix: None,
@@ -646,6 +690,9 @@ async fn task_context_retrieval_fields_sort_summary_and_search(
             text: Some("reusable conclusion".to_string()),
             project: Some(project.slug),
             version: Some(version.version_id.to_string()),
+            status: None,
+            priority: None,
+            knowledge_status: None,
             task_kind: None,
             task_code_prefix: None,
             title_prefix: None,
@@ -661,6 +708,435 @@ async fn task_context_retrieval_fields_sort_summary_and_search(
         .tasks
         .iter()
         .all(|hit| hit.task_id != ctx10.task_id.to_string()));
+
+    let archival_note_search = runtime
+        .service
+        .search(SearchInput {
+            text: Some("archival-keyword-alpha".to_string()),
+            project: Some("context-flow".to_string()),
+            version: Some(version.version_id.to_string()),
+            status: None,
+            priority: None,
+            knowledge_status: None,
+            task_kind: None,
+            task_code_prefix: None,
+            title_prefix: None,
+            limit: Some(10),
+            all_projects: false,
+        })
+        .await?;
+    assert!(archival_note_search
+        .tasks
+        .iter()
+        .any(|hit| hit.task_id == ctx1.task_id.to_string()));
+    assert!(archival_note_search.tasks.iter().any(|hit| {
+        hit.task_id == ctx1.task_id.to_string()
+            && hit.evidence_source.as_deref() == Some("activity_search_text")
+            && hit
+                .evidence_snippet
+                .as_deref()
+                .is_some_and(|snippet| snippet.contains("archival-keyword-alpha"))
+    }));
+    assert!(archival_note_search
+        .activities
+        .iter()
+        .any(|hit| hit.task_id == ctx1.task_id.to_string()));
+
+    let attachment_search = runtime
+        .service
+        .search(SearchInput {
+            text: Some("attachment-needle-omega".to_string()),
+            project: Some("context-flow".to_string()),
+            version: Some(version.version_id.to_string()),
+            status: None,
+            priority: None,
+            knowledge_status: None,
+            task_kind: None,
+            task_code_prefix: None,
+            title_prefix: None,
+            limit: Some(10),
+            all_projects: false,
+        })
+        .await?;
+    assert!(attachment_search
+        .tasks
+        .iter()
+        .any(|hit| hit.task_id == ctx10.task_id.to_string()));
+    assert!(attachment_search
+        .activities
+        .iter()
+        .any(|hit| hit.task_id == ctx10.task_id.to_string()));
+
+    let identifier_search = runtime
+        .service
+        .search(SearchInput {
+            text: Some("InitCtx-1".to_string()),
+            project: Some("context-flow".to_string()),
+            version: Some(version.version_id.to_string()),
+            status: None,
+            priority: None,
+            knowledge_status: None,
+            task_kind: None,
+            task_code_prefix: None,
+            title_prefix: None,
+            limit: Some(10),
+            all_projects: false,
+        })
+        .await?;
+    assert_eq!(
+        identifier_search
+            .tasks
+            .first()
+            .map(|hit| hit.task_id.clone()),
+        Some(ctx1.task_id.to_string())
+    );
+
+    let ready_only_search = runtime
+        .service
+        .search(SearchInput {
+            text: None,
+            project: Some("context-flow".to_string()),
+            version: Some(version.version_id.to_string()),
+            status: Some(TaskStatus::Ready),
+            priority: None,
+            knowledge_status: None,
+            task_kind: None,
+            task_code_prefix: None,
+            title_prefix: None,
+            limit: Some(10),
+            all_projects: false,
+        })
+        .await?;
+    assert_eq!(ready_only_search.tasks.len(), 1);
+    assert_eq!(ready_only_search.tasks[0].task_id, ctx2.task_id.to_string());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn search_quality_golden_queries_hold_expected_hits() -> Result<(), Box<dyn std::error::Error>>
+{
+    let tempdir = TempDir::new()?;
+    let config_path = write_test_config(&tempdir)?;
+    let runtime = AppRuntime::bootstrap(BootstrapOptions {
+        config_path: Some(config_path),
+    })
+    .await?;
+
+    let project = runtime
+        .service
+        .create_project(CreateProjectInput {
+            slug: "search-quality".to_string(),
+            name: "Search Quality".to_string(),
+            description: Some("Golden query baseline".to_string()),
+        })
+        .await?;
+    let version = runtime
+        .service
+        .create_version(CreateVersionInput {
+            project: project.slug.clone(),
+            name: "search-golden".to_string(),
+            description: Some("Golden query fixtures".to_string()),
+            status: Some(VersionStatus::Active),
+        })
+        .await?;
+
+    let search_index = runtime
+        .service
+        .create_task(CreateTaskInput {
+            project: project.slug.clone(),
+            version: Some(version.version_id.to_string()),
+            task_code: Some("SearchV2-00".to_string()),
+            task_kind: Some(TaskKind::Index),
+            title: "Runtime console failure recovery".to_string(),
+            summary: Some("Canonical phrase query fixture".to_string()),
+            description: None,
+            status: Some(TaskStatus::Ready),
+            priority: Some(TaskPriority::Normal),
+            created_by: Some("golden-test".to_string()),
+        })
+        .await?;
+    let search_filters = runtime
+        .service
+        .create_task(CreateTaskInput {
+            project: project.slug.clone(),
+            version: Some(version.version_id.to_string()),
+            task_code: Some("SearchV2-04".to_string()),
+            task_kind: Some(TaskKind::Standard),
+            title: "Search filter design".to_string(),
+            summary: Some("High priority status and knowledge filters".to_string()),
+            description: None,
+            status: Some(TaskStatus::InProgress),
+            priority: Some(TaskPriority::High),
+            created_by: Some("golden-test".to_string()),
+        })
+        .await?;
+    let init_ctx = runtime
+        .service
+        .create_task(CreateTaskInput {
+            project: project.slug.clone(),
+            version: Some(version.version_id.to_string()),
+            task_code: Some("InitCtx-01".to_string()),
+            task_kind: Some(TaskKind::Context),
+            title: "Tracing bootstrap flow".to_string(),
+            summary: Some("Historical note recall fixture".to_string()),
+            description: None,
+            status: Some(TaskStatus::Done),
+            priority: Some(TaskPriority::Normal),
+            created_by: Some("golden-test".to_string()),
+        })
+        .await?;
+    let reusable = runtime
+        .service
+        .create_task(CreateTaskInput {
+            project: project.slug.clone(),
+            version: Some(version.version_id.to_string()),
+            task_code: Some("Reuse-01".to_string()),
+            task_kind: Some(TaskKind::Context),
+            title: "Reusable conclusion lane".to_string(),
+            summary: Some("Knowledge status fixture".to_string()),
+            description: None,
+            status: Some(TaskStatus::Ready),
+            priority: Some(TaskPriority::Normal),
+            created_by: Some("golden-test".to_string()),
+        })
+        .await?;
+    let attachment_task = runtime
+        .service
+        .create_task(CreateTaskInput {
+            project: project.slug.clone(),
+            version: Some(version.version_id.to_string()),
+            task_code: Some("SearchV2-08".to_string()),
+            task_kind: Some(TaskKind::Standard),
+            title: "Attachment evidence ingest".to_string(),
+            summary: Some("Attachment body search fixture".to_string()),
+            description: None,
+            status: Some(TaskStatus::Ready),
+            priority: Some(TaskPriority::Normal),
+            created_by: Some("golden-test".to_string()),
+        })
+        .await?;
+    let deep_chunk = runtime
+        .service
+        .create_task(CreateTaskInput {
+            project: project.slug.clone(),
+            version: Some(version.version_id.to_string()),
+            task_code: Some("Deep-01".to_string()),
+            task_kind: Some(TaskKind::Context),
+            title: "Deep chunk retrieval lane".to_string(),
+            summary: Some("Chunk retrieval fixture".to_string()),
+            description: None,
+            status: Some(TaskStatus::Ready),
+            priority: Some(TaskPriority::Normal),
+            created_by: Some("golden-test".to_string()),
+        })
+        .await?;
+
+    runtime
+        .service
+        .create_note(CreateNoteInput {
+            task: init_ctx.task_id.to_string(),
+            content: "Historic archival-keyword-alpha note for recall.".to_string(),
+            note_kind: Some(NoteKind::Scratch),
+            created_by: Some("golden-test".to_string()),
+        })
+        .await?;
+    runtime
+        .service
+        .create_note(CreateNoteInput {
+            task: init_ctx.task_id.to_string(),
+            content: "Latest tracing update without archival token.".to_string(),
+            note_kind: Some(NoteKind::Scratch),
+            created_by: Some("golden-test".to_string()),
+        })
+        .await?;
+    runtime
+        .service
+        .create_note(CreateNoteInput {
+            task: reusable.task_id.to_string(),
+            content: "Reusable conclusion for search golden baseline.".to_string(),
+            note_kind: Some(NoteKind::Conclusion),
+            created_by: Some("golden-test".to_string()),
+        })
+        .await?;
+    let deep_note = format!(
+        "{} deep-chunk-needle-zeta {}",
+        "prefix ".repeat(1200),
+        "suffix ".repeat(1200)
+    );
+    runtime
+        .service
+        .create_note(CreateNoteInput {
+            task: deep_chunk.task_id.to_string(),
+            content: deep_note,
+            note_kind: Some(NoteKind::Scratch),
+            created_by: Some("golden-test".to_string()),
+        })
+        .await?;
+
+    let attachment_source = tempdir.path().join("golden-attachment.md");
+    std::fs::write(
+        &attachment_source,
+        "# Attachment body\nThis file contains attachment-needle-omega for search quality.\n",
+    )?;
+    runtime
+        .service
+        .create_attachment(CreateAttachmentInput {
+            task: attachment_task.task_id.to_string(),
+            path: attachment_source,
+            kind: None,
+            created_by: Some("golden-test".to_string()),
+            summary: Some("golden-attachment.md".to_string()),
+        })
+        .await?;
+
+    let identifier = runtime
+        .service
+        .search(scoped_search_input(
+            &project.slug,
+            &version.version_id.to_string(),
+            Some("SearchV2-04"),
+        ))
+        .await?;
+    assert_eq!(
+        identifier
+            .tasks
+            .first()
+            .and_then(|hit| hit.task_code.as_deref()),
+        Some("SearchV2-04")
+    );
+    assert_eq!(
+        identifier
+            .tasks
+            .first()
+            .and_then(|hit| hit.evidence_source.as_deref()),
+        Some("task_code")
+    );
+    assert_eq!(identifier.meta.retrieval_mode, "lexical_only");
+
+    let phrase = runtime
+        .service
+        .search(scoped_search_input(
+            &project.slug,
+            &version.version_id.to_string(),
+            Some("\"runtime console failure recovery\""),
+        ))
+        .await?;
+    assert_eq!(
+        phrase
+            .tasks
+            .first()
+            .and_then(|hit| hit.task_code.as_deref()),
+        Some("SearchV2-00")
+    );
+    assert_eq!(
+        phrase
+            .tasks
+            .first()
+            .and_then(|hit| hit.evidence_source.as_deref()),
+        Some("title")
+    );
+
+    let archival_note = runtime
+        .service
+        .search(scoped_search_input(
+            &project.slug,
+            &version.version_id.to_string(),
+            Some("archival-keyword-alpha"),
+        ))
+        .await?;
+    assert!(archival_note
+        .tasks
+        .iter()
+        .any(|hit| hit.task_code.as_deref() == Some("InitCtx-01")));
+    assert!(archival_note.tasks.iter().any(|hit| {
+        hit.task_code.as_deref() == Some("InitCtx-01")
+            && hit.evidence_source.as_deref() == Some("activity_search_text")
+            && hit
+                .evidence_snippet
+                .as_deref()
+                .is_some_and(|snippet| snippet.contains("archival-keyword-alpha"))
+    }));
+
+    let attachment_body = runtime
+        .service
+        .search(scoped_search_input(
+            &project.slug,
+            &version.version_id.to_string(),
+            Some("attachment-needle-omega"),
+        ))
+        .await?;
+    assert!(attachment_body
+        .tasks
+        .iter()
+        .any(|hit| hit.task_code.as_deref() == Some("SearchV2-08")));
+    assert!(attachment_body.tasks.iter().any(|hit| {
+        hit.task_code.as_deref() == Some("SearchV2-08")
+            && hit.evidence_source.as_deref() == Some("activity_search_text")
+    }));
+
+    let deep_chunk_search = runtime
+        .service
+        .search(scoped_search_input(
+            &project.slug,
+            &version.version_id.to_string(),
+            Some("deep-chunk-needle-zeta"),
+        ))
+        .await?;
+    assert!(deep_chunk_search
+        .tasks
+        .iter()
+        .any(|hit| hit.task_code.as_deref() == Some("Deep-01")));
+    assert!(deep_chunk_search.tasks.iter().any(|hit| {
+        hit.task_code.as_deref() == Some("Deep-01")
+            && hit.evidence_source.as_deref() == Some("activity_search_text")
+            && hit
+                .evidence_snippet
+                .as_deref()
+                .is_some_and(|snippet| snippet.contains("deep-chunk-needle-zeta"))
+    }));
+
+    let ready_only = runtime
+        .service
+        .search(SearchInput {
+            status: Some(TaskStatus::Ready),
+            ..scoped_search_input(&project.slug, &version.version_id.to_string(), None)
+        })
+        .await?;
+    assert!(ready_only
+        .tasks
+        .iter()
+        .all(|hit| hit.status == TaskStatus::Ready.to_string()));
+    assert_eq!(ready_only.meta.retrieval_mode, "structured_only");
+
+    let reusable_only = runtime
+        .service
+        .search(SearchInput {
+            knowledge_status: Some(KnowledgeStatus::Reusable),
+            ..scoped_search_input(&project.slug, &version.version_id.to_string(), None)
+        })
+        .await?;
+    assert_eq!(reusable_only.tasks.len(), 1);
+    assert_eq!(
+        reusable_only.tasks[0].task_code.as_deref(),
+        Some("Reuse-01")
+    );
+
+    let high_priority = runtime
+        .service
+        .search(SearchInput {
+            priority: Some(TaskPriority::High),
+            ..scoped_search_input(&project.slug, &version.version_id.to_string(), None)
+        })
+        .await?;
+    assert_eq!(high_priority.tasks.len(), 1);
+    assert_eq!(
+        high_priority.tasks[0].task_code.as_deref(),
+        Some("SearchV2-04")
+    );
+
+    let _ = search_index;
+    let _ = search_filters;
 
     Ok(())
 }
@@ -1235,6 +1711,9 @@ async fn multiple_projects_without_scope_return_ambiguous_context(
             text: Some("task".to_string()),
             project: None,
             version: None,
+            status: None,
+            priority: None,
+            knowledge_status: None,
             task_kind: None,
             task_code_prefix: None,
             title_prefix: None,
@@ -1405,6 +1884,9 @@ async fn context_manifest_scopes_queries_and_all_projects_opt_in(
             text: None,
             project: None,
             version: None,
+            status: None,
+            priority: None,
+            knowledge_status: None,
             task_kind: None,
             task_code_prefix: None,
             title_prefix: None,
@@ -1430,6 +1912,9 @@ async fn context_manifest_scopes_queries_and_all_projects_opt_in(
             text: Some("Scoped".to_string()),
             project: None,
             version: None,
+            status: None,
+            priority: None,
+            knowledge_status: None,
             task_kind: None,
             task_code_prefix: None,
             title_prefix: None,

@@ -381,6 +381,7 @@ export interface ProjectSearchFilters {
   project: string;
   query: string;
   version?: string;
+  status?: TaskStatus;
   task_kind?: TaskKind;
   task_code_prefix?: string;
   limit?: number;
@@ -398,6 +399,8 @@ export interface SearchTaskHit {
   retrieval_source: "structured_filter" | "lexical" | "semantic" | "hybrid";
   score: number | null;
   matched_fields: string[];
+  evidence_source: string | null;
+  evidence_snippet: string | null;
 }
 
 export interface SearchActivityHit {
@@ -406,6 +409,9 @@ export interface SearchActivityHit {
   kind: TaskActivity["kind"];
   summary: string;
   score: number | null;
+  matched_fields: string[];
+  evidence_source: string | null;
+  evidence_snippet: string | null;
 }
 
 export interface SearchMeta {

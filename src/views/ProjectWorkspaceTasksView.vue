@@ -20,6 +20,7 @@ import { DesktopBridgeError, desktopBridge } from "../lib/desktop";
 import { formatDesktopError } from "../lib/errorMessage";
 import { formatDateTime } from "../lib/format";
 import { buildProjectWorkspacePath, mergeWorkspaceQuery, readRouteString } from "../lib/projectWorkspace";
+import { localizeEvidenceSource, renderHighlightedEvidence } from "../lib/searchEvidence";
 import {
   attachmentKindOptions,
   taskDetailTabOptions,
@@ -210,6 +211,7 @@ function buildProjectSearchFilters(): ProjectSearchFilters {
     project: selectedProjectSlug.value,
     query: selectedSearchQuery.value,
     version: selectedVersionId.value || undefined,
+    status: selectedStatus.value ? (selectedStatus.value as TaskStatus) : undefined,
     task_kind: selectedTaskKindFilter.value ? (selectedTaskKindFilter.value as TaskKind) : undefined,
     task_code_prefix: taskCodePrefixFilter.value || undefined,
     limit: 20,
@@ -919,6 +921,13 @@ async function jumpToQueuedApproval(error: unknown) {
                       <p v-if="task.matched_fields.length > 0" class="truncate text-[11px] text-[var(--text-muted)]">
                         {{ t("tasks.projectSearch.matchedFields") }} {{ task.matched_fields.join(" · ") }}
                       </p>
+                      <p v-if="task.evidence_snippet" class="truncate text-[11px] text-[var(--text-muted)]/90">
+                        <span v-if="task.evidence_source" class="font-medium">
+                          {{ localizeEvidenceSource(task.evidence_source, t) }}
+                        </span>
+                        <span v-if="task.evidence_source"> · </span>
+                        <span v-html="renderHighlightedEvidence(task.evidence_snippet, projectSearchResults?.query)" />
+                      </p>
                     </div>
                     <div class="list-row-meta">
                       <span>{{ t(`status.priority.${task.priority}`) }}</span>
@@ -958,6 +967,13 @@ async function jumpToQueuedApproval(error: unknown) {
                         </div>
                       </div>
                       <p class="truncate text-xs text-[var(--text-muted)]">{{ item.summary }}</p>
+                      <p v-if="item.evidence_snippet" class="truncate text-[11px] text-[var(--text-muted)]/90">
+                        <span v-if="item.evidence_source" class="font-medium">
+                          {{ localizeEvidenceSource(item.evidence_source, t) }}
+                        </span>
+                        <span v-if="item.evidence_source"> · </span>
+                        <span v-html="renderHighlightedEvidence(item.evidence_snippet, projectSearchResults?.query)" />
+                      </p>
                       <p class="truncate text-[11px] text-[var(--text-muted)]">
                         {{ projectSearchTaskMap.get(item.task_id)?.title || item.task_id }}
                       </p>

@@ -12,7 +12,9 @@ use tokio::sync::Mutex;
 use url::Url;
 use uuid::Uuid;
 
-use crate::app::{ProjectContextConfig, SearchConfig, SyncConfig, SyncRemoteConfig, SyncRemoteKind};
+use crate::app::{
+    ProjectContextConfig, SearchConfig, SyncConfig, SyncRemoteConfig, SyncRemoteKind,
+};
 use crate::domain::{
     ApprovalRequest, ApprovalRequestedVia, ApprovalStatus, Attachment, AttachmentKind,
     KnowledgeStatus, NoteKind, Project, ProjectStatus, SyncCheckpointKind, SyncEntityKind,
@@ -23,8 +25,9 @@ use crate::domain::{
 use crate::error::{AppError, AppResult};
 use crate::policy::{PolicyEngine, WriteDecision};
 use crate::search::{
-    build_activity_search_summary, build_task_context_digest, build_task_search_summary,
-    matched_field_names, normalize_search_query, weighted_rrf_score, ActivitySearchHit,
+    build_activity_search_summary, build_activity_search_text, build_search_evidence,
+    build_task_context_digest, build_task_search_summary, matched_field_names,
+    normalize_search_query, weighted_rrf_score, ActivitySearchHit, SearchEvidence,
     SearchIndexedFields, SearchMeta, SearchResponse, SearchRuntime, TaskSearchHit,
     DEFAULT_SEARCH_LIMIT, LEXICAL_RRF_WEIGHT, MAX_SEARCH_LIMIT, SEMANTIC_RRF_WEIGHT,
 };
@@ -497,6 +500,9 @@ pub struct SearchInput {
     pub text: Option<String>,
     pub project: Option<String>,
     pub version: Option<String>,
+    pub status: Option<TaskStatus>,
+    pub priority: Option<TaskPriority>,
+    pub knowledge_status: Option<KnowledgeStatus>,
     pub task_kind: Option<TaskKind>,
     pub task_code_prefix: Option<String>,
     pub title_prefix: Option<String>,
@@ -600,7 +606,10 @@ impl AgentaService {
         })
     }
 
-    pub async fn init_project_context(&self, input: ContextInitInput) -> AppResult<ContextInitResult> {
+    pub async fn init_project_context(
+        &self,
+        input: ContextInitInput,
+    ) -> AppResult<ContextInitResult> {
         let _write_guard = self.write_queue.lock().await;
 
         let target = self.resolve_context_init_target(
@@ -635,8 +644,9 @@ impl AgentaService {
             instructions: Some(instructions.clone()),
             memory_dir: Some(memory_dir.clone()),
         };
-        let used_defaults =
-            input.context_dir.is_none() || input.instructions.is_none() || input.memory_dir.is_none();
+        let used_defaults = input.context_dir.is_none()
+            || input.instructions.is_none()
+            || input.memory_dir.is_none();
 
         let status = match existing_manifest {
             Some(existing) => {
@@ -646,8 +656,12 @@ impl AgentaService {
                 } else if input.dry_run {
                     ContextInitStatus::WouldUpdate
                 } else if input.force {
-                    self.write_project_context(&target.context_dir, &target.manifest_path, &desired_manifest)
-                        .await?;
+                    self.write_project_context(
+                        &target.context_dir,
+                        &target.manifest_path,
+                        &desired_manifest,
+                    )
+                    .await?;
                     ContextInitStatus::Updated
                 } else {
                     return Err(AppError::Conflict(
@@ -660,8 +674,12 @@ impl AgentaService {
                 if input.dry_run {
                     ContextInitStatus::WouldCreate
                 } else {
-                    self.write_project_context(&target.context_dir, &target.manifest_path, &desired_manifest)
-                        .await?;
+                    self.write_project_context(
+                        &target.context_dir,
+                        &target.manifest_path,
+                        &desired_manifest,
+                    )
+                    .await?;
                     ContextInitStatus::Created
                 }
             }
@@ -1773,7 +1791,7 @@ impl AgentaService {
         let task_query = TaskQuery {
             project: input.project,
             version: input.version,
-            status: None,
+            status: input.status,
             task_kind: input.task_kind,
             task_code_prefix: input.task_code_prefix,
             title_prefix: input.title_prefix,
@@ -1781,11 +1799,15 @@ impl AgentaService {
             sort_order: None,
             all_projects: input.all_projects,
         };
-        let filter = self.resolve_task_filter(&task_query).await?;
+        let mut filter = self.resolve_task_filter(&task_query).await?;
+        filter.priority = input.priority;
+        filter.knowledge_status = input.knowledge_status;
         if normalized_query.is_none()
             && filter.project_id.is_none()
             && filter.version_id.is_none()
             && filter.status.is_none()
+            && filter.priority.is_none()
+            && filter.knowledge_status.is_none()
             && filter.task_kind.is_none()
             && filter.task_code_prefix.is_none()
             && filter.title_prefix.is_none()
@@ -1808,6 +1830,14 @@ impl AgentaService {
                 query: query_text,
                 tasks: details
                     .into_iter()
+                    .filter(|detail| {
+                        input
+                            .priority
+                            .is_none_or(|priority| detail.task.priority == priority)
+                            && input.knowledge_status.is_none_or(|knowledge_status| {
+                                detail.task.knowledge_status == knowledge_status
+                            })
+                    })
                     .take(limit)
                     .map(structured_task_hit_from_detail)
                     .collect(),
@@ -1837,21 +1867,51 @@ impl AgentaService {
         let lexical_limit = limit
             .max(self.search.config().vector.top_k)
             .saturating_mul(4);
-        let mut lexical_tasks = self
+        let exact_fts_tasks = self
             .store
             .search_tasks(&filter, &normalized_query.fts_query, lexical_limit)
             .await?;
-        let vector_hits = match self
-            .search
-            .query_tasks(
-                &normalized_query.raw_text,
+        let prefix_fts_tasks = match normalized_query.prefix_fts_query.as_deref() {
+            Some(prefix_fts_query) => {
+                self.store
+                    .search_tasks(&filter, prefix_fts_query, lexical_limit)
+                    .await?
+            }
+            None => Vec::new(),
+        };
+        let like_tasks = self
+            .store
+            .search_tasks_by_like(
                 &filter,
-                self.search.config().vector.top_k,
+                &normalized_query.like_text,
+                &normalized_query.terms,
+                lexical_limit,
             )
-            .await
-        {
-            Ok(vector_hits) => vector_hits,
-            Err(_) => Vec::new(),
+            .await?;
+        let lexical_task_groups = match normalized_query.intent {
+            crate::search::SearchIntent::Identifier => {
+                vec![like_tasks, exact_fts_tasks, prefix_fts_tasks]
+            }
+            crate::search::SearchIntent::Phrase => vec![exact_fts_tasks, like_tasks],
+            crate::search::SearchIntent::General => {
+                vec![exact_fts_tasks, prefix_fts_tasks, like_tasks]
+            }
+        };
+        let mut lexical_tasks = merge_lexical_task_rows(lexical_task_groups);
+        let vector_hits = match normalized_query.intent {
+            crate::search::SearchIntent::Identifier => Vec::new(),
+            _ => match self
+                .search
+                .query_tasks(
+                    &normalized_query.raw_text,
+                    &filter,
+                    self.search.config().vector.top_k,
+                )
+                .await
+            {
+                Ok(vector_hits) => vector_hits,
+                Err(_) => Vec::new(),
+            },
         };
         let lexical_task_ids = lexical_tasks
             .iter()
@@ -1871,22 +1931,69 @@ impl AgentaService {
                     .filter(|row| matches_prefix_filters(row, &filter)),
             );
         }
-        let mut task_sources =
-            combine_task_search_results(lexical_tasks, vector_hits, &normalized_query.terms, limit);
+        let activity_rows = self
+            .store
+            .search_activities(&filter, &normalized_query.fts_query, lexical_limit)
+            .await?;
+        let activity_evidence_by_task =
+            build_activity_evidence_map(&activity_rows, &normalized_query.terms);
+        let lexical_task_ids = lexical_tasks
+            .iter()
+            .map(|row| row.task_id.clone())
+            .collect::<HashSet<_>>();
+        let activity_task_ids = activity_rows
+            .iter()
+            .filter_map(|activity| {
+                (!lexical_task_ids.contains(&activity.task_id)).then_some(activity.task_id.clone())
+            })
+            .collect::<Vec<_>>();
+        if !activity_task_ids.is_empty() {
+            let activity_rows = self.store.search_tasks_by_ids(&activity_task_ids).await?;
+            lexical_tasks.extend(
+                activity_rows
+                    .into_iter()
+                    .filter(|row| matches_prefix_filters(row, &filter)),
+            );
+            lexical_tasks = merge_lexical_task_rows(vec![lexical_tasks]);
+        }
+        let mut task_sources = combine_task_search_results(
+            lexical_tasks,
+            vector_hits,
+            &normalized_query.terms,
+            &activity_evidence_by_task,
+            limit,
+        );
         let used_hybrid = task_sources
             .iter()
             .any(|hit| hit.retrieval_source == "hybrid" || hit.retrieval_source == "semantic");
-        let activities = self
-            .store
-            .search_activities(&filter, &normalized_query.fts_query, limit)
-            .await?
+        let activities = activity_rows
             .into_iter()
-            .map(|activity| ActivitySearchHit {
-                activity_id: activity.activity_id,
-                task_id: activity.task_id,
-                kind: activity.kind,
-                summary: activity.summary,
-                score: Some(activity.score),
+            .take(limit)
+            .map(|activity| {
+                let matched_fields = matched_field_names(
+                    &normalized_query.terms,
+                    [
+                        ("activity_search_summary", Some(activity.summary.as_str())),
+                        ("activity_search_text", Some(activity.search_text.as_str())),
+                    ],
+                );
+                let evidence = build_search_evidence(
+                    &normalized_query.terms,
+                    [
+                        ("activity_search_text", Some(activity.search_text.as_str())),
+                        ("activity_search_summary", Some(activity.summary.as_str())),
+                    ],
+                );
+                ActivitySearchHit {
+                    activity_id: activity.activity_id,
+                    task_id: activity.task_id,
+                    kind: activity.kind,
+                    summary: activity.summary,
+                    score: Some(activity.score),
+                    matched_fields,
+                    evidence_source: evidence.as_ref().map(|item| item.source.clone()),
+                    evidence_snippet: evidence.map(|item| item.snippet),
+                }
             })
             .collect::<Vec<_>>();
         self.search.trigger_index_worker(self.store.clone());
@@ -1898,9 +2005,11 @@ impl AgentaService {
             meta: SearchMeta {
                 indexed_fields: default_indexed_fields(),
                 task_sort: if used_hybrid {
-                    "weighted RRF over sqlite fts5 bm25 and chroma semantic rank".to_string()
+                    "weighted RRF over lexical cascade (fts exact/prefix plus like fallback) and chroma semantic rank".to_string()
+                } else if normalized_query.intent == crate::search::SearchIntent::Identifier {
+                    "identifier-biased lexical cascade over sqlite like fallback plus sqlite fts exact/prefix".to_string()
                 } else {
-                    "sqlite fts5 bm25 with structured filters and recency tiebreaks".to_string()
+                    "lexical cascade over sqlite fts5 exact/prefix plus sqlite like fallback with recency tiebreaks".to_string()
                 },
                 activity_sort: "sqlite fts5 bm25 with structured task filters applied".to_string(),
                 limit_applies_per_bucket: true,
@@ -2336,6 +2445,10 @@ impl AgentaService {
                     TaskActivityKind::StatusChange,
                     &content,
                 ),
+                activity_search_text: build_activity_search_text(
+                    TaskActivityKind::StatusChange,
+                    &content,
+                ),
                 created_by: task.updated_by.clone(),
                 created_at: task.updated_at,
                 metadata_json: json!({
@@ -2344,6 +2457,9 @@ impl AgentaService {
                 }),
             };
             self.store.insert_activity_tx(&mut tx, &activity).await?;
+            self.store
+                .replace_activity_chunks_tx(&mut tx, &activity, &content)
+                .await?;
         }
         self.enqueue_sync_mutation_tx(
             &mut tx,
@@ -2940,6 +3056,7 @@ impl AgentaService {
                 TaskActivityKind::Note,
                 &content,
             ),
+            activity_search_text: build_activity_search_text(TaskActivityKind::Note, &content),
             created_by: input
                 .created_by
                 .filter(|value| !value.trim().is_empty())
@@ -2950,6 +3067,9 @@ impl AgentaService {
             }),
         };
         self.store.insert_activity_tx(&mut tx, &activity).await?;
+        self.store
+            .replace_activity_chunks_tx(&mut tx, &activity, &content)
+            .await?;
         self.refresh_task_note_rollup_tx(&mut tx, task.task_id)
             .await?;
         self.enqueue_sync_mutation_tx(
@@ -3001,6 +3121,11 @@ impl AgentaService {
             created_by: created_by.clone(),
             created_at: now,
         };
+        let attachment_search_body = stored
+            .extracted_search_text
+            .as_deref()
+            .map(|text| format!("{summary}\n{text}"))
+            .unwrap_or_else(|| summary.clone());
         let activity = TaskActivity {
             activity_id: Uuid::new_v4(),
             task_id: task.task_id,
@@ -3009,6 +3134,10 @@ impl AgentaService {
             activity_search_summary: build_activity_search_summary(
                 TaskActivityKind::AttachmentRef,
                 &summary,
+            ),
+            activity_search_text: build_activity_search_text(
+                TaskActivityKind::AttachmentRef,
+                &attachment_search_body,
             ),
             created_by,
             created_at: now,
@@ -3024,6 +3153,9 @@ impl AgentaService {
                 .insert_attachment_tx(&mut tx, &attachment)
                 .await?;
             self.store.insert_activity_tx(&mut tx, &activity).await?;
+            self.store
+                .replace_activity_chunks_tx(&mut tx, &activity, &attachment_search_body)
+                .await?;
             self.enqueue_sync_mutation_tx(
                 &mut tx,
                 SyncEntityKind::Attachment,
@@ -3269,6 +3401,10 @@ impl AgentaService {
                 TaskActivityKind::StatusChange,
                 &content,
             ),
+            activity_search_text: build_activity_search_text(
+                TaskActivityKind::StatusChange,
+                &content,
+            ),
             created_by: created_by.to_string(),
             created_at,
             metadata_json: json!({
@@ -3277,6 +3413,9 @@ impl AgentaService {
             }),
         };
         self.store.insert_activity_tx(tx, &activity).await?;
+        self.store
+            .replace_activity_chunks_tx(tx, &activity, &content)
+            .await?;
         Ok(())
     }
 
@@ -3298,11 +3437,15 @@ impl AgentaService {
                 TaskActivityKind::System,
                 content,
             ),
+            activity_search_text: build_activity_search_text(TaskActivityKind::System, content),
             created_by: created_by.to_string(),
             created_at,
             metadata_json,
         };
         self.store.insert_activity_tx(tx, &activity).await?;
+        self.store
+            .replace_activity_chunks_tx(tx, &activity, content)
+            .await?;
         Ok(())
     }
 
@@ -3921,6 +4064,10 @@ impl AgentaService {
                                 TaskActivityKind::StatusChange,
                                 &content,
                             ),
+                            activity_search_text: build_activity_search_text(
+                                TaskActivityKind::StatusChange,
+                                &content,
+                            ),
                             created_by: task.updated_by.clone(),
                             created_at: mutation.created_at,
                             metadata_json: json!({
@@ -3929,6 +4076,9 @@ impl AgentaService {
                             }),
                         };
                         self.store.insert_activity_tx(&mut tx, &activity).await?;
+                        self.store
+                            .replace_activity_chunks_tx(&mut tx, &activity, &content)
+                            .await?;
                     }
                 }
                 self.refresh_task_note_rollup_tx(&mut tx, task.task_id)
@@ -4056,6 +4206,9 @@ impl AgentaService {
                     .is_some();
                 if !exists {
                     self.store.insert_activity_tx(&mut tx, &activity).await?;
+                    self.store
+                        .replace_activity_chunks_tx(&mut tx, &activity, &activity.content)
+                        .await?;
                     self.refresh_task_note_rollup_tx(&mut tx, activity.task_id)
                         .await?;
                 }
@@ -4096,6 +4249,15 @@ impl AgentaService {
                     .is_some();
                 let result = async {
                     if !exists {
+                        let attachment_search_body = self
+                            .store
+                            .extract_attachment_search_text(
+                                &blob,
+                                &attachment.mime,
+                                &attachment.original_filename,
+                            )
+                            .map(|text| format!("{}\n{text}", attachment.summary))
+                            .unwrap_or_else(|| attachment.summary.clone());
                         self.store
                             .insert_attachment_tx(&mut tx, &attachment)
                             .await?;
@@ -4108,6 +4270,10 @@ impl AgentaService {
                                 TaskActivityKind::AttachmentRef,
                                 &attachment.summary,
                             ),
+                            activity_search_text: build_activity_search_text(
+                                TaskActivityKind::AttachmentRef,
+                                &attachment_search_body,
+                            ),
                             created_by: attachment.created_by.clone(),
                             created_at: mutation.created_at,
                             metadata_json: json!({
@@ -4116,6 +4282,9 @@ impl AgentaService {
                             }),
                         };
                         self.store.insert_activity_tx(&mut tx, &activity).await?;
+                        self.store
+                            .replace_activity_chunks_tx(&mut tx, &activity, &attachment_search_body)
+                            .await?;
                     }
                     self.store
                         .upsert_synced_entity_state_tx(
@@ -4195,11 +4364,13 @@ impl AgentaService {
     }
 
     async fn resolve_task_filter(&self, query: &TaskQuery) -> AppResult<TaskListFilter> {
-        let project_ref = self.resolve_project_scope(
-            query.project.as_deref(),
-            query.version.as_deref(),
-            query.all_projects,
-        ).await?;
+        let project_ref = self
+            .resolve_project_scope(
+                query.project.as_deref(),
+                query.version.as_deref(),
+                query.all_projects,
+            )
+            .await?;
         Ok(TaskListFilter {
             project_id: match project_ref.as_deref() {
                 Some(reference) => Some(self.store.get_project_by_ref(reference).await?.project_id),
@@ -4210,6 +4381,8 @@ impl AgentaService {
                 None => None,
             },
             status: query.status,
+            priority: None,
+            knowledge_status: None,
             task_kind: query.task_kind,
             task_code_prefix: query.task_code_prefix.clone(),
             title_prefix: query.title_prefix.clone(),
@@ -4269,19 +4442,18 @@ impl AgentaService {
             let context_dir = manifest_path
                 .parent()
                 .map(Path::to_path_buf)
-                .ok_or_else(|| AppError::Config("context manifest must have a parent directory".to_string()))?;
+                .ok_or_else(|| {
+                    AppError::Config("context manifest must have a parent directory".to_string())
+                })?;
             return Ok(ContextInitTarget {
                 context_dir,
                 manifest_path,
             });
         }
 
-        let candidate = self
-            .project_context
-            .paths
-            .first()
-            .cloned()
-            .ok_or_else(|| AppError::Config("project_context.paths must not be empty".to_string()))?;
+        let candidate = self.project_context.paths.first().cloned().ok_or_else(|| {
+            AppError::Config("project_context.paths must not be empty".to_string())
+        })?;
         let context_dir = if candidate.is_absolute() {
             candidate
         } else {
@@ -4310,10 +4482,15 @@ impl AgentaService {
             fs::create_dir_all(context_dir.join(memory_dir)).await?;
         }
         let serialized = serde_yaml::to_string(manifest)?;
-        fs::write(manifest_path, serialized).await.map_err(AppError::from)
+        fs::write(manifest_path, serialized)
+            .await
+            .map_err(AppError::from)
     }
 
-    fn read_project_context_manifest(&self, manifest_path: &Path) -> AppResult<ProjectContextManifest> {
+    fn read_project_context_manifest(
+        &self,
+        manifest_path: &Path,
+    ) -> AppResult<ProjectContextManifest> {
         let content = std_fs::read_to_string(manifest_path).map_err(AppError::from)?;
         serde_yaml::from_str::<ProjectContextManifest>(&content).map_err(AppError::from)
     }
@@ -4391,7 +4568,10 @@ impl AgentaService {
         Ok(None)
     }
 
-    fn find_context_manifest_from_ancestors(&self, current_dir: &Path) -> AppResult<Option<PathBuf>> {
+    fn find_context_manifest_from_ancestors(
+        &self,
+        current_dir: &Path,
+    ) -> AppResult<Option<PathBuf>> {
         for base_dir in current_dir.ancestors() {
             if let Some(manifest_path) = self.find_context_manifest_from_base(base_dir)? {
                 return Ok(Some(manifest_path));
@@ -4429,7 +4609,8 @@ fn clean_optional(value: Option<String>) -> Option<String> {
 }
 
 fn manifests_match(left: &ProjectContextManifest, right: &ProjectContextManifest) -> bool {
-    normalize_manifest_value(left.project.as_deref()) == normalize_manifest_value(right.project.as_deref())
+    normalize_manifest_value(left.project.as_deref())
+        == normalize_manifest_value(right.project.as_deref())
         && normalize_manifest_value(left.instructions.as_deref())
             == normalize_manifest_value(right.instructions.as_deref())
         && normalize_manifest_value(left.memory_dir.as_deref())
@@ -4688,6 +4869,8 @@ fn structured_task_hit_from_detail(detail: TaskDetail) -> TaskSearchHit {
         retrieval_source: "structured_filter".to_string(),
         score: None,
         matched_fields: Vec::new(),
+        evidence_source: None,
+        evidence_snippet: None,
     }
 }
 
@@ -4695,6 +4878,7 @@ fn combine_task_search_results(
     lexical_rows: Vec<crate::storage::TaskLexicalSearchRow>,
     semantic_rows: Vec<crate::search::VectorQueryHit>,
     terms: &[String],
+    activity_evidence_by_task: &HashMap<String, SearchEvidence>,
     limit: usize,
 ) -> Vec<TaskSearchHit> {
     #[derive(Default)]
@@ -4737,7 +4921,7 @@ fn combine_task_search_results(
     rows.into_iter()
         .take(limit)
         .map(|(row, semantic_distance, combined_score)| {
-            let matched_fields = matched_field_names(
+            let mut matched_fields = matched_field_names(
                 terms,
                 [
                     ("task_code", row.task_code.as_deref()),
@@ -4753,6 +4937,29 @@ fn combine_task_search_results(
                     ),
                 ],
             );
+            let task_evidence = build_search_evidence(
+                terms,
+                [
+                    ("task_code", row.task_code.as_deref()),
+                    ("title", Some(row.title.as_str())),
+                    ("latest_note_summary", row.latest_note_summary.as_deref()),
+                    (
+                        "task_search_summary",
+                        Some(row.task_search_summary.as_str()),
+                    ),
+                    (
+                        "task_context_digest",
+                        Some(row.task_context_digest.as_str()),
+                    ),
+                ],
+            );
+            let fallback_evidence = activity_evidence_by_task.get(&row.task_id).cloned();
+            let evidence = task_evidence.or(fallback_evidence);
+            if let Some(evidence) = evidence.as_ref() {
+                if !matched_fields.contains(&evidence.source) {
+                    matched_fields.push(evidence.source.clone());
+                }
+            }
             let retrieval_source = match (semantic_distance.is_some(), !matched_fields.is_empty()) {
                 (true, true) => "hybrid",
                 (true, false) => "semantic",
@@ -4773,9 +4980,54 @@ fn combine_task_search_results(
                 retrieval_source: retrieval_source.to_string(),
                 score: Some(combined_score),
                 matched_fields,
+                evidence_source: evidence.as_ref().map(|item| item.source.clone()),
+                evidence_snippet: evidence.map(|item| item.snippet),
             }
         })
         .collect()
+}
+
+fn build_activity_evidence_map(
+    activity_rows: &[crate::storage::ActivityLexicalSearchRow],
+    terms: &[String],
+) -> HashMap<String, SearchEvidence> {
+    let mut output = HashMap::new();
+
+    for activity in activity_rows {
+        let evidence = build_search_evidence(
+            terms,
+            [
+                ("activity_search_text", Some(activity.search_text.as_str())),
+                ("activity_search_summary", Some(activity.summary.as_str())),
+            ],
+        );
+        if let Some(evidence) = evidence {
+            output.entry(activity.task_id.clone()).or_insert(evidence);
+        }
+    }
+
+    output
+}
+
+fn merge_lexical_task_rows(
+    groups: Vec<Vec<crate::storage::TaskLexicalSearchRow>>,
+) -> Vec<crate::storage::TaskLexicalSearchRow> {
+    let mut seen = HashSet::<String>::new();
+    let mut merged = Vec::new();
+
+    for group in groups {
+        for row in group {
+            if seen.insert(row.task_id.clone()) {
+                merged.push(row);
+            }
+        }
+    }
+
+    for (index, row) in merged.iter_mut().enumerate() {
+        row.lexical_rank = index;
+    }
+
+    merged
 }
 
 fn task_summary(latest_note_summary: Option<&str>, task_search_summary: &str) -> String {
@@ -4795,7 +5047,10 @@ fn default_indexed_fields() -> SearchIndexedFields {
             "task_context_digest".to_string(),
             "latest_note_summary".to_string(),
         ],
-        activities: vec!["activity_search_summary".to_string()],
+        activities: vec![
+            "activity_search_summary".to_string(),
+            "activity_search_text".to_string(),
+        ],
     }
 }
 

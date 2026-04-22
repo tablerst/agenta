@@ -1822,6 +1822,28 @@ function runSearch(input: JsonMap) {
       score: query ? 1 : null,
       status: item.status,
       summary: item.latest_note_summary ?? item.task_search_summary,
+      evidence_source: query
+        ? (item.task_code?.toLowerCase().includes(query)
+            ? "task_code"
+            : item.title.toLowerCase().includes(query)
+              ? "title"
+              : (item.latest_note_summary ?? "").toLowerCase().includes(query)
+                ? "latest_note_summary"
+                : item.task_search_summary.toLowerCase().includes(query)
+                  ? "task_search_summary"
+                  : item.task_context_digest.toLowerCase().includes(query)
+                    ? "task_context_digest"
+                    : null)
+        : null,
+      evidence_snippet: query
+        ? [
+            item.task_code ?? "",
+            item.title,
+            item.latest_note_summary ?? "",
+            item.task_search_summary,
+            item.task_context_digest,
+          ].find((value) => value.toLowerCase().includes(query)) ?? null
+        : null,
       task_id: item.task_id,
       title: item.title,
     }));
@@ -1840,6 +1862,24 @@ function runSearch(input: JsonMap) {
       kind: item.kind,
       score: query ? 1 : null,
       summary: item.activity_search_summary,
+      matched_fields: query
+        ? [
+            item.activity_search_summary.toLowerCase().includes(query) ? "activity_search_summary" : null,
+            item.content.toLowerCase().includes(query) ? "activity_search_text" : null,
+          ].filter((value): value is string => value !== null)
+        : [],
+      evidence_source: query
+        ? (item.activity_search_summary.toLowerCase().includes(query)
+            ? "activity_search_summary"
+            : item.content.toLowerCase().includes(query)
+              ? "activity_search_text"
+              : null)
+        : null,
+      evidence_snippet: query
+        ? (item.activity_search_summary.toLowerCase().includes(query)
+            ? item.activity_search_summary
+            : item.content)
+        : null,
       task_id: item.task_id,
     }));
 
@@ -1857,7 +1897,7 @@ function runSearch(input: JsonMap) {
           "task_context_digest",
           "latest_note_summary",
         ],
-        activities: ["activity_search_summary"],
+        activities: ["activity_search_summary", "activity_search_text"],
       },
       task_sort: query
         ? "sqlite fts5 bm25 with structured filters and recency tiebreaks"

@@ -15,7 +15,7 @@ use time::OffsetDateTime;
 use tokio::fs;
 use uuid::Uuid;
 
-use crate::domain::{TaskKind, TaskStatus};
+use crate::domain::{KnowledgeStatus, TaskKind, TaskPriority, TaskStatus};
 use crate::error::{AppError, AppResult};
 
 #[derive(Clone)]
@@ -32,6 +32,7 @@ pub struct StoredAttachmentFile {
     pub storage_path: String,
     pub sha256: String,
     pub size_bytes: i64,
+    pub extracted_search_text: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -39,6 +40,8 @@ pub struct TaskListFilter {
     pub project_id: Option<Uuid>,
     pub version_id: Option<Uuid>,
     pub status: Option<TaskStatus>,
+    pub priority: Option<TaskPriority>,
+    pub knowledge_status: Option<KnowledgeStatus>,
     pub task_kind: Option<TaskKind>,
     pub task_code_prefix: Option<String>,
     pub title_prefix: Option<String>,
@@ -67,6 +70,7 @@ pub struct ActivityLexicalSearchRow {
     pub task_id: String,
     pub kind: String,
     pub summary: String,
+    pub search_text: String,
     pub score: f64,
 }
 

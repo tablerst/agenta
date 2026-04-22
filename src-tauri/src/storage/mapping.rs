@@ -78,6 +78,7 @@ pub(crate) fn map_activity(row: SqliteRow) -> AppResult<TaskActivity> {
         kind: parse_enum(row.get("kind"), "kind")?,
         content: row.get("content"),
         activity_search_summary: row.get("activity_search_summary"),
+        activity_search_text: row.get("activity_search_text"),
         created_by: row.get("created_by"),
         created_at: parse_time(row.get("created_at"), "created_at")?,
         metadata_json: serde_json::from_str(&metadata_json).map_err(|error| {

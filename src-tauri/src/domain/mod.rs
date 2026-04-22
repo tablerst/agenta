@@ -210,6 +210,8 @@ pub struct TaskActivity {
     pub kind: TaskActivityKind,
     pub content: String,
     pub activity_search_summary: String,
+    #[serde(default)]
+    pub activity_search_text: String,
     pub created_by: String,
     pub created_at: OffsetDateTime,
     pub metadata_json: serde_json::Value,

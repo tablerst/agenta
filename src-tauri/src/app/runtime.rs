@@ -29,6 +29,7 @@ impl AgentaApp {
             &config.paths.attachments_dir,
         )
         .await?;
+        store.rebuild_activity_chunk_index().await?;
         let policy = PolicyEngine::new(config.policy.clone());
         let service = AgentaService::new(
             store,
