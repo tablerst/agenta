@@ -4,19 +4,34 @@ mod mapping;
 mod projects;
 mod relations;
 mod sync;
+mod task_activity;
+mod task_helpers;
+mod task_search;
+mod task_search_index;
 mod tasks;
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
-use sqlx::SqlitePool;
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteRow};
+use sqlx::{query, QueryBuilder, Row, Sqlite, SqlitePool, Transaction};
 use time::OffsetDateTime;
 use tokio::fs;
 use uuid::Uuid;
 
-use crate::domain::{KnowledgeStatus, TaskKind, TaskPriority, TaskStatus};
+use crate::domain::{
+    KnowledgeStatus, Task, TaskActivity, TaskActivityKind, TaskKind, TaskPriority, TaskStatus,
+};
 use crate::error::{AppError, AppResult};
+use crate::search::{
+    build_activity_search_chunks, build_task_vector_document_text, SearchVectorJob,
+    TaskVectorDocument,
+};
+
+use mapping::{format_time, map_activity, map_task, parse_time};
+use task_helpers::*;
+
+const SEARCH_INDEX_JOB_LEASE_SECONDS: i64 = 300;
 
 #[derive(Clone)]
 pub struct SqliteStore {
