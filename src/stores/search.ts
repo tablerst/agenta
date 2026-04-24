@@ -2,14 +2,14 @@ import { ref } from "vue";
 import { defineStore } from "pinia";
 
 import { desktopBridge } from "../lib/desktop";
-import type { SearchResponse } from "../lib/types";
+import type { GlobalSearchFilters, SearchResponse } from "../lib/types";
 
 export const useSearchStore = defineStore("search", () => {
   const query = ref("");
   const loading = ref(false);
   const results = ref<SearchResponse | null>(null);
 
-  async function runSearch(nextQuery: string) {
+  async function runSearch(nextQuery: string, filters: GlobalSearchFilters = {}) {
     query.value = nextQuery;
     if (!nextQuery.trim()) {
       results.value = null;
@@ -23,6 +23,7 @@ export const useSearchStore = defineStore("search", () => {
         query: nextQuery,
         limit: 8,
         all_projects: true,
+        ...filters,
       });
       results.value = envelope.result as SearchResponse;
       return results.value;

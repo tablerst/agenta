@@ -179,6 +179,7 @@ agenta search query --text localgpt --limit 10
 agenta search query --project localgpt-langflow --text tracing --limit 10
 agenta search query --project localgpt-langflow --task-code-prefix InitCtx- --limit 20
 agenta search query --project demo --task-kind context
+agenta search query --project demo --priority high --knowledge-status reusable
 agenta search query --text tracing --all-projects
 ```
 
@@ -195,6 +196,8 @@ agenta search query --text tracing --all-projects
 - `retrieval_mode=hybrid`: SQLite FTS5 + Chroma semantic rank
 - `vector_status=ready`: Chroma 可用
 - `pending_index_jobs`: 仍待处理的向量索引任务数
+
+SearchV2 的发布闸口、回滚策略和专项验收命令见 [SearchV2 发布与运维说明](search-v2-release.md)。
 
 ### 搜索索引回填
 

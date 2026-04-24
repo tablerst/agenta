@@ -450,9 +450,17 @@ export interface ProjectSearchFilters {
   query: string;
   version?: string;
   status?: TaskStatus;
+  priority?: TaskPriority;
+  knowledge_status?: KnowledgeStatus;
   task_kind?: TaskKind;
   task_code_prefix?: string;
   limit?: number;
+}
+
+export interface GlobalSearchFilters {
+  priority?: TaskPriority;
+  knowledge_status?: KnowledgeStatus;
+  task_kind?: TaskKind;
 }
 
 export interface SearchTaskHit {

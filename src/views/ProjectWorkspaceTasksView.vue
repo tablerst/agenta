@@ -23,12 +23,22 @@ import { buildProjectWorkspacePath, mergeWorkspaceQuery, readRouteString } from 
 import { localizeEvidenceSource, renderHighlightedEvidence } from "../lib/searchEvidence";
 import {
   attachmentKindOptions,
+  knowledgeStatusOptions,
   taskDetailTabOptions,
+  taskKindOptions,
   taskPriorityOptions,
   taskStatusOptions,
   type TaskDetailTab,
 } from "../lib/options";
-import type { NoteKind, ProjectSearchFilters, SearchResponse, TaskKind, TaskPriority, TaskStatus } from "../lib/types";
+import type {
+  KnowledgeStatus,
+  NoteKind,
+  ProjectSearchFilters,
+  SearchResponse,
+  TaskKind,
+  TaskPriority,
+  TaskStatus,
+} from "../lib/types";
 import { useApprovalsStore } from "../stores/approvals";
 import { useProjectsStore } from "../stores/projects";
 import { useShellStore } from "../stores/shell";
@@ -98,10 +108,11 @@ const selectedTaskId = computed(() => readRouteString(route.query.task) ?? "");
 const selectedStatus = computed(() => readRouteString(route.query.status) ?? "");
 const selectedSearchQuery = computed(() => readRouteString(route.query.q) ?? "");
 const selectedTaskKindFilter = ref("");
+const selectedPriorityFilter = ref("");
+const selectedKnowledgeStatusFilter = ref("");
 const taskCodePrefixFilter = ref("");
 const selectedSortBy = ref("task_code");
 const selectedSortOrder = ref("asc");
-const taskKindOptions = ["standard", "context", "index"] as const;
 const noteKindOptions = ["scratch", "finding", "conclusion"] as const;
 const taskSortOptions = [
   "task_code",
@@ -212,6 +223,10 @@ function buildProjectSearchFilters(): ProjectSearchFilters {
     query: selectedSearchQuery.value,
     version: selectedVersionId.value || undefined,
     status: selectedStatus.value ? (selectedStatus.value as TaskStatus) : undefined,
+    priority: selectedPriorityFilter.value ? (selectedPriorityFilter.value as TaskPriority) : undefined,
+    knowledge_status: selectedKnowledgeStatusFilter.value
+      ? (selectedKnowledgeStatusFilter.value as KnowledgeStatus)
+      : undefined,
     task_kind: selectedTaskKindFilter.value ? (selectedTaskKindFilter.value as TaskKind) : undefined,
     task_code_prefix: taskCodePrefixFilter.value || undefined,
     limit: 20,
@@ -440,6 +455,8 @@ watch(
       selectedVersionId.value,
       selectedStatus.value,
       selectedTaskKindFilter.value,
+      selectedPriorityFilter.value,
+      selectedKnowledgeStatusFilter.value,
       taskCodePrefixFilter.value,
       selectedSortBy.value,
       selectedSortOrder.value,
@@ -834,6 +851,24 @@ async function jumpToQueuedApproval(error: unknown) {
                 <option value="">{{ t("tasks.allTaskKinds") }}</option>
                 <option v-for="kind in taskKindOptions" :key="kind" :value="kind">
                   {{ t(`status.taskKind.${kind}`) }}
+                </option>
+              </select>
+            </label>
+            <label class="compact-field">
+              <span class="field-label">{{ t("tasks.fields.priority") }}</span>
+              <select v-model="selectedPriorityFilter" class="control-select compact-control">
+                <option value="">{{ t("tasks.allPriorities") }}</option>
+                <option v-for="priority in taskPriorityOptions" :key="priority" :value="priority">
+                  {{ t(`status.priority.${priority}`) }}
+                </option>
+              </select>
+            </label>
+            <label class="compact-field">
+              <span class="field-label">{{ t("tasks.fields.knowledgeStatus") }}</span>
+              <select v-model="selectedKnowledgeStatusFilter" class="control-select compact-control">
+                <option value="">{{ t("tasks.allKnowledgeStatuses") }}</option>
+                <option v-for="status in knowledgeStatusOptions" :key="status" :value="status">
+                  {{ t(`status.knowledge.${status}`) }}
                 </option>
               </select>
             </label>

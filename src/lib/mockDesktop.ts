@@ -1075,7 +1075,16 @@ function listTasks(filters: JsonMap): TaskListPayload {
   const allProjects = filters.all_projects === true;
   const versionReference = typeof filters.version === "string" ? filters.version.trim() : "";
   const status = typeof filters.status === "string" ? (filters.status.trim() as TaskStatus) : undefined;
-  const kind = typeof filters.kind === "string" ? (filters.kind.trim() as TaskKind) : undefined;
+  const kindSource =
+    typeof filters.kind === "string"
+      ? filters.kind
+      : typeof filters.task_kind === "string"
+        ? filters.task_kind
+        : "";
+  const kind = kindSource.trim() ? (kindSource.trim() as TaskKind) : undefined;
+  const priority = typeof filters.priority === "string" ? (filters.priority.trim() as TaskPriority) : undefined;
+  const knowledgeStatus =
+    typeof filters.knowledge_status === "string" ? (filters.knowledge_status.trim() as KnowledgeStatus) : undefined;
   const taskCodePrefix =
     typeof filters.task_code_prefix === "string" && filters.task_code_prefix.trim()
       ? filters.task_code_prefix.trim()
@@ -1101,6 +1110,12 @@ function listTasks(filters: JsonMap): TaskListPayload {
   }
   if (kind) {
     nextTasks = nextTasks.filter((item) => item.task_kind === kind);
+  }
+  if (priority) {
+    nextTasks = nextTasks.filter((item) => item.priority === priority);
+  }
+  if (knowledgeStatus) {
+    nextTasks = nextTasks.filter((item) => item.knowledge_status === knowledgeStatus);
   }
   if (taskCodePrefix) {
     nextTasks = nextTasks.filter((item) => (item.task_code ?? "").startsWith(taskCodePrefix));

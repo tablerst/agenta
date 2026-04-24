@@ -108,6 +108,7 @@ Vector search and `回填搜索索引` depend on a reachable Chroma backend when
 - If you prefer to run Chroma yourself, start a local server first and keep `search.vector.endpoint` pointed at that server.
 - If neither the CLI nor a running server is available, search backfill jobs may be queued but processing will fail until Chroma becomes reachable.
 - Queue/runs/failures can be inspected locally via `agenta search status` or the Desktop Runtime search-index panel. Failed jobs can be retried with `agenta search retry-failed`, and expired processing leases can be recovered with `agenta search recover-stale`; embeddings remain local-only derived state and are not replicated through sync.
+- SearchV2 release, rollback, and verification guidance lives in [docs/search-v2-release.md](docs/search-v2-release.md).
 
 Official Chroma references:
 
@@ -118,6 +119,7 @@ Official Chroma references:
 
 - Quickstart: [docs/cli-mcp-quickstart.md](docs/cli-mcp-quickstart.md)
 - CLI reference: [docs/cli-reference.md](docs/cli-reference.md)
+- SearchV2 release guide: [docs/search-v2-release.md](docs/search-v2-release.md)
 - Latest archived execution plan: [dev_docs/execution-plans/archive/fifth-milestone-remote-replica-sync-foundation.md](dev_docs/execution-plans/archive/fifth-milestone-remote-replica-sync-foundation.md)
 - Archived execution plans: [dev_docs/execution-plans/archive](dev_docs/execution-plans/archive)
 - Product baseline: [dev_docs/baseline.md](dev_docs/baseline.md)

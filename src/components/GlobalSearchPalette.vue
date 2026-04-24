@@ -5,9 +5,10 @@ import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
 
 import { desktopBridge } from "../lib/desktop";
+import { knowledgeStatusOptions, taskKindOptions, taskPriorityOptions } from "../lib/options";
 import { buildProjectWorkspacePath, resolveProjectSlug } from "../lib/projectWorkspace";
 import { localizeEvidenceSource, renderHighlightedEvidence } from "../lib/searchEvidence";
-import type { Task } from "../lib/types";
+import type { GlobalSearchFilters, KnowledgeStatus, Task, TaskKind, TaskPriority } from "../lib/types";
 import { useProjectsStore } from "../stores/projects";
 import { useSearchStore } from "../stores/search";
 import { useShellStore } from "../stores/shell";
@@ -20,7 +21,30 @@ const { t } = useI18n({ useScope: "global" });
 const inputValue = ref(search.query);
 const inputEl = ref<HTMLInputElement | null>(null);
 const activeIndex = ref(0);
+const selectedTaskKind = ref("");
+const selectedPriority = ref("");
+const selectedKnowledgeStatus = ref("");
 let timer: number | undefined;
+
+const activeFilters = computed<GlobalSearchFilters>(() => ({
+  knowledge_status: selectedKnowledgeStatus.value ? (selectedKnowledgeStatus.value as KnowledgeStatus) : undefined,
+  priority: selectedPriority.value ? (selectedPriority.value as TaskPriority) : undefined,
+  task_kind: selectedTaskKind.value ? (selectedTaskKind.value as TaskKind) : undefined,
+}));
+
+const activeFilterLabels = computed(() => {
+  const labels: string[] = [];
+  if (selectedTaskKind.value) {
+    labels.push(t(`status.taskKind.${selectedTaskKind.value}`));
+  }
+  if (selectedPriority.value) {
+    labels.push(t(`status.priority.${selectedPriority.value}`));
+  }
+  if (selectedKnowledgeStatus.value) {
+    labels.push(t(`status.knowledge.${selectedKnowledgeStatus.value}`));
+  }
+  return labels;
+});
 
 const flatResults = computed(() => {
   if (!search.results) {
@@ -77,8 +101,18 @@ watch(
 watch(inputValue, (value) => {
   window.clearTimeout(timer);
   timer = window.setTimeout(() => {
-    void search.runSearch(value);
+    void search.runSearch(value, activeFilters.value);
   }, 160);
+});
+
+watch(activeFilters, () => {
+  if (!inputValue.value.trim()) {
+    return;
+  }
+  window.clearTimeout(timer);
+  timer = window.setTimeout(() => {
+    void search.runSearch(inputValue.value, activeFilters.value);
+  }, 80);
 });
 
 watch(flatResults, (results) => {
@@ -91,6 +125,12 @@ watch(flatResults, (results) => {
 
 function close() {
   shell.closeSearch();
+}
+
+function clearFilters() {
+  selectedTaskKind.value = "";
+  selectedPriority.value = "";
+  selectedKnowledgeStatus.value = "";
 }
 
 function setActive(index: number) {
@@ -177,7 +217,36 @@ async function jumpToTask(taskId: string) {
           </label>
           <p v-if="search.results" class="mt-2 text-xs text-[var(--text-muted)]">
             {{ retrievalStatus }}
+            <span v-if="activeFilterLabels.length > 0"> · {{ activeFilterLabels.join(" · ") }}</span>
           </p>
+          <div class="mt-3 flex flex-wrap items-center gap-2">
+            <select v-model="selectedTaskKind" class="quiet-control-select compact-control max-w-[11rem]">
+              <option value="">{{ t("tasks.allTaskKinds") }}</option>
+              <option v-for="kind in taskKindOptions" :key="kind" :value="kind">
+                {{ t(`status.taskKind.${kind}`) }}
+              </option>
+            </select>
+            <select v-model="selectedPriority" class="quiet-control-select compact-control max-w-[10rem]">
+              <option value="">{{ t("tasks.allPriorities") }}</option>
+              <option v-for="priority in taskPriorityOptions" :key="priority" :value="priority">
+                {{ t(`status.priority.${priority}`) }}
+              </option>
+            </select>
+            <select v-model="selectedKnowledgeStatus" class="quiet-control-select compact-control max-w-[11rem]">
+              <option value="">{{ t("tasks.allKnowledgeStatuses") }}</option>
+              <option v-for="status in knowledgeStatusOptions" :key="status" :value="status">
+                {{ t(`status.knowledge.${status}`) }}
+              </option>
+            </select>
+            <button
+              v-if="activeFilterLabels.length > 0"
+              class="status-pill hover:border-[var(--accent-color)]/50"
+              type="button"
+              @click="clearFilters"
+            >
+              {{ t("search.clearFilters") }}
+            </button>
+          </div>
         </div>
 
         <div class="max-h-[60vh] overflow-y-auto px-3 py-3">
@@ -224,7 +293,11 @@ async function jumpToTask(taskId: string) {
                     <span v-html="renderHighlightedEvidence(item.evidence_snippet, search.results?.query)" />
                   </p>
                 </div>
-                <span class="status-pill">{{ t(`status.task.${item.status}`) }}</span>
+                <div class="list-row-meta">
+                  <span>{{ t(`status.task.${item.status}`) }}</span>
+                  <span>{{ t(`status.priority.${item.priority}`) }}</span>
+                  <span>{{ t(`status.knowledge.${item.knowledge_status}`) }}</span>
+                </div>
               </button>
             </section>
 
