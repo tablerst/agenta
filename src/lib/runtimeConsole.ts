@@ -21,6 +21,7 @@ import type {
   McpRuntimeStatus,
   RuntimeStatus,
   SearchBackfillSummary,
+  SearchIndexStatusSummary,
   SyncOutboxListItem,
   SyncStatusSummary,
 } from "./types";
@@ -42,6 +43,7 @@ function createRuntimeConsoleModel() {
   const mcp = ref<McpRuntimeStatus | null>(null);
   const syncStatus = ref<SyncStatusSummary | null>(null);
   const syncOutbox = ref<SyncOutboxListItem[]>([]);
+  const searchIndexStatus = ref<SearchIndexStatusSummary | null>(null);
   const searchBackfillResult = ref<SearchBackfillSummary | null>(null);
   const searchBackfillForm = reactive({
     batchSize: 10,
@@ -101,6 +103,23 @@ function createRuntimeConsoleModel() {
   const syncRemoteDatabase = computed(
     () => syncStatus.value?.remote?.postgres?.database ?? t("common.na"),
   );
+  const searchIndexHealthClass = computed(() => {
+    if (!searchIndexStatus.value?.enabled) {
+      return "status-pill";
+    }
+    if ((searchIndexStatus.value.failed_count ?? 0) > 0) {
+      return "status-pill status-pill-danger";
+    }
+    if (
+      (searchIndexStatus.value.processing_count ?? 0) > 0 ||
+      (searchIndexStatus.value.pending_count ?? 0) > 0
+    ) {
+      return "status-pill status-pill-warning";
+    }
+    return searchIndexStatus.value.vector_available
+      ? "status-pill status-pill-success"
+      : "status-pill status-pill-warning";
+  });
 
   function clampInteger(
     value: unknown,
@@ -185,6 +204,16 @@ function createRuntimeConsoleModel() {
   function formatSyncOutboxStatus(status: SyncOutboxListItem["status"]) {
     void locale.value;
     return t(`runtime.sync.statuses.${status}`);
+  }
+
+  function formatSearchIndexStatus(status: string) {
+    void locale.value;
+    return t(`runtime.searchIndex.statuses.${status}`, status);
+  }
+
+  function formatSearchIndexSidecar(status: string) {
+    void locale.value;
+    return t(`runtime.searchIndex.sidecarStatuses.${status}`, status);
   }
 
   function syncOutboxStatusClass(status: SyncOutboxListItem["status"]) {
@@ -284,12 +313,14 @@ function createRuntimeConsoleModel() {
 
   async function loadSyncSnapshot() {
     try {
-      const [syncEnvelope, outboxEnvelope] = await Promise.all([
+      const [syncEnvelope, outboxEnvelope, searchIndexEnvelope] = await Promise.all([
         desktopBridge.syncStatus(),
         desktopBridge.syncOutboxList(20),
+        desktopBridge.searchIndexStatus(),
       ]);
       syncStatus.value = syncEnvelope.result;
       syncOutbox.value = outboxEnvelope.result;
+      searchIndexStatus.value = searchIndexEnvelope.result;
     } catch (error) {
       shell.pushNotice("error", formatDesktopError(error, t));
     }
@@ -301,19 +332,28 @@ function createRuntimeConsoleModel() {
 
   async function loadRuntimeSnapshot() {
     try {
-      const [runtimeEnvelope, mcpEnvelope, logsEnvelope, syncEnvelope, outboxEnvelope] =
+      const [
+        runtimeEnvelope,
+        mcpEnvelope,
+        logsEnvelope,
+        syncEnvelope,
+        outboxEnvelope,
+        searchIndexEnvelope,
+      ] =
         await Promise.all([
           desktopBridge.status(),
           desktopBridge.mcpStatus(),
           desktopBridge.mcpLogsSnapshot(),
           desktopBridge.syncStatus(),
           desktopBridge.syncOutboxList(20),
+          desktopBridge.searchIndexStatus(),
         ]);
       runtime.value = runtimeEnvelope.result;
       mcp.value = mcpEnvelope.result;
       logs.value = logsEnvelope.result.entries;
       syncStatus.value = syncEnvelope.result;
       syncOutbox.value = outboxEnvelope.result;
+      searchIndexStatus.value = searchIndexEnvelope.result;
       hydrateForm(mcpEnvelope.result);
       loadedAt.value = new Date().toISOString();
     } catch (error) {
@@ -430,6 +470,7 @@ function createRuntimeConsoleModel() {
           batchSize: searchBackfillForm.batchSize,
         });
         searchBackfillResult.value = envelope.result;
+        await loadSyncSnapshot();
         if (envelope.result.processing_error) {
           shell.pushNotice("error", envelope.result.processing_error);
           return;
@@ -483,6 +524,8 @@ function createRuntimeConsoleModel() {
     formatLogDestinations,
     formatLogLevel,
     formatRuntimeState,
+    formatSearchIndexSidecar,
+    formatSearchIndexStatus,
     formatSyncEntityKind,
     formatSyncOperation,
     formatSyncOutboxStatus,
@@ -508,6 +551,8 @@ function createRuntimeConsoleModel() {
     saveAsDefault,
     searchBackfillForm,
     searchBackfillResult,
+    searchIndexHealthClass,
+    searchIndexStatus,
     startMcp,
     statusClass,
     stopMcp,

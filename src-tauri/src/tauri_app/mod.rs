@@ -759,6 +759,11 @@ async fn desktop_search(
 ) -> Result<SuccessEnvelope, ErrorEnvelope> {
     let result: Result<SuccessEnvelope, AppError> = async {
         match input.action.as_str() {
+            "status" => success(
+                "search.status",
+                state.service.search_index_status().await?,
+                "Loaded search index status",
+            ),
             "query" => success(
                 "search.query",
                 state

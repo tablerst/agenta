@@ -204,6 +204,14 @@ agenta search query --text tracing --all-projects
 agenta search backfill --limit 1000 --batch-size 10
 ```
 
+查看本地搜索索引状态：
+
+```powershell
+agenta search status
+```
+
+状态输出会包含本地队列计数、最近一次回填摘要、最近错误，以及失败任务样本；embedding 与向量索引内容仍然只在本地生成和维护，不参与远端同步。
+
 参数：
 
 - `--limit`: 本次最多排队多少个任务，默认 `1000`

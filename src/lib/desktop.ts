@@ -15,6 +15,7 @@ import type {
   Project,
   RuntimeStatus,
   SearchBackfillSummary,
+  SearchIndexStatusSummary,
   SearchResponse,
   SuccessEnvelope,
   SyncBackfillSummary,
@@ -410,6 +411,12 @@ export const desktopBridge = {
     return resolveBridgeMode() === "desktop"
       ? callDesktop<SearchBackfillSummary>("desktop_search", input)
       : callPreview<SearchBackfillSummary>(() => mockDesktopBridge.searchBackfill(options));
+  },
+  searchIndexStatus() {
+    const input = { action: "status" };
+    return resolveBridgeMode() === "desktop"
+      ? callDesktop<SearchIndexStatusSummary>("desktop_search", input)
+      : callPreview<SearchIndexStatusSummary>(() => mockDesktopBridge.searchIndexStatus());
   },
   approval(input: Record<string, unknown>) {
     return resolveBridgeMode() === "desktop"

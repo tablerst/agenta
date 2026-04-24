@@ -14,6 +14,7 @@ import type {
   Project,
   RuntimeStatus,
   SearchBackfillSummary,
+  SearchIndexStatusSummary,
   SearchResponse,
   SuccessEnvelope,
   SyncBackfillSummary,
@@ -354,11 +355,35 @@ function runPreviewSearchBackfill(options: { limit?: number; batchSize?: number 
   const scanned = state.tasks.length;
   const queued = Math.min(scanned, maxToQueue);
   return {
+    run_id: `preview-search-run-${Date.now()}`,
+    status: "completed",
     scanned,
     queued,
     skipped: Math.max(0, scanned - queued),
+    processed: queued,
+    succeeded: queued,
+    failed: 0,
     pending_after: 0,
     processing_error: null,
+  };
+}
+
+function runPreviewSearchIndexStatus(): SearchIndexStatusSummary {
+  return {
+    enabled: true,
+    vector_available: true,
+    sidecar: "external",
+    total_count: 0,
+    pending_count: 0,
+    processing_count: 0,
+    failed_count: 0,
+    due_count: 0,
+    stale_processing_count: 0,
+    next_retry_at: null,
+    last_error: null,
+    active_run: null,
+    latest_run: null,
+    failed_jobs: [],
   };
 }
 
@@ -2146,6 +2171,15 @@ export const mockDesktopBridge = {
         "desktop_search",
         runPreviewSearchBackfill(options),
         "Completed preview search backfill.",
+      ),
+    );
+  },
+  searchIndexStatus() {
+    return Promise.resolve(
+      envelope(
+        "desktop_search",
+        runPreviewSearchIndexStatus(),
+        "Loaded preview search index status.",
       ),
     );
   },

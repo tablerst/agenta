@@ -370,11 +370,63 @@ export interface SyncPullSummary {
 }
 
 export interface SearchBackfillSummary {
+  run_id: string;
+  status: string;
   scanned: number;
   queued: number;
   skipped: number;
+  processed: number;
+  succeeded: number;
+  failed: number;
   pending_after: number;
   processing_error: string | null;
+}
+
+export interface SearchIndexRunSummary {
+  run_id: string;
+  status: string;
+  trigger_kind: string;
+  scanned: number;
+  queued: number;
+  skipped: number;
+  processed: number;
+  succeeded: number;
+  failed: number;
+  batch_size: number;
+  started_at: string;
+  finished_at: string | null;
+  last_error: string | null;
+  updated_at: string;
+}
+
+export interface SearchIndexJobSummary {
+  task_id: string;
+  title: string | null;
+  status: string;
+  attempt_count: number;
+  last_error: string | null;
+  next_attempt_at: string | null;
+  locked_at: string | null;
+  lease_until: string | null;
+  updated_at: string;
+  run_id: string | null;
+}
+
+export interface SearchIndexStatusSummary {
+  enabled: boolean;
+  vector_available: boolean;
+  sidecar: string;
+  total_count: number;
+  pending_count: number;
+  processing_count: number;
+  failed_count: number;
+  due_count: number;
+  stale_processing_count: number;
+  next_retry_at: string | null;
+  last_error: string | null;
+  active_run: SearchIndexRunSummary | null;
+  latest_run: SearchIndexRunSummary | null;
+  failed_jobs: SearchIndexJobSummary[];
 }
 
 export interface ProjectSearchFilters {

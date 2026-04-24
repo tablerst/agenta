@@ -251,6 +251,14 @@ const activeSurfaceSummary = computed(
                   <h3 class="runtime-subblock-title">{{ t("runtime.searchIndex.title") }}</h3>
                   <p class="runtime-block-summary">{{ t("runtime.searchIndex.summary") }}</p>
                 </div>
+                <span :class="runtimeConsole.searchIndexHealthClass.value">
+                  {{
+                    runtimeConsole.formatSearchIndexStatus(
+                      runtimeConsole.searchIndexStatus.value?.latest_run?.status ??
+                        (runtimeConsole.searchIndexStatus.value?.enabled ? "ready" : "disabled"),
+                    )
+                  }}
+                </span>
                 <button
                   class="secondary-action spotlight-surface"
                   :aria-busy="
@@ -297,13 +305,29 @@ const activeSurfaceSummary = computed(
                   </dd>
                 </div>
                 <div class="runtime-search-index-item">
-                  <dt>{{ t("runtime.searchIndex.lastQueued") }}</dt>
-                  <dd>{{ runtimeConsole.searchBackfillResult.value?.queued ?? t("common.na") }}</dd>
+                  <dt>{{ t("runtime.searchIndex.pending") }}</dt>
+                  <dd>{{ runtimeConsole.searchIndexStatus.value?.pending_count ?? t("common.na") }}</dd>
                 </div>
                 <div class="runtime-search-index-item">
-                  <dt>{{ t("runtime.searchIndex.pendingAfter") }}</dt>
+                  <dt>{{ t("runtime.searchIndex.processing") }}</dt>
                   <dd>
-                    {{ runtimeConsole.searchBackfillResult.value?.pending_after ?? t("common.na") }}
+                    {{ runtimeConsole.searchIndexStatus.value?.processing_count ?? t("common.na") }}
+                  </dd>
+                </div>
+                <div class="runtime-search-index-item">
+                  <dt>{{ t("runtime.searchIndex.failed") }}</dt>
+                  <dd>{{ runtimeConsole.searchIndexStatus.value?.failed_count ?? t("common.na") }}</dd>
+                </div>
+                <div class="runtime-search-index-item">
+                  <dt>{{ t("runtime.searchIndex.sidecar") }}</dt>
+                  <dd>
+                    {{
+                      runtimeConsole.searchIndexStatus.value
+                        ? runtimeConsole.formatSearchIndexSidecar(
+                            runtimeConsole.searchIndexStatus.value.sidecar,
+                          )
+                        : t("common.na")
+                    }}
                   </dd>
                 </div>
               </dl>
@@ -348,7 +372,13 @@ const activeSurfaceSummary = computed(
               </div>
             </div>
 
-            <div v-if="!runtimeConsole.searchBackfillResult.value" class="runtime-log-empty">
+            <div
+              v-if="
+                !runtimeConsole.searchIndexStatus.value?.latest_run &&
+                !runtimeConsole.searchBackfillResult.value
+              "
+              class="runtime-log-empty"
+            >
               <Search :size="16" />
               <span>{{ t("runtime.searchIndex.noResult") }}</span>
             </div>
@@ -357,36 +387,91 @@ const activeSurfaceSummary = computed(
               <dl class="runtime-definition-list runtime-search-context-grid">
                 <div>
                   <dt>{{ t("runtime.searchIndex.scanned") }}</dt>
-                  <dd>{{ runtimeConsole.searchBackfillResult.value.scanned }}</dd>
+                  <dd>
+                    {{
+                      runtimeConsole.searchIndexStatus.value?.latest_run?.scanned ??
+                      runtimeConsole.searchBackfillResult.value?.scanned ??
+                      t("common.na")
+                    }}
+                  </dd>
                 </div>
                 <div>
                   <dt>{{ t("runtime.searchIndex.lastQueued") }}</dt>
-                  <dd>{{ runtimeConsole.searchBackfillResult.value.queued }}</dd>
+                  <dd>
+                    {{
+                      runtimeConsole.searchIndexStatus.value?.latest_run?.queued ??
+                      runtimeConsole.searchBackfillResult.value?.queued ??
+                      t("common.na")
+                    }}
+                  </dd>
                 </div>
                 <div>
-                  <dt>{{ t("runtime.searchIndex.skipped") }}</dt>
-                  <dd>{{ runtimeConsole.searchBackfillResult.value.skipped }}</dd>
+                  <dt>{{ t("runtime.searchIndex.succeeded") }}</dt>
+                  <dd>
+                    {{
+                      runtimeConsole.searchIndexStatus.value?.latest_run?.succeeded ??
+                      runtimeConsole.searchBackfillResult.value?.succeeded ??
+                      t("common.na")
+                    }}
+                  </dd>
                 </div>
                 <div>
-                  <dt>{{ t("runtime.searchIndex.pendingAfter") }}</dt>
-                  <dd>{{ runtimeConsole.searchBackfillResult.value.pending_after }}</dd>
+                  <dt>{{ t("runtime.searchIndex.failed") }}</dt>
+                  <dd>
+                    {{
+                      runtimeConsole.searchIndexStatus.value?.latest_run?.failed ??
+                      runtimeConsole.searchBackfillResult.value?.failed ??
+                      t("common.na")
+                    }}
+                  </dd>
                 </div>
               </dl>
 
               <p
-                v-if="runtimeConsole.searchBackfillResult.value.processing_error"
+                v-if="
+                  runtimeConsole.searchIndexStatus.value?.latest_run?.last_error ||
+                  runtimeConsole.searchBackfillResult.value?.processing_error
+                "
                 class="runtime-sync-error"
               >
-                {{ runtimeConsole.searchBackfillResult.value.processing_error }}
+                {{
+                  runtimeConsole.searchIndexStatus.value?.latest_run?.last_error ??
+                  runtimeConsole.searchBackfillResult.value?.processing_error
+                }}
               </p>
               <p v-else class="runtime-metadata-meta">
                 {{
                   t("runtime.searchIndex.lastResult", {
-                    scanned: runtimeConsole.searchBackfillResult.value.scanned,
-                    skipped: runtimeConsole.searchBackfillResult.value.skipped,
+                    scanned:
+                      runtimeConsole.searchIndexStatus.value?.latest_run?.scanned ??
+                      runtimeConsole.searchBackfillResult.value?.scanned ??
+                      0,
+                    skipped:
+                      runtimeConsole.searchIndexStatus.value?.latest_run?.skipped ??
+                      runtimeConsole.searchBackfillResult.value?.skipped ??
+                      0,
                   })
                 }}
               </p>
+
+              <div
+                v-if="runtimeConsole.searchIndexStatus.value?.failed_jobs.length"
+                class="runtime-sync-outbox-list"
+              >
+                <article
+                  v-for="job in runtimeConsole.searchIndexStatus.value?.failed_jobs ?? []"
+                  :key="job.task_id"
+                  class="runtime-sync-outbox-item"
+                >
+                  <div>
+                    <strong>{{ job.title ?? job.task_id }}</strong>
+                    <span>{{ job.last_error ?? t("runtime.searchIndex.unknownError") }}</span>
+                  </div>
+                  <span class="status-pill status-pill-danger">
+                    {{ t("runtime.searchIndex.attempts", { count: job.attempt_count }) }}
+                  </span>
+                </article>
+              </div>
             </div>
           </aside>
         </div>

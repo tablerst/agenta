@@ -74,6 +74,50 @@ pub struct ActivityLexicalSearchRow {
     pub score: f64,
 }
 
+#[derive(Clone, Debug)]
+pub struct SearchIndexQueueStats {
+    pub total_count: usize,
+    pub pending_count: usize,
+    pub processing_count: usize,
+    pub failed_count: usize,
+    pub due_count: usize,
+    pub stale_processing_count: usize,
+    pub next_retry_at: Option<OffsetDateTime>,
+    pub last_error: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct SearchIndexJobRecord {
+    pub task_id: Uuid,
+    pub title: Option<String>,
+    pub status: String,
+    pub attempt_count: i64,
+    pub last_error: Option<String>,
+    pub next_attempt_at: Option<OffsetDateTime>,
+    pub locked_at: Option<OffsetDateTime>,
+    pub lease_until: Option<OffsetDateTime>,
+    pub updated_at: OffsetDateTime,
+    pub run_id: Option<Uuid>,
+}
+
+#[derive(Clone, Debug)]
+pub struct SearchIndexRunRecord {
+    pub run_id: Uuid,
+    pub status: String,
+    pub trigger_kind: String,
+    pub scanned: usize,
+    pub queued: usize,
+    pub skipped: usize,
+    pub processed: usize,
+    pub succeeded: usize,
+    pub failed: usize,
+    pub batch_size: usize,
+    pub started_at: OffsetDateTime,
+    pub finished_at: Option<OffsetDateTime>,
+    pub last_error: Option<String>,
+    pub updated_at: OffsetDateTime,
+}
+
 impl SqliteStore {
     pub async fn open(
         data_dir: &Path,

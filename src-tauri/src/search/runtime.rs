@@ -23,6 +23,7 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 #[derive(Clone, Debug)]
 pub struct SearchVectorJob {
     pub task_id: Uuid,
+    pub run_id: Option<Uuid>,
     pub attempt_count: i64,
 }
 

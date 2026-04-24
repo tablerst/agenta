@@ -1217,6 +1217,9 @@ async fn task_search_reindex_jobs_persist_when_vector_runtime_is_unavailable(
         .fetch_one(&mut connection)
         .await?;
     assert!(row.get::<i64, _>("count") >= 1);
+    let search_status = runtime.service.search_index_status().await?;
+    assert!(search_status.total_count >= 1);
+    assert!(search_status.last_error.is_some() || search_status.processing_count >= 1);
 
     Ok(())
 }
@@ -1314,8 +1317,25 @@ async fn search_backfill_batches_embeddings_and_upserts_task_documents(
     assert_eq!(summary.scanned, 2);
     assert_eq!(summary.queued, 2);
     assert_eq!(summary.skipped, 0);
+    assert_eq!(summary.status, "completed");
+    assert_eq!(summary.processed, 2);
+    assert_eq!(summary.succeeded, 2);
+    assert_eq!(summary.failed, 0);
     assert_eq!(summary.pending_after, 0);
     assert!(summary.processing_error.is_none());
+
+    let search_status = runtime.service.search_index_status().await?;
+    assert_eq!(search_status.pending_count, 0);
+    assert_eq!(search_status.processing_count, 0);
+    assert_eq!(search_status.failed_count, 0);
+    assert_eq!(
+        search_status.latest_run.as_ref().map(|run| (
+            run.run_id,
+            run.status.as_str(),
+            run.succeeded
+        )),
+        Some((summary.run_id, "completed", 2))
+    );
 
     assert_eq!(*state.embedding_batch_sizes.lock().await, vec![1, 1]);
     assert_eq!(*state.upsert_batch_sizes.lock().await, vec![1, 1]);

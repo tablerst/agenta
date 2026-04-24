@@ -94,6 +94,7 @@ enum AttachmentCommand {
 
 #[derive(Debug, Subcommand)]
 enum SearchCommand {
+    Status,
     Query(SearchQueryArgs),
     Backfill(SearchExecuteArgs),
 }
@@ -818,6 +819,10 @@ async fn execute_attachment(
 
 async fn execute_search(app: AgentaApp, command: SearchCommand) -> AppResult<SuccessEnvelope> {
     match command {
+        SearchCommand::Status => {
+            let result = app.service.search_index_status().await?;
+            success("search.status", result, "Loaded search index status")
+        }
         SearchCommand::Query(args) => {
             let result = app
                 .service
