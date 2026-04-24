@@ -97,6 +97,8 @@ enum SearchCommand {
     Status,
     Query(SearchQueryArgs),
     Backfill(SearchExecuteArgs),
+    RetryFailed(SearchExecuteArgs),
+    RecoverStale(SearchExecuteArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -848,6 +850,28 @@ async fn execute_search(app: AgentaApp, command: SearchCommand) -> AppResult<Suc
                 .search_backfill(args.limit, args.batch_size)
                 .await?;
             success("search.backfill", result, "Completed search backfill")
+        }
+        SearchCommand::RetryFailed(args) => {
+            let result = app
+                .service
+                .retry_failed_search_index_jobs(args.limit, args.batch_size)
+                .await?;
+            success(
+                "search.retry_failed",
+                result,
+                "Retried failed search index jobs",
+            )
+        }
+        SearchCommand::RecoverStale(args) => {
+            let result = app
+                .service
+                .recover_stale_search_index_jobs(args.limit, args.batch_size)
+                .await?;
+            success(
+                "search.recover_stale",
+                result,
+                "Recovered stale search index jobs",
+            )
         }
     }
 }

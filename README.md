@@ -107,7 +107,7 @@ Vector search and `回填搜索索引` depend on a reachable Chroma backend when
 - If `search.vector.autostart_sidecar: true`, Desktop will try to run `chroma` locally. This only works when the Chroma CLI is installed and available on `PATH`.
 - If you prefer to run Chroma yourself, start a local server first and keep `search.vector.endpoint` pointed at that server.
 - If neither the CLI nor a running server is available, search backfill jobs may be queued but processing will fail until Chroma becomes reachable.
-- Queue/runs/failures can be inspected locally via `agenta search status` or the Desktop Runtime search-index panel; embeddings remain local-only derived state and are not replicated through sync.
+- Queue/runs/failures can be inspected locally via `agenta search status` or the Desktop Runtime search-index panel. Failed jobs can be retried with `agenta search retry-failed`, and expired processing leases can be recovered with `agenta search recover-stale`; embeddings remain local-only derived state and are not replicated through sync.
 
 Official Chroma references:
 

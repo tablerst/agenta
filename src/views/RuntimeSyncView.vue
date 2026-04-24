@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, onUnmounted, ref, watch } from "vue";
 import { Database, FolderArchive, Play, RotateCcw, Search } from "@lucide/vue";
 import { useI18n } from "vue-i18n";
 
@@ -32,6 +32,36 @@ const surfaceTabs = computed(() => [
 const activeSurfaceSummary = computed(
   () => surfaceTabs.value.find((tab) => tab.key === activeSurface.value)?.summary ?? "",
 );
+const activeSearchRun = computed(() => runtimeConsole.searchIndexStatus.value?.active_run ?? null);
+const displaySearchRun = computed(
+  () => activeSearchRun.value ?? runtimeConsole.searchIndexStatus.value?.latest_run ?? null,
+);
+const searchRunCompletedCount = computed(() => {
+  const run = displaySearchRun.value;
+  if (!run) {
+    return 0;
+  }
+  return Math.max(0, run.queued - run.remaining_count);
+});
+const searchRunProgressPercent = computed(() => {
+  const run = displaySearchRun.value;
+  if (!run || run.queued <= 0) {
+    return 0;
+  }
+  return Math.max(0, Math.min(100, Math.round((searchRunCompletedCount.value / run.queued) * 100)));
+});
+
+watch(
+  activeSurface,
+  (surface) => {
+    void runtimeConsole.setSearchIndexLiveRefresh(surface === "search");
+  },
+  { immediate: true },
+);
+
+onUnmounted(() => {
+  void runtimeConsole.setSearchIndexLiveRefresh(false);
+});
 </script>
 
 <template>
@@ -91,6 +121,24 @@ const activeSurfaceSummary = computed(
               <RotateCcw :size="14" />
               {{ t("runtime.actions.pull") }}
             </button>
+          </div>
+          <div v-else class="flex flex-wrap items-center gap-2">
+            <button
+              class="secondary-action spotlight-surface"
+              :aria-busy="runtimeConsole.isSyncActionPending('refresh') ? 'true' : undefined"
+              :data-pending="runtimeConsole.isSyncActionPending('refresh') ? 'true' : undefined"
+              :disabled="runtimeConsole.syncBusy.value"
+              @click="runtimeConsole.loadSearchIndexStatus()"
+            >
+              <RotateCcw :size="14" />
+              {{ t("runtime.actions.refresh") }}
+            </button>
+            <span
+              v-if="runtimeConsole.searchIndexAutoRefreshActive.value"
+              class="status-pill status-pill-warning"
+            >
+              {{ t("runtime.searchIndex.autoRefresh") }}
+            </span>
           </div>
         </div>
 
@@ -153,6 +201,84 @@ const activeSurfaceSummary = computed(
                 <div>
                   <dt>{{ t("runtime.sync.mode") }}</dt>
                   <dd>{{ runtimeConsole.syncStatus.value.mode }}</dd>
+                </div>
+              </dl>
+            </section>
+
+            <section v-if="displaySearchRun" class="runtime-block runtime-block-nested">
+              <div class="runtime-block-header">
+                <div>
+                  <p class="section-label">
+                    {{
+                      activeSearchRun
+                        ? t("runtime.searchIndex.activeRunLabel")
+                        : t("runtime.searchIndex.latestRunLabel")
+                    }}
+                  </p>
+                  <h3 class="runtime-subblock-title">
+                    {{ t("runtime.searchIndex.progressTitle") }}
+                  </h3>
+                  <p class="runtime-block-summary">
+                    {{
+                      t("runtime.searchIndex.progressSummary", {
+                        completed: searchRunCompletedCount,
+                        queued: displaySearchRun.queued,
+                        percent: searchRunProgressPercent,
+                      })
+                    }}
+                  </p>
+                </div>
+                <div class="flex flex-wrap items-center gap-2">
+                  <span class="status-pill status-pill-success">
+                    {{ searchRunProgressPercent }}%
+                  </span>
+                  <span class="status-pill">
+                    {{
+                      runtimeConsole.formatSearchIndexStatus(displaySearchRun.status)
+                    }}
+                  </span>
+                </div>
+              </div>
+
+              <div
+                class="runtime-search-progress-track"
+                role="progressbar"
+                :aria-valuemin="0"
+                :aria-valuemax="100"
+                :aria-valuenow="searchRunProgressPercent"
+              >
+                <div
+                  class="runtime-search-progress-fill"
+                  :style="{ width: `${searchRunProgressPercent}%` }"
+                />
+              </div>
+
+              <dl class="runtime-search-run-strip">
+                <div>
+                  <dt>{{ t("runtime.searchIndex.completed") }}</dt>
+                  <dd>{{ searchRunCompletedCount }}</dd>
+                </div>
+                <div>
+                  <dt>{{ t("runtime.searchIndex.remaining") }}</dt>
+                  <dd>{{ displaySearchRun.remaining_count }}</dd>
+                </div>
+                <div>
+                  <dt>{{ t("runtime.searchIndex.retrying") }}</dt>
+                  <dd>{{ displaySearchRun.retrying_count }}</dd>
+                </div>
+                <div>
+                  <dt>{{ t("runtime.searchIndex.lastUpdated") }}</dt>
+                  <dd>{{ runtimeConsole.searchIndexLastUpdatedLabel.value }}</dd>
+                </div>
+                <div>
+                  <dt>{{ t("runtime.searchIndex.nextRetryAt") }}</dt>
+                  <dd>
+                    {{ formatDateTime(runtimeConsole.searchIndexStatus.value?.next_retry_at) }}
+                  </dd>
+                </div>
+                <div>
+                  <dt>{{ t("runtime.searchIndex.batchSize") }}</dt>
+                  <dd>{{ displaySearchRun.batch_size }}</dd>
                 </div>
               </dl>
             </section>
@@ -259,20 +385,56 @@ const activeSurfaceSummary = computed(
                     )
                   }}
                 </span>
-                <button
-                  class="secondary-action spotlight-surface"
-                  :aria-busy="
-                    runtimeConsole.isSyncActionPending('searchBackfill') ? 'true' : undefined
-                  "
-                  :data-pending="
-                    runtimeConsole.isSyncActionPending('searchBackfill') ? 'true' : undefined
-                  "
-                  :disabled="runtimeConsole.syncBusy.value"
-                  @click="runtimeConsole.runSearchBackfill"
-                >
-                  <Search :size="14" />
-                  {{ t("runtime.actions.searchBackfill") }}
-                </button>
+                <div class="flex flex-wrap items-center gap-2">
+                  <button
+                    class="secondary-action spotlight-surface"
+                    :aria-busy="
+                      runtimeConsole.isSyncActionPending('searchRetryFailed') ? 'true' : undefined
+                    "
+                    :data-pending="
+                      runtimeConsole.isSyncActionPending('searchRetryFailed') ? 'true' : undefined
+                    "
+                    :disabled="
+                      runtimeConsole.syncBusy.value ||
+                      !(runtimeConsole.searchIndexStatus.value?.failed_count ?? 0)
+                    "
+                    @click="runtimeConsole.runSearchRetryFailed"
+                  >
+                    <RotateCcw :size="14" />
+                    {{ t("runtime.actions.searchRetryFailed") }}
+                  </button>
+                  <button
+                    class="secondary-action spotlight-surface"
+                    :aria-busy="
+                      runtimeConsole.isSyncActionPending('searchRecoverStale') ? 'true' : undefined
+                    "
+                    :data-pending="
+                      runtimeConsole.isSyncActionPending('searchRecoverStale') ? 'true' : undefined
+                    "
+                    :disabled="
+                      runtimeConsole.syncBusy.value ||
+                      !(runtimeConsole.searchIndexStatus.value?.stale_processing_count ?? 0)
+                    "
+                    @click="runtimeConsole.runSearchRecoverStale"
+                  >
+                    <Play :size="14" />
+                    {{ t("runtime.actions.searchRecoverStale") }}
+                  </button>
+                  <button
+                    class="secondary-action spotlight-surface"
+                    :aria-busy="
+                      runtimeConsole.isSyncActionPending('searchBackfill') ? 'true' : undefined
+                    "
+                    :data-pending="
+                      runtimeConsole.isSyncActionPending('searchBackfill') ? 'true' : undefined
+                    "
+                    :disabled="runtimeConsole.syncBusy.value"
+                    @click="runtimeConsole.runSearchBackfill"
+                  >
+                    <Search :size="14" />
+                    {{ t("runtime.actions.searchBackfill") }}
+                  </button>
+                </div>
               </div>
 
               <dl class="runtime-search-index-strip">
@@ -317,6 +479,12 @@ const activeSurfaceSummary = computed(
                 <div class="runtime-search-index-item">
                   <dt>{{ t("runtime.searchIndex.failed") }}</dt>
                   <dd>{{ runtimeConsole.searchIndexStatus.value?.failed_count ?? t("common.na") }}</dd>
+                </div>
+                <div class="runtime-search-index-item">
+                  <dt>{{ t("runtime.searchIndex.stale") }}</dt>
+                  <dd>
+                    {{ runtimeConsole.searchIndexStatus.value?.stale_processing_count ?? t("common.na") }}
+                  </dd>
                 </div>
                 <div class="runtime-search-index-item">
                   <dt>{{ t("runtime.searchIndex.sidecar") }}</dt>
@@ -466,6 +634,10 @@ const activeSurfaceSummary = computed(
                   <div>
                     <strong>{{ job.title ?? job.task_id }}</strong>
                     <span>{{ job.last_error ?? t("runtime.searchIndex.unknownError") }}</span>
+                    <span class="runtime-metadata-meta">
+                      {{ t("runtime.searchIndex.nextRetryAt") }}
+                      {{ formatDateTime(job.next_attempt_at) }}
+                    </span>
                   </div>
                   <span class="status-pill status-pill-danger">
                     {{ t("runtime.searchIndex.attempts", { count: job.attempt_count }) }}

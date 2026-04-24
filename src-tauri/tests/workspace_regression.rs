@@ -1356,6 +1356,187 @@ async fn search_backfill_batches_embeddings_and_upserts_task_documents(
 }
 
 #[tokio::test]
+async fn retry_failed_search_jobs_requeues_them_into_a_new_run(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let tempdir = TempDir::new()?;
+    let disabled_config = write_test_config(&tempdir)?;
+    let disabled_runtime = AppRuntime::bootstrap(BootstrapOptions {
+        config_path: Some(disabled_config),
+    })
+    .await?;
+
+    let project = disabled_runtime
+        .service
+        .create_project(CreateProjectInput {
+            slug: "search-retry".to_string(),
+            name: "Search Retry".to_string(),
+            description: Some("Retry failed jobs".to_string()),
+        })
+        .await?;
+    let task = disabled_runtime
+        .service
+        .create_task(CreateTaskInput {
+            project: project.slug,
+            version: None,
+            task_code: Some("InitCtx-Retry".to_string()),
+            task_kind: Some(TaskKind::Context),
+            title: "Retry failed vector job".to_string(),
+            summary: Some("Should be retried as a new run".to_string()),
+            description: Some("Search recovery flow should requeue failed jobs.".to_string()),
+            status: Some(TaskStatus::Ready),
+            priority: Some(TaskPriority::Normal),
+            created_by: Some("search-retry".to_string()),
+        })
+        .await?;
+    drop(disabled_runtime);
+
+    let (endpoint, _state, server) = spawn_mock_search_server().await?;
+    let enabled_config = write_vector_test_config(&tempdir, &endpoint)?;
+    let runtime = AppRuntime::bootstrap(BootstrapOptions {
+        config_path: Some(enabled_config),
+    })
+    .await?;
+
+    let mut connection = SqliteConnection::connect_with(
+        &SqliteConnectOptions::new()
+            .filename(&runtime.config.paths.database_path)
+            .create_if_missing(false)
+            .busy_timeout(std::time::Duration::from_secs(5)),
+    )
+    .await?;
+    sqlx::query(
+        r#"
+        INSERT INTO search_index_jobs (
+            task_id, job_kind, status, attempt_count, last_error, next_attempt_at,
+            run_id, locked_at, lease_until, created_at, updated_at
+        ) VALUES (?, 'task_vector_upsert', 'failed', 3, 'previous vector error',
+            '2026-01-01T00:00:00Z', NULL, NULL, NULL, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')
+        "#,
+    )
+    .bind(task.task_id.to_string())
+    .execute(&mut connection)
+    .await?;
+
+    let summary = runtime
+        .service
+        .retry_failed_search_index_jobs(Some(10), Some(1))
+        .await?;
+    assert_eq!(summary.status, "completed");
+    assert_eq!(summary.trigger_kind, "retry_failed");
+    assert_eq!(summary.queued, 1);
+    assert_eq!(summary.succeeded, 1);
+    assert_eq!(summary.failed, 0);
+    assert_eq!(summary.pending_after, 0);
+    assert!(summary.processing_error.is_none());
+
+    let status = runtime.service.search_index_status().await?;
+    assert_eq!(status.failed_count, 0);
+    assert_eq!(
+        status.latest_run.as_ref().map(|run| (
+            run.trigger_kind.as_str(),
+            run.succeeded,
+            run.remaining_count
+        )),
+        Some(("retry_failed", 1, 0))
+    );
+
+    server.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn recover_stale_search_jobs_requeues_expired_processing_items(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let tempdir = TempDir::new()?;
+    let disabled_config = write_test_config(&tempdir)?;
+    let disabled_runtime = AppRuntime::bootstrap(BootstrapOptions {
+        config_path: Some(disabled_config),
+    })
+    .await?;
+
+    let project = disabled_runtime
+        .service
+        .create_project(CreateProjectInput {
+            slug: "search-stale".to_string(),
+            name: "Search Stale".to_string(),
+            description: Some("Recover stale jobs".to_string()),
+        })
+        .await?;
+    let task = disabled_runtime
+        .service
+        .create_task(CreateTaskInput {
+            project: project.slug,
+            version: None,
+            task_code: Some("InitCtx-Stale".to_string()),
+            task_kind: Some(TaskKind::Context),
+            title: "Recover stale vector job".to_string(),
+            summary: Some("Expired processing job should be recovered".to_string()),
+            description: Some(
+                "Search recovery flow should reclaim stale processing jobs.".to_string(),
+            ),
+            status: Some(TaskStatus::Ready),
+            priority: Some(TaskPriority::Normal),
+            created_by: Some("search-stale".to_string()),
+        })
+        .await?;
+    drop(disabled_runtime);
+
+    let (endpoint, _state, server) = spawn_mock_search_server().await?;
+    let enabled_config = write_vector_test_config(&tempdir, &endpoint)?;
+    let runtime = AppRuntime::bootstrap(BootstrapOptions {
+        config_path: Some(enabled_config),
+    })
+    .await?;
+
+    let mut connection = SqliteConnection::connect_with(
+        &SqliteConnectOptions::new()
+            .filename(&runtime.config.paths.database_path)
+            .create_if_missing(false)
+            .busy_timeout(std::time::Duration::from_secs(5)),
+    )
+    .await?;
+    sqlx::query(
+        r#"
+        INSERT INTO search_index_jobs (
+            task_id, job_kind, status, attempt_count, last_error, next_attempt_at,
+            run_id, locked_at, lease_until, created_at, updated_at
+        ) VALUES (?, 'task_vector_upsert', 'processing', 1, NULL,
+            NULL, NULL, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z',
+            '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')
+        "#,
+    )
+    .bind(task.task_id.to_string())
+    .execute(&mut connection)
+    .await?;
+
+    let summary = runtime
+        .service
+        .recover_stale_search_index_jobs(Some(10), Some(1))
+        .await?;
+    assert_eq!(summary.status, "completed");
+    assert_eq!(summary.trigger_kind, "recover_stale");
+    assert_eq!(summary.queued, 1);
+    assert_eq!(summary.succeeded, 1);
+    assert_eq!(summary.failed, 0);
+    assert_eq!(summary.pending_after, 0);
+    assert!(summary.processing_error.is_none());
+
+    let status = runtime.service.search_index_status().await?;
+    assert_eq!(status.stale_processing_count, 0);
+    assert_eq!(
+        status.latest_run.as_ref().map(|run| (
+            run.trigger_kind.as_str(),
+            run.succeeded,
+            run.remaining_count
+        )),
+        Some(("recover_stale", 1, 0))
+    );
+
+    server.abort();
+    Ok(())
+}
+
+#[tokio::test]
 async fn project_version_and_attachment_changes_requeue_task_vector_jobs(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let tempdir = TempDir::new()?;

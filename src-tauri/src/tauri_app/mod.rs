@@ -792,6 +792,22 @@ async fn desktop_search(
                     .await?,
                 "Completed search backfill",
             ),
+            "retry_failed" => success(
+                "search.retry_failed",
+                state
+                    .service
+                    .retry_failed_search_index_jobs(input.limit, input.batch_size)
+                    .await?,
+                "Retried failed search index jobs",
+            ),
+            "recover_stale" => success(
+                "search.recover_stale",
+                state
+                    .service
+                    .recover_stale_search_index_jobs(input.limit, input.batch_size)
+                    .await?,
+                "Recovered stale search index jobs",
+            ),
             other => Err(AppError::InvalidAction(format!(
                 "unsupported search action: {other}"
             ))),

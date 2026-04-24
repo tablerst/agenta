@@ -28,6 +28,7 @@ import type {
 import { useShellStore } from "../stores/shell";
 
 function createRuntimeConsoleModel() {
+  const SEARCH_INDEX_POLL_MS = 3000;
   const shell = useShellStore();
   const { locale, t } = useI18n({ useScope: "global" });
 
@@ -37,7 +38,14 @@ function createRuntimeConsoleModel() {
     | "stop"
     | "refreshLogs"
     | "openLogDirectory";
-  type SyncAction = "refresh" | "backfill" | "push" | "pull" | "searchBackfill";
+  type SyncAction =
+    | "refresh"
+    | "backfill"
+    | "push"
+    | "pull"
+    | "searchBackfill"
+    | "searchRetryFailed"
+    | "searchRecoverStale";
 
   const runtime = ref<RuntimeStatus | null>(null);
   const mcp = ref<McpRuntimeStatus | null>(null);
@@ -45,6 +53,8 @@ function createRuntimeConsoleModel() {
   const syncOutbox = ref<SyncOutboxListItem[]>([]);
   const searchIndexStatus = ref<SearchIndexStatusSummary | null>(null);
   const searchBackfillResult = ref<SearchBackfillSummary | null>(null);
+  const searchIndexAutoRefreshActive = ref(false);
+  const searchIndexLastUpdated = ref<string>("");
   const searchBackfillForm = reactive({
     batchSize: 10,
     limit: 1000,
@@ -103,6 +113,7 @@ function createRuntimeConsoleModel() {
   const syncRemoteDatabase = computed(
     () => syncStatus.value?.remote?.postgres?.database ?? t("common.na"),
   );
+  const searchIndexLastUpdatedLabel = computed(() => formatDateTime(searchIndexLastUpdated.value));
   const searchIndexHealthClass = computed(() => {
     if (!searchIndexStatus.value?.enabled) {
       return "status-pill";
@@ -120,6 +131,10 @@ function createRuntimeConsoleModel() {
       ? "status-pill status-pill-success"
       : "status-pill status-pill-warning";
   });
+
+  let searchIndexPollTimer: number | null = null;
+  let searchIndexPollInFlight = false;
+  let searchIndexLiveRefreshRequested = false;
 
   function clampInteger(
     value: unknown,
@@ -311,6 +326,78 @@ function createRuntimeConsoleModel() {
     await withRuntimeAction("refreshLogs", refreshLogsSnapshot);
   }
 
+  function hasSearchIndexWorkInFlight(status: SearchIndexStatusSummary | null) {
+    if (!status?.enabled) {
+      return false;
+    }
+    if (status.active_run) {
+      return status.active_run.remaining_count > 0 || status.active_run.status === "running";
+    }
+    return (status.pending_count ?? 0) > 0 || (status.processing_count ?? 0) > 0;
+  }
+
+  async function refreshSearchIndexStatusSnapshot(showNotice = true) {
+    try {
+      const envelope = await desktopBridge.searchIndexStatus();
+      searchIndexStatus.value = envelope.result;
+      searchIndexLastUpdated.value = new Date().toISOString();
+    } catch (error) {
+      if (showNotice) {
+        shell.pushNotice("error", formatDesktopError(error, t));
+      }
+    }
+  }
+
+  function stopSearchIndexPolling() {
+    if (searchIndexPollTimer !== null) {
+      window.clearInterval(searchIndexPollTimer);
+      searchIndexPollTimer = null;
+    }
+    searchIndexAutoRefreshActive.value = false;
+  }
+
+  function syncSearchIndexPolling() {
+    if (!searchIndexLiveRefreshRequested || !hasSearchIndexWorkInFlight(searchIndexStatus.value)) {
+      stopSearchIndexPolling();
+      return;
+    }
+    if (searchIndexPollTimer !== null) {
+      searchIndexAutoRefreshActive.value = true;
+      return;
+    }
+
+    searchIndexAutoRefreshActive.value = true;
+    searchIndexPollTimer = window.setInterval(async () => {
+      if (searchIndexPollInFlight) {
+        return;
+      }
+      searchIndexPollInFlight = true;
+      try {
+        await refreshSearchIndexStatusSnapshot(false);
+        syncSearchIndexPolling();
+      } finally {
+        searchIndexPollInFlight = false;
+      }
+    }, SEARCH_INDEX_POLL_MS);
+  }
+
+  async function setSearchIndexLiveRefresh(enabled: boolean) {
+    searchIndexLiveRefreshRequested = enabled;
+    if (!enabled) {
+      stopSearchIndexPolling();
+      return;
+    }
+    await refreshSearchIndexStatusSnapshot(false);
+    syncSearchIndexPolling();
+  }
+
+  async function loadSearchIndexStatus() {
+    await withSyncAction("refresh", async () => {
+      await refreshSearchIndexStatusSnapshot();
+      syncSearchIndexPolling();
+    });
+  }
+
   async function loadSyncSnapshot() {
     try {
       const [syncEnvelope, outboxEnvelope, searchIndexEnvelope] = await Promise.all([
@@ -321,6 +408,8 @@ function createRuntimeConsoleModel() {
       syncStatus.value = syncEnvelope.result;
       syncOutbox.value = outboxEnvelope.result;
       searchIndexStatus.value = searchIndexEnvelope.result;
+      searchIndexLastUpdated.value = new Date().toISOString();
+      syncSearchIndexPolling();
     } catch (error) {
       shell.pushNotice("error", formatDesktopError(error, t));
     }
@@ -354,6 +443,8 @@ function createRuntimeConsoleModel() {
       syncStatus.value = syncEnvelope.result;
       syncOutbox.value = outboxEnvelope.result;
       searchIndexStatus.value = searchIndexEnvelope.result;
+      searchIndexLastUpdated.value = new Date().toISOString();
+      syncSearchIndexPolling();
       hydrateForm(mcpEnvelope.result);
       loadedAt.value = new Date().toISOString();
     } catch (error) {
@@ -485,6 +576,54 @@ function createRuntimeConsoleModel() {
     });
   }
 
+  async function runSearchRetryFailed() {
+    await withSyncAction("searchRetryFailed", async () => {
+      try {
+        normalizeSearchBackfillForm();
+        const envelope = await desktopBridge.searchRetryFailed({
+          limit: searchBackfillForm.limit,
+          batchSize: searchBackfillForm.batchSize,
+        });
+        await refreshSearchIndexStatusSnapshot(false);
+        syncSearchIndexPolling();
+        if (envelope.result.processing_error) {
+          shell.pushNotice("error", envelope.result.processing_error);
+          return;
+        }
+        shell.pushNotice(
+          "success",
+          t("notices.searchRetryFailedCompleted", { count: envelope.result.queued }),
+        );
+      } catch (error) {
+        shell.pushNotice("error", formatDesktopError(error, t));
+      }
+    });
+  }
+
+  async function runSearchRecoverStale() {
+    await withSyncAction("searchRecoverStale", async () => {
+      try {
+        normalizeSearchBackfillForm();
+        const envelope = await desktopBridge.searchRecoverStale({
+          limit: searchBackfillForm.limit,
+          batchSize: searchBackfillForm.batchSize,
+        });
+        await refreshSearchIndexStatusSnapshot(false);
+        syncSearchIndexPolling();
+        if (envelope.result.processing_error) {
+          shell.pushNotice("error", envelope.result.processing_error);
+          return;
+        }
+        shell.pushNotice(
+          "success",
+          t("notices.searchRecoverStaleCompleted", { count: envelope.result.queued }),
+        );
+      } catch (error) {
+        shell.pushNotice("error", formatDesktopError(error, t));
+      }
+    });
+  }
+
   onMounted(async () => {
     unlisteners.push(
       await desktopBridge.onMcpStatus((payload) => {
@@ -508,6 +647,7 @@ function createRuntimeConsoleModel() {
   });
 
   onUnmounted(() => {
+    stopSearchIndexPolling();
     unlisteners.forEach((dispose) => {
       dispose();
     });
@@ -533,6 +673,7 @@ function createRuntimeConsoleModel() {
     isSyncActionPending,
     isTransitioning,
     loadRuntime,
+    loadSearchIndexStatus,
     loadSync,
     loadedAtLabel,
     logDestinationOptions,
@@ -544,6 +685,8 @@ function createRuntimeConsoleModel() {
     openLogDirectory,
     refreshLogs,
     runSearchBackfill,
+    runSearchRecoverStale,
+    runSearchRetryFailed,
     runSyncBackfill,
     runSyncPull,
     runSyncPush,
@@ -551,8 +694,11 @@ function createRuntimeConsoleModel() {
     saveAsDefault,
     searchBackfillForm,
     searchBackfillResult,
+    searchIndexAutoRefreshActive,
     searchIndexHealthClass,
+    searchIndexLastUpdatedLabel,
     searchIndexStatus,
+    setSearchIndexLiveRefresh,
     startMcp,
     statusClass,
     stopMcp,

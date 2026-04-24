@@ -71,7 +71,7 @@
 | [~] | 完成 `SearchV2-03` note / attachment chunk 化检索 | 已完成当前阶段收口：`task_activities` 新增 `activity_search_text` 并进入 FTS，本地派生 `task_activity_chunks` 已落地并用于活动检索；历史 note、文本型 attachment 正文与长 note 深层内容可参与 activity/task 搜索并回流为 task evidence；后续继续细化非文本附件策略与 chunk 排序 |
 | [~] | 完成 `SearchV2-04` 搜索 API 过滤与排序扩展 | 已完成搜索侧 `status / priority / knowledge_status` 过滤贯通到 service、CLI、MCP、desktop 和 vector where clause；后续继续补更多 workflow 维度与前端收窄入口 |
 | [ ] | 完成 `SearchV2-05` 桌面搜索交互与二跳收窄 | Global Search 与项目搜索都要升级 |
-| [~] | 完成 `SearchV2-06` 向量运行时与回填可靠性 | 已补本地 `search status` / Desktop 搜索索引状态面、回填 run 摘要、失败任务样本与 processing lease；后续继续补更细的实时进度与恢复动作 |
+| [~] | 完成 `SearchV2-06` 向量运行时与回填可靠性 | 已补本地 `search status` / Desktop 搜索索引状态面、回填 run 摘要、失败任务样本、processing lease、search tab 自动刷新与运行进度条，并新增失败重试与过期 processing 恢复动作；后续继续补更细的异常分级 |
 | [~] | 完成 `SearchV2-07` 检索评测集与验收基线 | 已新增 golden queries 回归测试，覆盖编号查询、精确短语、旧 note 正文、文本型 attachment 正文、状态过滤、知识状态过滤，以及长 note 深层 chunk 命中；后续继续补中文查询、semantic explainability 与更多边界门槛 |
 | [ ] | 完成 `SearchV2-08` 发布闸口、迁移与文档收口 | 包含配置示例、文档、灰度与回滚 |
 

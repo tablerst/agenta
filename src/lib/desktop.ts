@@ -15,6 +15,7 @@ import type {
   Project,
   RuntimeStatus,
   SearchBackfillSummary,
+  SearchQueueRecoverySummary,
   SearchIndexStatusSummary,
   SearchResponse,
   SuccessEnvelope,
@@ -417,6 +418,26 @@ export const desktopBridge = {
     return resolveBridgeMode() === "desktop"
       ? callDesktop<SearchIndexStatusSummary>("desktop_search", input)
       : callPreview<SearchIndexStatusSummary>(() => mockDesktopBridge.searchIndexStatus());
+  },
+  searchRetryFailed(options: SearchBackfillOptions = {}) {
+    const input = {
+      action: "retry_failed",
+      limit: typeof options.limit === "number" ? options.limit : null,
+      batch_size: typeof options.batchSize === "number" ? options.batchSize : null,
+    };
+    return resolveBridgeMode() === "desktop"
+      ? callDesktop<SearchQueueRecoverySummary>("desktop_search", input)
+      : callPreview<SearchQueueRecoverySummary>(() => mockDesktopBridge.searchRetryFailed(options));
+  },
+  searchRecoverStale(options: SearchBackfillOptions = {}) {
+    const input = {
+      action: "recover_stale",
+      limit: typeof options.limit === "number" ? options.limit : null,
+      batch_size: typeof options.batchSize === "number" ? options.batchSize : null,
+    };
+    return resolveBridgeMode() === "desktop"
+      ? callDesktop<SearchQueueRecoverySummary>("desktop_search", input)
+      : callPreview<SearchQueueRecoverySummary>(() => mockDesktopBridge.searchRecoverStale(options));
   },
   approval(input: Record<string, unknown>) {
     return resolveBridgeMode() === "desktop"

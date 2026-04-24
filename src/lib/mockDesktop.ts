@@ -14,6 +14,7 @@ import type {
   Project,
   RuntimeStatus,
   SearchBackfillSummary,
+  SearchQueueRecoverySummary,
   SearchIndexStatusSummary,
   SearchResponse,
   SuccessEnvelope,
@@ -384,6 +385,20 @@ function runPreviewSearchIndexStatus(): SearchIndexStatusSummary {
     active_run: null,
     latest_run: null,
     failed_jobs: [],
+  };
+}
+
+function runPreviewSearchRecovery(triggerKind: string): SearchQueueRecoverySummary {
+  return {
+    run_id: `preview-search-recovery-${Date.now()}`,
+    status: "completed",
+    trigger_kind: triggerKind,
+    queued: 0,
+    processed: 0,
+    succeeded: 0,
+    failed: 0,
+    pending_after: 0,
+    processing_error: null,
   };
 }
 
@@ -2180,6 +2195,24 @@ export const mockDesktopBridge = {
         "desktop_search",
         runPreviewSearchIndexStatus(),
         "Loaded preview search index status.",
+      ),
+    );
+  },
+  searchRetryFailed(_options: { limit?: number; batchSize?: number } = {}) {
+    return Promise.resolve(
+      envelope(
+        "desktop_search",
+        runPreviewSearchRecovery("retry_failed"),
+        "Retried preview failed search index jobs.",
+      ),
+    );
+  },
+  searchRecoverStale(_options: { limit?: number; batchSize?: number } = {}) {
+    return Promise.resolve(
+      envelope(
+        "desktop_search",
+        runPreviewSearchRecovery("recover_stale"),
+        "Recovered preview stale search index jobs.",
       ),
     );
   },

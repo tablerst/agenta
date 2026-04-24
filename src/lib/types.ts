@@ -393,6 +393,10 @@ export interface SearchIndexRunSummary {
   succeeded: number;
   failed: number;
   batch_size: number;
+  pending_count: number;
+  processing_count: number;
+  retrying_count: number;
+  remaining_count: number;
   started_at: string;
   finished_at: string | null;
   last_error: string | null;
@@ -427,6 +431,18 @@ export interface SearchIndexStatusSummary {
   active_run: SearchIndexRunSummary | null;
   latest_run: SearchIndexRunSummary | null;
   failed_jobs: SearchIndexJobSummary[];
+}
+
+export interface SearchQueueRecoverySummary {
+  run_id: string;
+  status: string;
+  trigger_kind: string;
+  queued: number;
+  processed: number;
+  succeeded: number;
+  failed: number;
+  pending_after: number;
+  processing_error: string | null;
 }
 
 export interface ProjectSearchFilters {

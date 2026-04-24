@@ -118,6 +118,13 @@ pub struct SearchIndexRunRecord {
     pub updated_at: OffsetDateTime,
 }
 
+#[derive(Clone, Debug)]
+pub struct SearchIndexRunQueueStats {
+    pub pending_count: usize,
+    pub processing_count: usize,
+    pub retrying_count: usize,
+}
+
 impl SqliteStore {
     pub async fn open(
         data_dir: &Path,

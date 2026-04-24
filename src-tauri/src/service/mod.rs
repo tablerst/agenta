@@ -157,6 +157,10 @@ pub struct SearchIndexRunSummary {
     pub succeeded: usize,
     pub failed: usize,
     pub batch_size: usize,
+    pub pending_count: usize,
+    pub processing_count: usize,
+    pub retrying_count: usize,
+    pub remaining_count: usize,
     pub started_at: OffsetDateTime,
     pub finished_at: Option<OffsetDateTime>,
     pub last_error: Option<String>,
@@ -193,6 +197,19 @@ pub struct SearchIndexStatusSummary {
     pub active_run: Option<SearchIndexRunSummary>,
     pub latest_run: Option<SearchIndexRunSummary>,
     pub failed_jobs: Vec<SearchIndexJobSummary>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct SearchQueueRecoverySummary {
+    pub run_id: Uuid,
+    pub status: String,
+    pub trigger_kind: String,
+    pub queued: usize,
+    pub processed: usize,
+    pub succeeded: usize,
+    pub failed: usize,
+    pub pending_after: usize,
+    pub processing_error: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -1102,6 +1119,7 @@ impl AgentaService {
                 .create_search_index_run_tx(
                     &mut tx,
                     run_id,
+                    "manual_backfill",
                     task_ids.len(),
                     queued,
                     task_ids.len().saturating_sub(queued),
@@ -1157,19 +1175,45 @@ impl AgentaService {
         Ok(summary)
     }
 
+    pub async fn retry_failed_search_index_jobs(
+        &self,
+        limit: Option<usize>,
+        batch_size: Option<usize>,
+    ) -> AppResult<SearchQueueRecoverySummary> {
+        self.run_search_queue_recovery(
+            "retry_failed",
+            self.store.list_failed_search_index_job_ids(limit).await?,
+            batch_size,
+        )
+        .await
+    }
+
+    pub async fn recover_stale_search_index_jobs(
+        &self,
+        limit: Option<usize>,
+        batch_size: Option<usize>,
+    ) -> AppResult<SearchQueueRecoverySummary> {
+        self.run_search_queue_recovery(
+            "recover_stale",
+            self.store
+                .list_stale_search_index_job_ids(OffsetDateTime::now_utc(), limit)
+                .await?,
+            batch_size,
+        )
+        .await
+    }
+
     pub async fn search_index_status(&self) -> AppResult<SearchIndexStatusSummary> {
         let runtime_status = self.search.runtime_status().await;
         let queue = self.store.search_index_queue_stats().await?;
-        let active_run = self
-            .store
-            .active_search_index_run()
-            .await?
-            .map(search_index_run_summary);
-        let latest_run = self
-            .store
-            .latest_search_index_run()
-            .await?
-            .map(search_index_run_summary);
+        let active_run = match self.store.active_search_index_run().await? {
+            Some(run) => Some(self.search_index_run_summary(run).await?),
+            None => None,
+        };
+        let latest_run = match self.store.latest_search_index_run().await? {
+            Some(run) => Some(self.search_index_run_summary(run).await?),
+            None => None,
+        };
         let failed_jobs = self
             .store
             .list_failed_search_index_jobs(Some(5))
@@ -1193,6 +1237,112 @@ impl AgentaService {
             active_run,
             latest_run,
             failed_jobs,
+        })
+    }
+
+    async fn run_search_queue_recovery(
+        &self,
+        trigger_kind: &str,
+        task_ids: Vec<Uuid>,
+        batch_size: Option<usize>,
+    ) -> AppResult<SearchQueueRecoverySummary> {
+        if !self.search.vector_enabled() {
+            return Err(AppError::Conflict(
+                "vector search is not enabled".to_string(),
+            ));
+        }
+
+        let batch_size = batch_size.unwrap_or(10).clamp(1, 200);
+        let run_id = Uuid::new_v4();
+        let queued = task_ids.len();
+
+        {
+            let _write_guard = self.write_queue.lock().await;
+            let mut tx = self.store.pool.begin().await?;
+            let now = OffsetDateTime::now_utc();
+            self.store
+                .create_search_index_run_tx(
+                    &mut tx,
+                    run_id,
+                    trigger_kind,
+                    queued,
+                    queued,
+                    0,
+                    batch_size,
+                    now,
+                )
+                .await?;
+            self.store
+                .requeue_search_index_jobs_tx(&mut tx, &task_ids, run_id, now)
+                .await?;
+            tx.commit().await?;
+        }
+
+        let processing_error = if queued == 0 {
+            None
+        } else {
+            self.search
+                .process_pending_jobs_with_batch(self.store.clone(), batch_size)
+                .await
+                .err()
+                .map(|error| error.to_string())
+        };
+        let pending_after = self.store.pending_search_index_job_count().await?;
+        let run_status = if processing_error.is_some() {
+            "failed"
+        } else {
+            "completed"
+        };
+        let run = self
+            .store
+            .finish_search_index_run(
+                run_id,
+                run_status,
+                OffsetDateTime::now_utc(),
+                processing_error.as_deref(),
+            )
+            .await?;
+
+        Ok(SearchQueueRecoverySummary {
+            run_id,
+            status: run.status,
+            trigger_kind: run.trigger_kind,
+            queued,
+            processed: run.processed,
+            succeeded: run.succeeded,
+            failed: run.failed,
+            pending_after,
+            processing_error,
+        })
+    }
+
+    async fn search_index_run_summary(
+        &self,
+        record: SearchIndexRunRecord,
+    ) -> AppResult<SearchIndexRunSummary> {
+        let queue = self
+            .store
+            .search_index_run_queue_stats(record.run_id)
+            .await?;
+        Ok(SearchIndexRunSummary {
+            run_id: record.run_id,
+            status: record.status,
+            trigger_kind: record.trigger_kind,
+            scanned: record.scanned,
+            queued: record.queued,
+            skipped: record.skipped,
+            processed: record.processed,
+            succeeded: record.succeeded,
+            failed: record.failed,
+            batch_size: record.batch_size,
+            pending_count: queue.pending_count,
+            processing_count: queue.processing_count,
+            retrying_count: queue.retrying_count,
+            remaining_count: queue.pending_count + queue.processing_count + queue.retrying_count,
+            started_at: record.started_at,
+            finished_at: record.finished_at,
+            last_error: record.last_error,
+            updated_at: record.updated_at,
         })
     }
 
@@ -5388,25 +5538,6 @@ fn compare_remote_mutations_for_apply(
     sync_entity_dependency_rank(left.entity_kind)
         .cmp(&sync_entity_dependency_rank(right.entity_kind))
         .then(left.remote_mutation_id.cmp(&right.remote_mutation_id))
-}
-
-fn search_index_run_summary(record: SearchIndexRunRecord) -> SearchIndexRunSummary {
-    SearchIndexRunSummary {
-        run_id: record.run_id,
-        status: record.status,
-        trigger_kind: record.trigger_kind,
-        scanned: record.scanned,
-        queued: record.queued,
-        skipped: record.skipped,
-        processed: record.processed,
-        succeeded: record.succeeded,
-        failed: record.failed,
-        batch_size: record.batch_size,
-        started_at: record.started_at,
-        finished_at: record.finished_at,
-        last_error: record.last_error,
-        updated_at: record.updated_at,
-    }
 }
 
 fn search_index_job_summary(record: SearchIndexJobRecord) -> SearchIndexJobSummary {

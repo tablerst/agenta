@@ -212,6 +212,15 @@ agenta search status
 
 状态输出会包含本地队列计数、最近一次回填摘要、最近错误，以及失败任务样本；embedding 与向量索引内容仍然只在本地生成和维护，不参与远端同步。
 
+恢复失败或过期的本地索引任务：
+
+```powershell
+agenta search retry-failed --limit 100 --batch-size 10
+agenta search recover-stale --limit 100 --batch-size 10
+```
+
+`retry-failed` 会把失败任务挂到新的本地 run 后立即重试；`recover-stale` 会回收 lease 已过期的 `processing` 任务，避免进程中断后任务长期停留在处理中。
+
 参数：
 
 - `--limit`: 本次最多排队多少个任务，默认 `1000`

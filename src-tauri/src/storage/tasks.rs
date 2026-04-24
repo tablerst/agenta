@@ -14,8 +14,9 @@ use crate::search::{
 
 use super::mapping::{format_time, map_activity, map_task, parse_time};
 use super::{
-    ActivityLexicalSearchRow, SearchIndexJobRecord, SearchIndexQueueStats, SearchIndexRunRecord,
-    SqliteStore, TaskLexicalSearchRow, TaskListFilter,
+    ActivityLexicalSearchRow, SearchIndexJobRecord, SearchIndexQueueStats,
+    SearchIndexRunQueueStats, SearchIndexRunRecord, SqliteStore, TaskLexicalSearchRow,
+    TaskListFilter,
 };
 
 const SEARCH_INDEX_JOB_LEASE_SECONDS: i64 = 300;
@@ -1500,6 +1501,7 @@ impl SqliteStore {
         &self,
         tx: &mut Transaction<'_, Sqlite>,
         run_id: Uuid,
+        trigger_kind: &str,
         scanned: usize,
         queued: usize,
         skipped: usize,
@@ -1513,10 +1515,11 @@ impl SqliteStore {
                 run_id, status, trigger_kind, scanned, queued, skipped,
                 processed, succeeded, failed, batch_size, started_at,
                 finished_at, last_error, updated_at
-            ) VALUES (?, 'running', 'manual_backfill', ?, ?, ?, 0, 0, 0, ?, ?, NULL, NULL, ?)
+            ) VALUES (?, 'running', ?, ?, ?, ?, 0, 0, 0, ?, ?, NULL, NULL, ?)
             "#,
         )
         .bind(run_id.to_string())
+        .bind(trigger_kind)
         .bind(scanned as i64)
         .bind(queued as i64)
         .bind(skipped as i64)
@@ -1525,6 +1528,104 @@ impl SqliteStore {
         .bind(&now)
         .execute(&mut **tx)
         .await?;
+        Ok(())
+    }
+
+    pub async fn list_failed_search_index_job_ids(
+        &self,
+        limit: Option<usize>,
+    ) -> AppResult<Vec<Uuid>> {
+        let limit = limit.unwrap_or(100).clamp(1, 10_000) as i64;
+        let rows = query(
+            r#"
+            SELECT task_id
+            FROM search_index_jobs
+            WHERE status = 'failed'
+            ORDER BY updated_at ASC, task_id ASC
+            LIMIT ?
+            "#,
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter()
+            .map(|row| {
+                crate::storage::mapping::parse_uuid(
+                    row.get::<String, _>("task_id"),
+                    "search_index_jobs.task_id",
+                )
+            })
+            .collect()
+    }
+
+    pub async fn list_stale_search_index_job_ids(
+        &self,
+        now: OffsetDateTime,
+        limit: Option<usize>,
+    ) -> AppResult<Vec<Uuid>> {
+        let limit = limit.unwrap_or(100).clamp(1, 10_000) as i64;
+        let now = format_time(now)?;
+        let rows = query(
+            r#"
+            SELECT task_id
+            FROM search_index_jobs
+            WHERE status = 'processing'
+              AND lease_until IS NOT NULL
+              AND lease_until <= ?
+            ORDER BY updated_at ASC, task_id ASC
+            LIMIT ?
+            "#,
+        )
+        .bind(now)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter()
+            .map(|row| {
+                crate::storage::mapping::parse_uuid(
+                    row.get::<String, _>("task_id"),
+                    "search_index_jobs.task_id",
+                )
+            })
+            .collect()
+    }
+
+    pub async fn requeue_search_index_jobs_tx(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        task_ids: &[Uuid],
+        run_id: Uuid,
+        now: OffsetDateTime,
+    ) -> AppResult<()> {
+        if task_ids.is_empty() {
+            return Ok(());
+        }
+
+        let now = format_time(now)?;
+        for task_id in task_ids {
+            query(
+                r#"
+                UPDATE search_index_jobs
+                SET status = 'pending',
+                    attempt_count = 0,
+                    last_error = NULL,
+                    next_attempt_at = NULL,
+                    run_id = ?,
+                    locked_at = NULL,
+                    lease_until = NULL,
+                    updated_at = ?
+                WHERE task_id = ?
+                "#,
+            )
+            .bind(run_id.to_string())
+            .bind(&now)
+            .bind(task_id.to_string())
+            .execute(&mut **tx)
+            .await?;
+        }
+
         Ok(())
     }
 
@@ -1606,6 +1707,31 @@ impl SqliteStore {
         .fetch_optional(&self.pool)
         .await?;
         row.map(map_search_index_run).transpose()
+    }
+
+    pub async fn search_index_run_queue_stats(
+        &self,
+        run_id: Uuid,
+    ) -> AppResult<SearchIndexRunQueueStats> {
+        let row = query(
+            r#"
+            SELECT
+                COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0) AS pending_count,
+                COALESCE(SUM(CASE WHEN status = 'processing' THEN 1 ELSE 0 END), 0) AS processing_count,
+                COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS retrying_count
+            FROM search_index_jobs
+            WHERE run_id = ?
+            "#,
+        )
+        .bind(run_id.to_string())
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(SearchIndexRunQueueStats {
+            pending_count: row.get::<i64, _>("pending_count").max(0) as usize,
+            processing_count: row.get::<i64, _>("processing_count").max(0) as usize,
+            retrying_count: row.get::<i64, _>("retrying_count").max(0) as usize,
+        })
     }
 
     pub async fn search_index_queue_stats(&self) -> AppResult<SearchIndexQueueStats> {
