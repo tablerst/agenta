@@ -127,6 +127,7 @@ Agenta 的 canonical 能力面只有两条：
 - 单远端全局 PostgreSQL 副本配置
 - `sync metadata / outbox / checkpoint / tombstone` 本地同步基元
 - 手动 `status / outbox / backfill / push / pull` 闭环
+- 同步实体必须声明依赖顺序并在 outbox / pull apply 中保持一致，当前顺序为 `project -> version -> task -> task_relation -> note -> attachment`
 - 与项目、版本、任务、备注、附件、审批 replay 共用统一事务边界
 
 以下内容仍不进入当前默认交付：

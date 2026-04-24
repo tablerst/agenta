@@ -39,7 +39,18 @@ impl SqliteStore {
             FROM sync_outbox
             WHERE remote_id = ?
               AND status IN (?, ?)
-            ORDER BY created_at ASC, mutation_id ASC
+            ORDER BY
+                CASE entity_kind
+                    WHEN 'project' THEN 0
+                    WHEN 'version' THEN 1
+                    WHEN 'task' THEN 2
+                    WHEN 'task_relation' THEN 3
+                    WHEN 'note' THEN 4
+                    WHEN 'attachment' THEN 5
+                    ELSE 99
+                END ASC,
+                created_at ASC,
+                mutation_id ASC
             LIMIT ?
             "#,
         )
@@ -398,6 +409,9 @@ impl SqliteStore {
         .unwrap_or(0);
         let local_version = current_version + 1;
         let mutation_id = Uuid::new_v4();
+        let entity_updated_at = format_time(updated_at)?;
+        let enqueued_at = OffsetDateTime::now_utc();
+        let enqueued_at_text = format_time(enqueued_at)?;
 
         query(
             r#"
@@ -428,7 +442,7 @@ impl SqliteStore {
         .bind(1_i64)
         .bind(Option::<String>::None)
         .bind(Some(mutation_id.to_string()))
-        .bind(format_time(updated_at)?)
+        .bind(entity_updated_at)
         .execute(&mut **tx)
         .await?;
 
@@ -465,7 +479,7 @@ impl SqliteStore {
         .bind(Option::<String>::None)
         .bind(Option::<String>::None)
         .bind(Option::<String>::None)
-        .bind(format_time(updated_at)?)
+        .bind(enqueued_at_text)
         .execute(&mut **tx)
         .await?;
 
@@ -482,7 +496,7 @@ impl SqliteStore {
             last_attempt_at: None,
             acked_at: None,
             last_error: None,
-            created_at: updated_at,
+            created_at: enqueued_at,
         })
     }
 }

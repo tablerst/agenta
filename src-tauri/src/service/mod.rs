@@ -977,9 +977,14 @@ impl AgentaService {
             .await?
             .and_then(|checkpoint| checkpoint.checkpoint_value.parse::<i64>().ok());
         let limit = limit.unwrap_or(50).clamp(1, 200);
-        let mutations = remote
+        let mut mutations = remote
             .pull_mutations(&remote_config.id, after_remote_mutation_id, limit)
             .await?;
+        let checkpoint = mutations
+            .iter()
+            .max_by_key(|mutation| mutation.remote_mutation_id)
+            .map(|mutation| (mutation.remote_mutation_id, mutation.created_at));
+        mutations.sort_by(compare_remote_mutations_for_apply);
         let mut summary = SyncPullSummary {
             fetched: mutations.len(),
             applied: 0,
@@ -987,28 +992,28 @@ impl AgentaService {
             last_remote_mutation_id: None,
         };
 
-        for mutation in mutations {
-            let applied = {
-                let _write_guard = self.write_queue.lock().await;
-                let applied = self
-                    .apply_remote_mutation(&remote_config.id, &mutation)
-                    .await?;
-                self.store
-                    .upsert_sync_checkpoint(
-                        &remote_config.id,
-                        SyncCheckpointKind::Pull,
-                        &mutation.remote_mutation_id.to_string(),
-                        mutation.created_at,
-                    )
-                    .await?;
-                applied
-            };
+        let _write_guard = self.write_queue.lock().await;
+        for mutation in &mutations {
+            let applied = self
+                .apply_remote_mutation(&remote_config.id, mutation)
+                .await?;
             if applied {
                 summary.applied += 1;
             } else {
                 summary.skipped += 1;
             }
             summary.last_remote_mutation_id = Some(mutation.remote_mutation_id);
+        }
+        if let Some((remote_mutation_id, created_at)) = checkpoint {
+            self.store
+                .upsert_sync_checkpoint(
+                    &remote_config.id,
+                    SyncCheckpointKind::Pull,
+                    &remote_mutation_id.to_string(),
+                    created_at,
+                )
+                .await?;
+            summary.last_remote_mutation_id = Some(remote_mutation_id);
         }
 
         remote.close().await;
@@ -5236,6 +5241,26 @@ fn matches_project_filter(
         || project_id.is_some_and(|project_id| request.project_ref.as_deref() == Some(project_id))
 }
 
+fn sync_entity_dependency_rank(entity_kind: SyncEntityKind) -> u8 {
+    match entity_kind {
+        SyncEntityKind::Project => 0,
+        SyncEntityKind::Version => 1,
+        SyncEntityKind::Task => 2,
+        SyncEntityKind::TaskRelation => 3,
+        SyncEntityKind::Note => 4,
+        SyncEntityKind::Attachment => 5,
+    }
+}
+
+fn compare_remote_mutations_for_apply(
+    left: &RemoteMutation,
+    right: &RemoteMutation,
+) -> std::cmp::Ordering {
+    sync_entity_dependency_rank(left.entity_kind)
+        .cmp(&sync_entity_dependency_rank(right.entity_kind))
+        .then(left.remote_mutation_id.cmp(&right.remote_mutation_id))
+}
+
 fn parse_uuid(value: &str, field: &str) -> AppResult<Uuid> {
     Uuid::parse_str(value)
         .map_err(|error| AppError::InvalidArguments(format!("invalid {field}: {error}")))
@@ -5258,4 +5283,60 @@ fn error_value(app_error: &AppError) -> Value {
         "message": app_error.message(),
         "details": app_error.details(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::compare_remote_mutations_for_apply;
+    use crate::domain::{SyncEntityKind, SyncOperation};
+    use crate::sync::RemoteMutation;
+    use serde_json::json;
+    use time::OffsetDateTime;
+    use uuid::Uuid;
+
+    #[test]
+    fn remote_mutation_apply_order_prioritizes_dependencies() {
+        let now = OffsetDateTime::now_utc();
+        let mut mutations = vec![
+            RemoteMutation {
+                remote_mutation_id: 9,
+                entity_kind: SyncEntityKind::TaskRelation,
+                remote_entity_id: "relation".to_string(),
+                local_id: Uuid::new_v4(),
+                operation: SyncOperation::Create,
+                local_version: 1,
+                payload_json: json!({}),
+                created_at: now,
+                attachment_blob: None,
+            },
+            RemoteMutation {
+                remote_mutation_id: 10,
+                entity_kind: SyncEntityKind::Task,
+                remote_entity_id: "task".to_string(),
+                local_id: Uuid::new_v4(),
+                operation: SyncOperation::Create,
+                local_version: 1,
+                payload_json: json!({}),
+                created_at: now,
+                attachment_blob: None,
+            },
+            RemoteMutation {
+                remote_mutation_id: 8,
+                entity_kind: SyncEntityKind::Project,
+                remote_entity_id: "project".to_string(),
+                local_id: Uuid::new_v4(),
+                operation: SyncOperation::Create,
+                local_version: 1,
+                payload_json: json!({}),
+                created_at: now,
+                attachment_blob: None,
+            },
+        ];
+
+        mutations.sort_by(compare_remote_mutations_for_apply);
+
+        assert_eq!(mutations[0].entity_kind, SyncEntityKind::Project);
+        assert_eq!(mutations[1].entity_kind, SyncEntityKind::Task);
+        assert_eq!(mutations[2].entity_kind, SyncEntityKind::TaskRelation);
+    }
 }

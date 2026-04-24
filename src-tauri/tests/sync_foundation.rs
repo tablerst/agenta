@@ -6,8 +6,8 @@ use agenta_lib::{
     domain::{SyncCheckpointKind, SyncEntityKind, TaskStatus},
     error::AppError,
     service::{
-        CreateAttachmentInput, CreateNoteInput, CreateProjectInput, CreateTaskInput,
-        CreateVersionInput, RequestOrigin, ReviewApprovalInput, UpdateTaskInput,
+        CreateAttachmentInput, CreateChildTaskInput, CreateNoteInput, CreateProjectInput,
+        CreateTaskInput, CreateVersionInput, RequestOrigin, ReviewApprovalInput, UpdateTaskInput,
     },
     storage::SqliteStore,
 };
@@ -598,6 +598,113 @@ async fn sync_backfill_enqueues_existing_local_data_idempotently(
     assert_eq!(cli_backfill["ok"], true);
     assert_eq!(cli_backfill["action"], "sync.backfill");
     assert_eq!(cli_backfill["result"]["queued"], 0);
+
+    std::env::remove_var(POSTGRES_DSN_ENV);
+    std::env::remove_var(POSTGRES_MAX_CONNS_ENV);
+    std::env::remove_var(POSTGRES_MIN_CONNS_ENV);
+    std::env::remove_var(POSTGRES_MAX_CONN_LIFETIME_ENV);
+    Ok(())
+}
+
+#[tokio::test]
+async fn sync_backfill_orders_task_relations_after_task_dependencies(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let _guard = environment_lock().lock().expect("lock environment");
+    std::env::set_var(
+        POSTGRES_DSN_ENV,
+        "postgres://sync:secret@example.invalid:5432/agenta?sslmode=disable",
+    );
+    std::env::set_var(POSTGRES_MAX_CONNS_ENV, "30");
+    std::env::set_var(POSTGRES_MIN_CONNS_ENV, "5");
+    std::env::set_var(POSTGRES_MAX_CONN_LIFETIME_ENV, "1h");
+
+    let tempdir = TempDir::new()?;
+    let disabled_config = write_test_config(&tempdir, "primary", false, None)?;
+    let disabled_runtime = AppRuntime::bootstrap(BootstrapOptions {
+        config_path: Some(disabled_config),
+    })
+    .await?;
+
+    let project = disabled_runtime
+        .service
+        .create_project(CreateProjectInput {
+            slug: "relation-backfill".to_string(),
+            name: "Relation Backfill".to_string(),
+            description: Some("Created before sync enabled".to_string()),
+        })
+        .await?;
+    let parent = disabled_runtime
+        .service
+        .create_task(CreateTaskInput {
+            project: project.slug.clone(),
+            version: None,
+            task_code: None,
+            task_kind: None,
+            title: "Parent".to_string(),
+            summary: Some("Parent task".to_string()),
+            description: None,
+            status: None,
+            priority: None,
+            created_by: Some("backfill".to_string()),
+        })
+        .await?;
+    let child = disabled_runtime
+        .service
+        .create_child_task(CreateChildTaskInput {
+            parent: parent.task_id.to_string(),
+            version: None,
+            task_code: None,
+            task_kind: None,
+            title: "Child".to_string(),
+            summary: Some("Child task".to_string()),
+            description: None,
+            status: None,
+            priority: None,
+            created_by: Some("backfill".to_string()),
+        })
+        .await?;
+    disabled_runtime
+        .service
+        .update_task(
+            &child.task_id.to_string(),
+            UpdateTaskInput {
+                summary: Some("Child task updated after relation creation".to_string()),
+                updated_by: Some("backfill".to_string()),
+                ..UpdateTaskInput::default()
+            },
+        )
+        .await?;
+    drop(disabled_runtime);
+
+    let enabled_config = write_test_config(&tempdir, "primary", true, None)?;
+    let runtime = AppRuntime::bootstrap(BootstrapOptions {
+        config_path: Some(enabled_config),
+    })
+    .await?;
+
+    let summary = runtime.service.sync_backfill(Some(20)).await?;
+    assert_eq!(summary.queued, 4);
+
+    let store = SqliteStore::open(
+        &runtime.config.paths.data_dir,
+        &runtime.config.paths.database_path,
+        &runtime.config.paths.attachments_dir,
+    )
+    .await?;
+    let outbox = store
+        .list_sync_outbox_for_delivery("primary", Some(20))
+        .await?;
+
+    let relation_index = outbox
+        .iter()
+        .position(|entry| entry.entity_kind == SyncEntityKind::TaskRelation)
+        .expect("task relation should be enqueued");
+    let task_count_before_relation = outbox[..relation_index]
+        .iter()
+        .filter(|entry| entry.entity_kind == SyncEntityKind::Task)
+        .count();
+
+    assert_eq!(task_count_before_relation, 2);
 
     std::env::remove_var(POSTGRES_DSN_ENV);
     std::env::remove_var(POSTGRES_MAX_CONNS_ENV);

@@ -79,6 +79,7 @@ Current sync defaults stay intentionally conservative:
 
 - Only one global remote is modeled
 - Sync uses manual `status / outbox / backfill / push / pull`; background auto-sync is still disabled
+- Sync delivery/apply follows dependency order: `project -> version -> task -> task_relation -> note -> attachment`; any new synced entity must define its FK/apply ordering together with schema changes
 - Status output redacts PostgreSQL credentials, and Runtime exposes the same manual sync actions inside Desktop
 
 ## Project Context Scoping

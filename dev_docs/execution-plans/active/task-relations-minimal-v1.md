@@ -32,6 +32,7 @@
 | [x] | 实现本地 relation store 与任务派生统计 | 覆盖 parent、children、blocker、blocking 查询 |
 | [x] | 实现 service helper 与最小自动化 | 包含 system activity、状态回填、摘要刷新 |
 | [x] | 将 `task_relation` 纳入同步实体 | 覆盖 backfill、push/pull payload apply |
+| [x] | 修正 `task_relation` 同步依赖顺序 | 明确 `project -> version -> task -> task_relation -> note -> attachment`，避免本地 FK apply 失败 |
 | [x] | 扩展 MCP 工具面 | 保持显式工具名与单一意图 |
 | [x] | 扩展 CLI 命令面 | 与 MCP helper 对齐 |
 | [x] | 扩展 Desktop command 与前端 store | 详情读取使用单个 context payload |
