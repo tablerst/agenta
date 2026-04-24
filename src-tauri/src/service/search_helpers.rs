@@ -260,3 +260,21 @@ pub(super) fn search_sidecar_status_label(status: SearchSidecarStatus) -> &'stat
         SearchSidecarStatus::External => "external",
     }
 }
+
+pub(super) fn search_index_operation_kind(trigger_kind: &str) -> &'static str {
+    match trigger_kind {
+        "manual_backfill" => "manual_rebuild",
+        "retry_failed" => "retry_failed",
+        "recover_stale" => "recover_stale",
+        _ => "incremental_upsert",
+    }
+}
+
+pub(super) fn search_index_operation_description(trigger_kind: &str) -> &'static str {
+    match search_index_operation_kind(trigger_kind) {
+        "manual_rebuild" => "Scans local tasks and re-upserts their Chroma vectors.",
+        "retry_failed" => "Requeues failed vector-index jobs and processes them again.",
+        "recover_stale" => "Reclaims expired processing jobs and resumes indexing.",
+        _ => "Indexes tasks changed by local or remote mutations.",
+    }
+}

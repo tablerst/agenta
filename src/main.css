@@ -1475,6 +1475,48 @@ html[data-theme="dark"] {
     padding-top: 4px;
   }
 
+  .runtime-search-status-block,
+  .runtime-search-maintenance-block {
+    gap: 20px;
+  }
+
+  .runtime-search-queue-strip {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .runtime-search-operation-note {
+    margin: 0;
+    max-width: 68ch;
+    font-size: 13px;
+    line-height: 1.7;
+    color: var(--text-muted);
+  }
+
+  .runtime-search-advanced {
+    padding-top: 14px;
+    border-top: 1px solid var(--border-color);
+  }
+
+  .runtime-search-advanced summary {
+    cursor: pointer;
+    width: fit-content;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-muted);
+  }
+
+  .runtime-search-advanced-grid {
+    margin-top: 14px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .runtime-search-recovery-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding-bottom: 6px;
+  }
+
   .runtime-field-wide {
     grid-column: 1 / -1;
   }

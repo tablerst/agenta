@@ -358,6 +358,8 @@ function runPreviewSearchBackfill(options: { limit?: number; batchSize?: number 
   return {
     run_id: `preview-search-run-${Date.now()}`,
     status: "completed",
+    operation_kind: "manual_rebuild",
+    operation_description: "Scans local tasks and re-upserts their Chroma vectors.",
     scanned,
     queued,
     skipped: Math.max(0, scanned - queued),
@@ -389,10 +391,16 @@ function runPreviewSearchIndexStatus(): SearchIndexStatusSummary {
 }
 
 function runPreviewSearchRecovery(triggerKind: string): SearchQueueRecoverySummary {
+  const operationKind = triggerKind === "recover_stale" ? "recover_stale" : "retry_failed";
   return {
     run_id: `preview-search-recovery-${Date.now()}`,
     status: "completed",
     trigger_kind: triggerKind,
+    operation_kind: operationKind,
+    operation_description:
+      operationKind === "recover_stale"
+        ? "Reclaims expired processing jobs and resumes indexing."
+        : "Requeues failed vector-index jobs and processes them again.",
     queued: 0,
     processed: 0,
     succeeded: 0,

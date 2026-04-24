@@ -27,6 +27,13 @@ import type {
 } from "./types";
 import { useShellStore } from "../stores/shell";
 
+type SearchIndexSurfaceState =
+  | "disabled"
+  | "ready"
+  | "running"
+  | "degraded"
+  | "attention_required";
+
 function createRuntimeConsoleModel() {
   const SEARCH_INDEX_POLL_MS = 3000;
   const shell = useShellStore();
@@ -114,22 +121,38 @@ function createRuntimeConsoleModel() {
     () => syncStatus.value?.remote?.postgres?.database ?? t("common.na"),
   );
   const searchIndexLastUpdatedLabel = computed(() => formatDateTime(searchIndexLastUpdated.value));
+  const searchIndexSurfaceState = computed<SearchIndexSurfaceState>(() => {
+    const status = searchIndexStatus.value;
+    if (!status?.enabled) {
+      return "disabled";
+    }
+    if ((status.failed_count ?? 0) > 0 || (status.stale_processing_count ?? 0) > 0) {
+      return "attention_required";
+    }
+    if ((status.pending_count ?? 0) > 0 || (status.processing_count ?? 0) > 0) {
+      return "running";
+    }
+    if (!status.vector_available) {
+      return "degraded";
+    }
+    return "ready";
+  });
   const searchIndexHealthClass = computed(() => {
-    if (!searchIndexStatus.value?.enabled) {
-      return "status-pill";
+    switch (searchIndexSurfaceState.value) {
+      case "ready":
+        return "status-pill status-pill-success";
+      case "running":
+      case "degraded":
+        return "status-pill status-pill-warning";
+      case "attention_required":
+        return "status-pill status-pill-danger";
+      default:
+        return "status-pill";
     }
-    if ((searchIndexStatus.value.failed_count ?? 0) > 0) {
-      return "status-pill status-pill-danger";
-    }
-    if (
-      (searchIndexStatus.value.processing_count ?? 0) > 0 ||
-      (searchIndexStatus.value.pending_count ?? 0) > 0
-    ) {
-      return "status-pill status-pill-warning";
-    }
-    return searchIndexStatus.value.vector_available
-      ? "status-pill status-pill-success"
-      : "status-pill status-pill-warning";
+  });
+  const searchIndexStatusSummary = computed(() => {
+    void locale.value;
+    return t(`runtime.searchIndex.surfaceStates.${searchIndexSurfaceState.value}.summary`);
   });
 
   let searchIndexPollTimer: number | null = null;
@@ -697,6 +720,8 @@ function createRuntimeConsoleModel() {
     searchIndexAutoRefreshActive,
     searchIndexHealthClass,
     searchIndexLastUpdatedLabel,
+    searchIndexStatusSummary,
+    searchIndexSurfaceState,
     searchIndexStatus,
     setSearchIndexLiveRefresh,
     startMcp,

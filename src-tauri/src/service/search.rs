@@ -54,6 +54,8 @@ impl AgentaService {
             SearchBackfillSummary {
                 run_id,
                 status: "running".to_string(),
+                operation_kind: search_index_operation_kind("manual_backfill").to_string(),
+                operation_description: search_index_operation_description("manual_backfill").to_string(),
                 scanned: task_ids.len(),
                 queued,
                 skipped: task_ids.len().saturating_sub(queued),
@@ -224,6 +226,8 @@ impl AgentaService {
         Ok(SearchQueueRecoverySummary {
             run_id,
             status: run.status,
+            operation_kind: search_index_operation_kind(&run.trigger_kind).to_string(),
+            operation_description: search_index_operation_description(&run.trigger_kind).to_string(),
             trigger_kind: run.trigger_kind,
             queued,
             processed: run.processed,
@@ -245,6 +249,8 @@ impl AgentaService {
         Ok(SearchIndexRunSummary {
             run_id: record.run_id,
             status: record.status,
+            operation_kind: search_index_operation_kind(&record.trigger_kind).to_string(),
+            operation_description: search_index_operation_description(&record.trigger_kind).to_string(),
             trigger_kind: record.trigger_kind,
             scanned: record.scanned,
             queued: record.queued,

@@ -372,6 +372,8 @@ export interface SyncPullSummary {
 export interface SearchBackfillSummary {
   run_id: string;
   status: string;
+  operation_kind: string;
+  operation_description: string;
   scanned: number;
   queued: number;
   skipped: number;
@@ -386,6 +388,8 @@ export interface SearchIndexRunSummary {
   run_id: string;
   status: string;
   trigger_kind: string;
+  operation_kind: string;
+  operation_description: string;
   scanned: number;
   queued: number;
   skipped: number;
@@ -437,6 +441,8 @@ export interface SearchQueueRecoverySummary {
   run_id: string;
   status: string;
   trigger_kind: string;
+  operation_kind: string;
+  operation_description: string;
   queued: number;
   processed: number;
   succeeded: number;

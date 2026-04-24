@@ -370,111 +370,26 @@ onUnmounted(() => {
           role="tabpanel"
         >
           <div class="runtime-main-column">
-            <section class="runtime-block runtime-block-nested">
+            <section class="runtime-block runtime-block-nested runtime-search-status-block">
               <div class="runtime-block-header">
                 <div>
-                  <p class="section-label">{{ t("runtime.searchIndex.label") }}</p>
-                  <h3 class="runtime-subblock-title">{{ t("runtime.searchIndex.title") }}</h3>
-                  <p class="runtime-block-summary">{{ t("runtime.searchIndex.summary") }}</p>
+                  <p class="section-label">{{ t("runtime.searchIndex.statusLabel") }}</p>
+                  <h3 class="runtime-subblock-title">{{ t("runtime.searchIndex.statusTitle") }}</h3>
+                  <p class="runtime-block-summary">{{ runtimeConsole.searchIndexStatusSummary.value }}</p>
                 </div>
                 <span :class="runtimeConsole.searchIndexHealthClass.value">
-                  {{
-                    runtimeConsole.formatSearchIndexStatus(
-                      runtimeConsole.searchIndexStatus.value?.latest_run?.status ??
-                        (runtimeConsole.searchIndexStatus.value?.enabled ? "ready" : "disabled"),
-                    )
-                  }}
+                  {{ t(`runtime.searchIndex.surfaceStates.${runtimeConsole.searchIndexSurfaceState.value}.label`) }}
                 </span>
-                <div class="flex flex-wrap items-center gap-2">
-                  <button
-                    class="secondary-action spotlight-surface"
-                    :aria-busy="
-                      runtimeConsole.isSyncActionPending('searchRetryFailed') ? 'true' : undefined
-                    "
-                    :data-pending="
-                      runtimeConsole.isSyncActionPending('searchRetryFailed') ? 'true' : undefined
-                    "
-                    :disabled="
-                      runtimeConsole.syncBusy.value ||
-                      !(runtimeConsole.searchIndexStatus.value?.failed_count ?? 0)
-                    "
-                    @click="runtimeConsole.runSearchRetryFailed"
-                  >
-                    <RotateCcw :size="14" />
-                    {{ t("runtime.actions.searchRetryFailed") }}
-                  </button>
-                  <button
-                    class="secondary-action spotlight-surface"
-                    :aria-busy="
-                      runtimeConsole.isSyncActionPending('searchRecoverStale') ? 'true' : undefined
-                    "
-                    :data-pending="
-                      runtimeConsole.isSyncActionPending('searchRecoverStale') ? 'true' : undefined
-                    "
-                    :disabled="
-                      runtimeConsole.syncBusy.value ||
-                      !(runtimeConsole.searchIndexStatus.value?.stale_processing_count ?? 0)
-                    "
-                    @click="runtimeConsole.runSearchRecoverStale"
-                  >
-                    <Play :size="14" />
-                    {{ t("runtime.actions.searchRecoverStale") }}
-                  </button>
-                  <button
-                    class="secondary-action spotlight-surface"
-                    :aria-busy="
-                      runtimeConsole.isSyncActionPending('searchBackfill') ? 'true' : undefined
-                    "
-                    :data-pending="
-                      runtimeConsole.isSyncActionPending('searchBackfill') ? 'true' : undefined
-                    "
-                    :disabled="runtimeConsole.syncBusy.value"
-                    @click="runtimeConsole.runSearchBackfill"
-                  >
-                    <Search :size="14" />
-                    {{ t("runtime.actions.searchBackfill") }}
-                  </button>
-                </div>
               </div>
 
-              <dl class="runtime-search-index-strip">
-                <div class="runtime-search-index-item runtime-search-index-item-control">
-                  <dt>{{ t("runtime.searchIndex.batchSize") }}</dt>
-                  <dd>
-                    <input
-                      v-model.number="runtimeConsole.searchBackfillForm.batchSize"
-                      class="quiet-control-input runtime-search-index-input"
-                      inputmode="numeric"
-                      min="1"
-                      max="200"
-                      type="number"
-                      @blur="runtimeConsole.normalizeSearchBackfillForm"
-                    />
-                  </dd>
-                </div>
-                <div class="runtime-search-index-item runtime-search-index-item-control">
-                  <dt>{{ t("runtime.searchIndex.limit") }}</dt>
-                  <dd>
-                    <input
-                      v-model.number="runtimeConsole.searchBackfillForm.limit"
-                      class="quiet-control-input runtime-search-index-input"
-                      inputmode="numeric"
-                      min="1"
-                      max="100000"
-                      type="number"
-                      @blur="runtimeConsole.normalizeSearchBackfillForm"
-                    />
-                  </dd>
-                </div>
+              <dl class="runtime-search-index-strip runtime-search-queue-strip">
                 <div class="runtime-search-index-item">
                   <dt>{{ t("runtime.searchIndex.pending") }}</dt>
                   <dd>{{ runtimeConsole.searchIndexStatus.value?.pending_count ?? t("common.na") }}</dd>
                 </div>
                 <div class="runtime-search-index-item">
                   <dt>{{ t("runtime.searchIndex.processing") }}</dt>
-                  <dd>
-                    {{ runtimeConsole.searchIndexStatus.value?.processing_count ?? t("common.na") }}
-                  </dd>
+                  <dd>{{ runtimeConsole.searchIndexStatus.value?.processing_count ?? t("common.na") }}</dd>
                 </div>
                 <div class="runtime-search-index-item">
                   <dt>{{ t("runtime.searchIndex.failed") }}</dt>
@@ -486,7 +401,10 @@ onUnmounted(() => {
                     {{ runtimeConsole.searchIndexStatus.value?.stale_processing_count ?? t("common.na") }}
                   </dd>
                 </div>
-                <div class="runtime-search-index-item">
+              </dl>
+
+              <dl class="runtime-definition-list runtime-search-context-grid">
+                <div>
                   <dt>{{ t("runtime.searchIndex.sidecar") }}</dt>
                   <dd>
                     {{
@@ -498,7 +416,73 @@ onUnmounted(() => {
                     }}
                   </dd>
                 </div>
+                <div>
+                  <dt>{{ t("runtime.searchIndex.lastUpdated") }}</dt>
+                  <dd>{{ runtimeConsole.searchIndexLastUpdatedLabel.value }}</dd>
+                </div>
               </dl>
+            </section>
+
+            <section class="runtime-block runtime-block-nested runtime-search-maintenance-block">
+              <div class="runtime-block-header">
+                <div>
+                  <p class="section-label">{{ t("runtime.searchIndex.maintenanceLabel") }}</p>
+                  <h3 class="runtime-subblock-title">{{ t("runtime.searchIndex.rebuildTitle") }}</h3>
+                  <p class="runtime-block-summary">{{ t("runtime.searchIndex.rebuildSummary") }}</p>
+                </div>
+                <button
+                  class="primary-action spotlight-surface"
+                  :aria-busy="
+                    runtimeConsole.isSyncActionPending('searchBackfill') ? 'true' : undefined
+                  "
+                  :data-pending="
+                    runtimeConsole.isSyncActionPending('searchBackfill') ? 'true' : undefined
+                  "
+                  :disabled="runtimeConsole.syncBusy.value"
+                  @click="runtimeConsole.runSearchBackfill"
+                >
+                  <Search :size="14" />
+                  {{ t("runtime.actions.searchBackfill") }}
+                </button>
+              </div>
+
+              <p class="runtime-search-operation-note">
+                {{ t("runtime.searchIndex.rebuildWarning") }}
+              </p>
+
+              <details class="runtime-search-advanced">
+                <summary>{{ t("runtime.searchIndex.advancedParameters") }}</summary>
+                <dl class="runtime-search-index-strip runtime-search-advanced-grid">
+                  <div class="runtime-search-index-item runtime-search-index-item-control">
+                    <dt>{{ t("runtime.searchIndex.batchSize") }}</dt>
+                    <dd>
+                      <input
+                        v-model.number="runtimeConsole.searchBackfillForm.batchSize"
+                        class="quiet-control-input runtime-search-index-input"
+                        inputmode="numeric"
+                        min="1"
+                        max="200"
+                        type="number"
+                        @blur="runtimeConsole.normalizeSearchBackfillForm"
+                      />
+                    </dd>
+                  </div>
+                  <div class="runtime-search-index-item runtime-search-index-item-control">
+                    <dt>{{ t("runtime.searchIndex.limit") }}</dt>
+                    <dd>
+                      <input
+                        v-model.number="runtimeConsole.searchBackfillForm.limit"
+                        class="quiet-control-input runtime-search-index-input"
+                        inputmode="numeric"
+                        min="1"
+                        max="100000"
+                        type="number"
+                        @blur="runtimeConsole.normalizeSearchBackfillForm"
+                      />
+                    </dd>
+                  </div>
+                </dl>
+              </details>
             </section>
 
             <section class="runtime-block runtime-block-nested">
@@ -509,7 +493,6 @@ onUnmounted(() => {
                   <p class="runtime-block-summary">{{ t("runtime.searchIndex.coverageSummary") }}</p>
                 </div>
               </div>
-
               <dl class="runtime-definition-list runtime-search-context-grid">
                 <div>
                   <dt>{{ t("runtime.searchIndex.coverage.sources") }}</dt>
@@ -552,23 +535,45 @@ onUnmounted(() => {
             </div>
 
             <div v-else class="runtime-search-result-panel">
+              <p class="runtime-search-operation-note">
+                {{
+                  runtimeConsole.searchIndexStatus.value?.latest_run?.operation_description ??
+                  runtimeConsole.searchBackfillResult.value?.operation_description ??
+                  t("runtime.searchIndex.defaultOperationDescription")
+                }}
+              </p>
+
               <dl class="runtime-definition-list runtime-search-context-grid">
+                <div>
+                  <dt>{{ t("runtime.searchIndex.operation") }}</dt>
+                  <dd>
+                    {{
+                      t(
+                        `runtime.searchIndex.operations.${
+                          runtimeConsole.searchIndexStatus.value?.latest_run?.operation_kind ??
+                          runtimeConsole.searchBackfillResult.value?.operation_kind ??
+                          'manual_rebuild'
+                        }`,
+                      )
+                    }}
+                  </dd>
+                </div>
+                <div>
+                  <dt>{{ t("runtime.searchIndex.included") }}</dt>
+                  <dd>
+                    {{
+                      runtimeConsole.searchIndexStatus.value?.latest_run?.queued ??
+                      runtimeConsole.searchBackfillResult.value?.queued ??
+                      t("common.na")
+                    }}
+                  </dd>
+                </div>
                 <div>
                   <dt>{{ t("runtime.searchIndex.scanned") }}</dt>
                   <dd>
                     {{
                       runtimeConsole.searchIndexStatus.value?.latest_run?.scanned ??
                       runtimeConsole.searchBackfillResult.value?.scanned ??
-                      t("common.na")
-                    }}
-                  </dd>
-                </div>
-                <div>
-                  <dt>{{ t("runtime.searchIndex.lastQueued") }}</dt>
-                  <dd>
-                    {{
-                      runtimeConsole.searchIndexStatus.value?.latest_run?.queued ??
-                      runtimeConsole.searchBackfillResult.value?.queued ??
                       t("common.na")
                     }}
                   </dd>
@@ -589,6 +594,16 @@ onUnmounted(() => {
                     {{
                       runtimeConsole.searchIndexStatus.value?.latest_run?.failed ??
                       runtimeConsole.searchBackfillResult.value?.failed ??
+                      t("common.na")
+                    }}
+                  </dd>
+                </div>
+                <div>
+                  <dt>{{ t("runtime.searchIndex.remaining") }}</dt>
+                  <dd>
+                    {{
+                      runtimeConsole.searchIndexStatus.value?.latest_run?.remaining_count ??
+                      runtimeConsole.searchBackfillResult.value?.pending_after ??
                       t("common.na")
                     }}
                   </dd>
@@ -614,6 +629,10 @@ onUnmounted(() => {
                       runtimeConsole.searchIndexStatus.value?.latest_run?.scanned ??
                       runtimeConsole.searchBackfillResult.value?.scanned ??
                       0,
+                    included:
+                      runtimeConsole.searchIndexStatus.value?.latest_run?.queued ??
+                      runtimeConsole.searchBackfillResult.value?.queued ??
+                      0,
                     skipped:
                       runtimeConsole.searchIndexStatus.value?.latest_run?.skipped ??
                       runtimeConsole.searchBackfillResult.value?.skipped ??
@@ -626,6 +645,36 @@ onUnmounted(() => {
                 v-if="runtimeConsole.searchIndexStatus.value?.failed_jobs.length"
                 class="runtime-sync-outbox-list"
               >
+                <div class="runtime-search-recovery-actions">
+                  <button
+                    class="secondary-action spotlight-surface"
+                    :aria-busy="
+                      runtimeConsole.isSyncActionPending('searchRetryFailed') ? 'true' : undefined
+                    "
+                    :data-pending="
+                      runtimeConsole.isSyncActionPending('searchRetryFailed') ? 'true' : undefined
+                    "
+                    :disabled="runtimeConsole.syncBusy.value"
+                    @click="runtimeConsole.runSearchRetryFailed"
+                  >
+                    <RotateCcw :size="14" />
+                    {{ t("runtime.actions.searchRetryFailed") }}
+                  </button>
+                  <button
+                    class="secondary-action spotlight-surface"
+                    :aria-busy="
+                      runtimeConsole.isSyncActionPending('searchRecoverStale') ? 'true' : undefined
+                    "
+                    :data-pending="
+                      runtimeConsole.isSyncActionPending('searchRecoverStale') ? 'true' : undefined
+                    "
+                    :disabled="runtimeConsole.syncBusy.value"
+                    @click="runtimeConsole.runSearchRecoverStale"
+                  >
+                    <Play :size="14" />
+                    {{ t("runtime.actions.searchRecoverStale") }}
+                  </button>
+                </div>
                 <article
                   v-for="job in runtimeConsole.searchIndexStatus.value?.failed_jobs ?? []"
                   :key="job.task_id"
