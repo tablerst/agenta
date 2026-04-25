@@ -1006,7 +1006,6 @@ html[data-theme="dark"] {
   }
 
   .control-input,
-  .control-select,
   .control-textarea,
   .search-mock-input {
     @apply w-full rounded-[6px] border border-[var(--border-color)] px-3 py-1.5 text-[13px] text-[var(--text-main)] outline-none transition;
@@ -1017,7 +1016,6 @@ html[data-theme="dark"] {
   }
 
   html[data-theme="dark"] .control-input,
-  html[data-theme="dark"] .control-select,
   html[data-theme="dark"] .control-textarea,
   html[data-theme="dark"] .search-mock-input {
     background: var(--accent-soft);
@@ -1042,7 +1040,6 @@ html[data-theme="dark"] {
   }
 
   .control-input:focus,
-  .control-select:focus,
   .control-textarea:focus {
     border-color: var(--text-muted);
     box-shadow:
@@ -1051,7 +1048,6 @@ html[data-theme="dark"] {
   }
 
   .quiet-control-input,
-  .quiet-control-select,
   .quiet-control-textarea {
     width: 100%;
     min-width: 0;
@@ -1083,7 +1079,6 @@ html[data-theme="dark"] {
   }
 
   .quiet-control-input:focus,
-  .quiet-control-select:focus,
   .quiet-control-textarea:focus {
     border-bottom-color: var(--text-main);
     box-shadow: 0 1px 0 color-mix(in srgb, var(--text-main) 24%, transparent);

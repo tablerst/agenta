@@ -15,6 +15,7 @@ import { computed, nextTick, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 
+import AppSelect from "../components/AppSelect.vue";
 import JsonBlock from "../components/JsonBlock.vue";
 import MarkdownBlock from "../components/MarkdownBlock.vue";
 import { DesktopBridgeError, desktopBridge } from "../lib/desktop";
@@ -123,6 +124,39 @@ const taskSortOptions = [
   "updated_at",
   "created_at",
 ] as const;
+const versionFilterOptions = computed(() => [
+  { value: "", label: t("tasks.allVersions") },
+  ...projectsStore.versions.map((version) => ({ value: version.version_id, label: version.name })),
+]);
+const selectedStatusValues = computed<TaskStatus[]>(() =>
+  selectedStatus.value
+    .split(",")
+    .map((status) => status.trim())
+    .filter((status): status is TaskStatus => taskStatusOptions.includes(status as TaskStatus)),
+);
+const selectedStatusSet = computed(() => new Set<TaskStatus>(selectedStatusValues.value));
+const taskStatusFilterOptions = computed(() =>
+  taskStatusOptions.map((status) => ({ value: status, label: t(`status.task.${status}`) })),
+);
+const taskKindFilterOptions = computed(() => [
+  { value: "", label: t("tasks.allTaskKinds") },
+  ...taskKindOptions.map((kind) => ({ value: kind, label: t(`status.taskKind.${kind}`) })),
+]);
+const taskPriorityFilterOptions = computed(() => [
+  { value: "", label: t("tasks.allPriorities") },
+  ...taskPriorityOptions.map((priority) => ({ value: priority, label: t(`status.priority.${priority}`) })),
+]);
+const knowledgeStatusFilterOptions = computed(() => [
+  { value: "", label: t("tasks.allKnowledgeStatuses") },
+  ...knowledgeStatusOptions.map((status) => ({ value: status, label: t(`status.knowledge.${status}`) })),
+]);
+const taskSortFilterOptions = computed(() =>
+  taskSortOptions.map((sortBy) => ({ value: sortBy, label: t(`tasks.sortBy.${sortBy}`) })),
+);
+const sortOrderOptions = computed(() => [
+  { value: "asc", label: t("tasks.sortOrder.asc") },
+  { value: "desc", label: t("tasks.sortOrder.desc") },
+]);
 const selectedProject = computed(
   () => projectsStore.projects.find((item) => item.slug === selectedProjectSlug.value) ?? null,
 );
@@ -140,16 +174,39 @@ const selectedProjectLabel = computed(() => selectedProject.value?.name || selec
 const isProjectSearchActive = computed(() => Boolean(selectedSearchQuery.value));
 const projectSearchResultTaskIds = computed(() => {
   const taskIds = new Set<string>();
-  projectSearchResults.value?.tasks.forEach((item) => taskIds.add(item.task_id));
-  projectSearchResults.value?.activities.forEach((item) => taskIds.add(item.task_id));
+  projectSearchTasks.value.forEach((item) => taskIds.add(item.task_id));
+  projectSearchActivities.value.forEach((item) => taskIds.add(item.task_id));
   return Array.from(taskIds);
 });
 const projectSearchPrimaryTaskId = computed(
-  () => projectSearchResults.value?.tasks[0]?.task_id ?? projectSearchResults.value?.activities[0]?.task_id ?? null,
+  () => projectSearchTasks.value[0]?.task_id ?? projectSearchActivities.value[0]?.task_id ?? null,
 );
 const projectSearchTaskMap = computed(
-  () => new Map((projectSearchResults.value?.tasks ?? []).map((item) => [item.task_id, item])),
+  () => new Map((projectSearchTasks.value ?? []).map((item) => [item.task_id, item])),
 );
+const taskListItems = computed(() => {
+  if (selectedStatusSet.value.size === 0 || selectedStatusValues.value.length <= 1) {
+    return tasksStore.tasks;
+  }
+  return tasksStore.tasks.filter((item) => selectedStatusSet.value.has(item.status));
+});
+const projectSearchTasks = computed(() => {
+  const tasks = projectSearchResults.value?.tasks ?? [];
+  if (selectedStatusSet.value.size === 0) {
+    return tasks;
+  }
+  return tasks.filter((item) => selectedStatusSet.value.has(item.status));
+});
+const projectSearchActivities = computed(() => {
+  const activities = projectSearchResults.value?.activities ?? [];
+  if (selectedStatusSet.value.size === 0) {
+    return activities;
+  }
+  return activities.filter((item) => {
+    const task = projectSearchTaskMap.value.get(item.task_id);
+    return task ? selectedStatusSet.value.has(task.status) : false;
+  });
+});
 const projectSearchRetrievalStatus = computed(() => {
   if (!projectSearchResults.value) {
     return "";
@@ -218,6 +275,16 @@ function queryValue(
   return key in overrides ? overrides[key] : current || undefined;
 }
 
+function normalizeSelectValue(value: string | string[]) {
+  return Array.isArray(value) ? value[0] ?? "" : value;
+}
+
+function serializeStatusValues(value: string | string[]) {
+  const values = (Array.isArray(value) ? value : value ? [value] : [])
+    .filter((status): status is TaskStatus => taskStatusOptions.includes(status as TaskStatus));
+  return values.length > 0 ? values.join(",") : undefined;
+}
+
 function buildTaskQuery(overrides: Partial<Record<TaskQueryKey, string | undefined>> = {}) {
   return mergeWorkspaceQuery({
     q: queryValue(overrides as Record<TaskQueryKey, string | undefined>, "q", selectedSearchQuery.value),
@@ -252,7 +319,7 @@ function buildTaskListFilters() {
   return {
     project: selectedProjectSlug.value || undefined,
     kind: selectedTaskKindFilter.value || undefined,
-    status: selectedStatus.value || undefined,
+    status: selectedStatusValues.value.length === 1 ? selectedStatusValues.value[0] : undefined,
     task_code_prefix: taskCodePrefixFilter.value || undefined,
     sort_by: selectedSortBy.value || undefined,
     sort_order: selectedSortOrder.value || undefined,
@@ -265,7 +332,7 @@ function buildProjectSearchFilters(): ProjectSearchFilters {
     project: selectedProjectSlug.value,
     query: selectedSearchQuery.value,
     version: selectedVersionId.value || undefined,
-    status: selectedStatus.value ? (selectedStatus.value as TaskStatus) : undefined,
+    status: selectedStatusValues.value.length === 1 ? selectedStatusValues.value[0] : undefined,
     priority: selectedPriorityFilter.value ? (selectedPriorityFilter.value as TaskPriority) : undefined,
     knowledge_status: selectedKnowledgeStatusFilter.value
       ? (selectedKnowledgeStatusFilter.value as KnowledgeStatus)
@@ -392,9 +459,9 @@ async function updateVersionFilter(version: string) {
   await updateQuery({ version: version || undefined, task: undefined });
 }
 
-async function updateStatusFilter(status: string) {
+async function updateStatusFilters(statuses: string | string[]) {
   isCreatingTask.value = false;
-  await updateQuery({ status: status || undefined, task: undefined });
+  await updateQuery({ status: serializeStatusValues(statuses), task: undefined });
 }
 
 function handleTabKeydown(event: KeyboardEvent, tab: TaskDetailTab) {
@@ -531,10 +598,10 @@ watch(
   () => [
     isProjectSearchActive.value ? "search" : "list",
     projectSearchLoading.value ? "loading" : "idle",
-    projectSearchResults.value?.tasks.map((item) => item.task_id).join("|") ?? "",
-    projectSearchResults.value?.activities.map((item) => `${item.activity_id}:${item.task_id}`).join("|") ?? "",
+    projectSearchTasks.value.map((item) => item.task_id).join("|"),
+    projectSearchActivities.value.map((item) => `${item.activity_id}:${item.task_id}`).join("|"),
     projectSearchError.value,
-    tasksStore.tasks.map((item) => item.task_id).join("|"),
+    taskListItems.value.map((item) => item.task_id).join("|"),
   ] as const,
   async () => {
     if (isProjectSearchActive.value) {
@@ -545,8 +612,8 @@ watch(
       return;
     }
 
-    const visibleTaskIds = isProjectSearchActive.value ? projectSearchResultTaskIds.value : tasksStore.tasks.map((item) => item.task_id);
-    const firstTask = isProjectSearchActive.value ? projectSearchPrimaryTaskId.value : tasksStore.tasks[0]?.task_id ?? null;
+    const visibleTaskIds = isProjectSearchActive.value ? projectSearchResultTaskIds.value : taskListItems.value.map((item) => item.task_id);
+    const firstTask = isProjectSearchActive.value ? projectSearchPrimaryTaskId.value : taskListItems.value[0]?.task_id ?? null;
     const hasSelection = Boolean(
       selectedTaskId.value &&
       visibleTaskIds.includes(selectedTaskId.value),
@@ -827,10 +894,10 @@ async function jumpToQueuedApproval(error: unknown) {
                 <span v-if="projectSearchLoading" class="status-pill">{{ t("search.loading") }}</span>
                 <template v-else-if="projectSearchResults">
                   <span class="status-pill">
-                    {{ t("tasks.projectSearch.taskHits", { count: projectSearchResults.tasks.length }) }}
+                    {{ t("tasks.projectSearch.taskHits", { count: projectSearchTasks.length }) }}
                   </span>
                   <span class="status-pill">
-                    {{ t("tasks.projectSearch.activityHits", { count: projectSearchResults.activities.length }) }}
+                    {{ t("tasks.projectSearch.activityHits", { count: projectSearchActivities.length }) }}
                   </span>
                   <span class="status-pill">{{ projectSearchRetrievalStatus }}</span>
                   <span v-if="projectSearchResults.meta.pending_index_jobs > 0" class="status-pill">
@@ -839,7 +906,7 @@ async function jumpToQueuedApproval(error: unknown) {
                 </template>
               </template>
               <template v-else>
-                <span class="status-pill">{{ tasksStore.tasks.length }}</span>
+                <span class="status-pill">{{ taskListItems.length }}</span>
                 <span v-if="tasksStore.taskSummary" class="status-pill">
                   {{ t("tasks.summaryReady", { count: tasksStore.taskSummary.status_counts.ready }) }}
                 </span>
@@ -870,29 +937,25 @@ async function jumpToQueuedApproval(error: unknown) {
               </label>
               <label class="compact-field">
                 <span class="field-label">{{ t("routes.projects.sections.versions") }}</span>
-                <select
-                  class="control-select compact-control"
-                  :value="selectedVersionId"
-                  @change="updateVersionFilter(($event.target as HTMLSelectElement).value)"
-                >
-                  <option value="">{{ t("tasks.allVersions") }}</option>
-                  <option v-for="version in projectsStore.versions" :key="version.version_id" :value="version.version_id">
-                    {{ version.name }}
-                  </option>
-                </select>
+                <AppSelect
+                  :aria-label="t('routes.projects.sections.versions')"
+                  :model-value="selectedVersionId"
+                  :options="versionFilterOptions"
+                  size="compact"
+                  @update:model-value="updateVersionFilter(normalizeSelectValue($event))"
+                />
               </label>
               <label class="compact-field">
                 <span class="field-label">{{ t("common.status") }}</span>
-                <select
-                  class="control-select compact-control"
-                  :value="selectedStatus"
-                  @change="updateStatusFilter(($event.target as HTMLSelectElement).value)"
-                >
-                  <option value="">{{ t("tasks.allStatuses") }}</option>
-                  <option v-for="status in taskStatusOptions" :key="status" :value="status">
-                    {{ t(`status.task.${status}`) }}
-                  </option>
-                </select>
+                <AppSelect
+                  :aria-label="t('common.status')"
+                  :model-value="selectedStatusValues"
+                  :options="taskStatusFilterOptions"
+                  :placeholder="t('tasks.allStatuses')"
+                  multiple
+                  size="compact"
+                  @update:model-value="updateStatusFilters($event)"
+                />
               </label>
               <div class="workspace-filter-actions">
                 <button
@@ -934,30 +997,30 @@ async function jumpToQueuedApproval(error: unknown) {
             <div v-if="showAdvancedFilters" id="task-advanced-filters" class="workspace-advanced-filter-panel">
               <label class="compact-field">
                 <span class="field-label">{{ t("tasks.fields.taskKind") }}</span>
-                <select v-model="selectedTaskKindFilter" class="control-select compact-control">
-                  <option value="">{{ t("tasks.allTaskKinds") }}</option>
-                  <option v-for="kind in taskKindOptions" :key="kind" :value="kind">
-                    {{ t(`status.taskKind.${kind}`) }}
-                  </option>
-                </select>
+                <AppSelect
+                  v-model="selectedTaskKindFilter"
+                  :aria-label="t('tasks.fields.taskKind')"
+                  :options="taskKindFilterOptions"
+                  size="compact"
+                />
               </label>
               <label class="compact-field">
                 <span class="field-label">{{ t("tasks.fields.priority") }}</span>
-                <select v-model="selectedPriorityFilter" class="control-select compact-control">
-                  <option value="">{{ t("tasks.allPriorities") }}</option>
-                  <option v-for="priority in taskPriorityOptions" :key="priority" :value="priority">
-                    {{ t(`status.priority.${priority}`) }}
-                  </option>
-                </select>
+                <AppSelect
+                  v-model="selectedPriorityFilter"
+                  :aria-label="t('tasks.fields.priority')"
+                  :options="taskPriorityFilterOptions"
+                  size="compact"
+                />
               </label>
               <label class="compact-field">
                 <span class="field-label">{{ t("tasks.fields.knowledgeStatus") }}</span>
-                <select v-model="selectedKnowledgeStatusFilter" class="control-select compact-control">
-                  <option value="">{{ t("tasks.allKnowledgeStatuses") }}</option>
-                  <option v-for="status in knowledgeStatusOptions" :key="status" :value="status">
-                    {{ t(`status.knowledge.${status}`) }}
-                  </option>
-                </select>
+                <AppSelect
+                  v-model="selectedKnowledgeStatusFilter"
+                  :aria-label="t('tasks.fields.knowledgeStatus')"
+                  :options="knowledgeStatusFilterOptions"
+                  size="compact"
+                />
               </label>
               <label class="compact-field">
                 <span class="field-label">{{ t("tasks.fields.taskCode") }}</span>
@@ -969,18 +1032,21 @@ async function jumpToQueuedApproval(error: unknown) {
               </label>
               <label class="compact-field">
                 <span class="field-label">{{ t("tasks.fields.sortBy") }}</span>
-                <select v-model="selectedSortBy" class="control-select compact-control">
-                  <option v-for="sortBy in taskSortOptions" :key="sortBy" :value="sortBy">
-                    {{ t(`tasks.sortBy.${sortBy}`) }}
-                  </option>
-                </select>
+                <AppSelect
+                  v-model="selectedSortBy"
+                  :aria-label="t('tasks.fields.sortBy')"
+                  :options="taskSortFilterOptions"
+                  size="compact"
+                />
               </label>
               <label class="compact-field">
                 <span class="field-label">{{ t("tasks.fields.sortOrder") }}</span>
-                <select v-model="selectedSortOrder" class="control-select compact-control">
-                  <option value="asc">{{ t("tasks.sortOrder.asc") }}</option>
-                  <option value="desc">{{ t("tasks.sortOrder.desc") }}</option>
-                </select>
+                <AppSelect
+                  v-model="selectedSortOrder"
+                  :aria-label="t('tasks.fields.sortOrder')"
+                  :options="sortOrderOptions"
+                  size="compact"
+                />
               </label>
             </div>
           </div>
@@ -997,7 +1063,7 @@ async function jumpToQueuedApproval(error: unknown) {
             <div
               v-else-if="
                 !projectSearchResults ||
-                (projectSearchResults.tasks.length === 0 && projectSearchResults.activities.length === 0)
+                (projectSearchTasks.length === 0 && projectSearchActivities.length === 0)
               "
               class="empty-state"
             >
@@ -1008,15 +1074,15 @@ async function jumpToQueuedApproval(error: unknown) {
                 <div class="flex items-center justify-between gap-3">
                   <p class="section-label">{{ t("search.tasks") }}</p>
                   <span class="text-xs text-[var(--text-muted)]">
-                    {{ t("tasks.projectSearch.taskHits", { count: projectSearchResults.tasks.length }) }}
+                    {{ t("tasks.projectSearch.taskHits", { count: projectSearchTasks.length }) }}
                   </span>
                 </div>
-                <div v-if="projectSearchResults.tasks.length === 0" class="empty-state">
+                <div v-if="projectSearchTasks.length === 0" class="empty-state">
                   {{ t("tasks.projectSearch.noTaskHits") }}
                 </div>
                 <div v-else class="workspace-row-list">
                   <button
-                    v-for="task in projectSearchResults.tasks"
+                    v-for="task in projectSearchTasks"
                     :key="task.task_id"
                     v-spotlight
                     class="list-row spotlight-surface"
@@ -1060,15 +1126,15 @@ async function jumpToQueuedApproval(error: unknown) {
                 <div class="flex items-center justify-between gap-3">
                   <p class="section-label">{{ t("search.activity") }}</p>
                   <span class="text-xs text-[var(--text-muted)]">
-                    {{ t("tasks.projectSearch.activityHits", { count: projectSearchResults.activities.length }) }}
+                    {{ t("tasks.projectSearch.activityHits", { count: projectSearchActivities.length }) }}
                   </span>
                 </div>
-                <div v-if="projectSearchResults.activities.length === 0" class="empty-state">
+                <div v-if="projectSearchActivities.length === 0" class="empty-state">
                   {{ t("tasks.projectSearch.noActivityHits") }}
                 </div>
                 <div v-else class="workspace-row-list">
                   <button
-                    v-for="item in projectSearchResults.activities"
+                    v-for="item in projectSearchActivities"
                     :key="item.activity_id"
                     v-spotlight
                     class="list-row spotlight-surface"
@@ -1102,12 +1168,12 @@ async function jumpToQueuedApproval(error: unknown) {
               </section>
             </template>
           </div>
-          <div v-else-if="tasksStore.tasks.length === 0" class="empty-state">
+          <div v-else-if="taskListItems.length === 0" class="empty-state">
             {{ t("tasks.noMatches") }}
           </div>
           <div v-else class="workspace-row-list">
             <button
-              v-for="task in tasksStore.tasks"
+              v-for="task in taskListItems"
               :key="task.task_id"
               v-spotlight
               class="list-row spotlight-surface"
@@ -1160,11 +1226,13 @@ async function jumpToQueuedApproval(error: unknown) {
             </label>
             <label class="form-field">
               <span class="field-label">{{ t("tasks.fields.taskKind") }}</span>
-              <select v-model="createTaskForm.kind" class="quiet-control-select">
-                <option v-for="kind in taskKindOptions" :key="kind" :value="kind">
-                  {{ t(`status.taskKind.${kind}`) }}
-                </option>
-              </select>
+              <AppSelect
+                v-model="createTaskForm.kind"
+                :aria-label="t('tasks.fields.taskKind')"
+                :label-for="(kind) => t(`status.taskKind.${kind}`)"
+                :options="taskKindOptions"
+                variant="quiet"
+              />
             </label>
             <label class="form-field overview-field-wide">
               <span class="field-label">{{ t("tasks.fields.title") }}</span>
@@ -1185,11 +1253,13 @@ async function jumpToQueuedApproval(error: unknown) {
             </label>
             <label class="form-field">
               <span class="field-label">{{ t("common.status") }}</span>
-              <select v-model="createTaskForm.status" class="quiet-control-select">
-                <option v-for="status in taskStatusOptions" :key="status" :value="status">
-                  {{ t(`status.task.${status}`) }}
-                </option>
-              </select>
+              <AppSelect
+                v-model="createTaskForm.status"
+                :aria-label="t('common.status')"
+                :label-for="(status) => t(`status.task.${status}`)"
+                :options="taskStatusOptions"
+                variant="quiet"
+              />
             </label>
             <label class="form-field overview-field-wide">
               <span class="field-label">{{ t("tasks.fields.description") }}</span>
@@ -1201,11 +1271,13 @@ async function jumpToQueuedApproval(error: unknown) {
             </label>
             <label class="form-field">
               <span class="field-label">{{ t("tasks.fields.priority") }}</span>
-              <select v-model="createTaskForm.priority" class="quiet-control-select">
-                <option v-for="priority in taskPriorityOptions" :key="priority" :value="priority">
-                  {{ t(`status.priority.${priority}`) }}
-                </option>
-              </select>
+              <AppSelect
+                v-model="createTaskForm.priority"
+                :aria-label="t('tasks.fields.priority')"
+                :label-for="(priority) => t(`status.priority.${priority}`)"
+                :options="taskPriorityOptions"
+                variant="quiet"
+              />
             </label>
           </div>
 
@@ -1285,25 +1357,28 @@ async function jumpToQueuedApproval(error: unknown) {
                     class="control-input"
                     :placeholder="t('tasks.placeholders.taskCode')"
                   />
-                  <select v-model="taskForm.kind" class="control-select">
-                    <option v-for="kind in taskKindOptions" :key="kind" :value="kind">
-                      {{ t(`status.taskKind.${kind}`) }}
-                    </option>
-                  </select>
+                  <AppSelect
+                    v-model="taskForm.kind"
+                    :aria-label="t('tasks.fields.taskKind')"
+                    :label-for="(kind) => t(`status.taskKind.${kind}`)"
+                    :options="taskKindOptions"
+                  />
                   <input v-model="taskForm.title" class="control-input" />
                   <input v-model="taskForm.summary" class="control-input" />
                   <textarea v-model="taskForm.description" class="control-textarea" />
                   <div class="grid gap-3 md:grid-cols-2">
-                    <select v-model="taskForm.status" class="control-select">
-                      <option v-for="status in taskStatusOptions" :key="status" :value="status">
-                        {{ t(`status.task.${status}`) }}
-                      </option>
-                    </select>
-                    <select v-model="taskForm.priority" class="control-select">
-                      <option v-for="priority in taskPriorityOptions" :key="priority" :value="priority">
-                        {{ t(`status.priority.${priority}`) }}
-                      </option>
-                    </select>
+                    <AppSelect
+                      v-model="taskForm.status"
+                      :aria-label="t('common.status')"
+                      :label-for="(status) => t(`status.task.${status}`)"
+                      :options="taskStatusOptions"
+                    />
+                    <AppSelect
+                      v-model="taskForm.priority"
+                      :aria-label="t('tasks.fields.priority')"
+                      :label-for="(priority) => t(`status.priority.${priority}`)"
+                      :options="taskPriorityOptions"
+                    />
                   </div>
                   <button class="primary-action spotlight-surface" @click="submitTaskUpdate">
                     <BadgeCheck :size="15" />
@@ -1441,11 +1516,12 @@ async function jumpToQueuedApproval(error: unknown) {
           >
             <section class="panel-section">
               <p class="section-label">{{ t("tasks.addNote") }}</p>
-              <select v-model="noteForm.note_kind" class="control-select">
-                <option v-for="noteKind in noteKindOptions" :key="noteKind" :value="noteKind">
-                  {{ t(`status.noteKind.${noteKind}`) }}
-                </option>
-              </select>
+              <AppSelect
+                v-model="noteForm.note_kind"
+                :aria-label="t('tasks.addNote')"
+                :label-for="(noteKind) => t(`status.noteKind.${noteKind}`)"
+                :options="noteKindOptions"
+              />
               <textarea
                 v-model="noteForm.content"
                 class="control-textarea"
@@ -1494,11 +1570,12 @@ async function jumpToQueuedApproval(error: unknown) {
                   class="control-input"
                   :placeholder="t('tasks.placeholders.attachmentSummary')"
                 />
-                <select v-model="attachmentForm.kind" class="control-select">
-                  <option v-for="kind in attachmentKindOptions" :key="kind" :value="kind">
-                    {{ t(`status.attachmentKind.${kind}`) }}
-                  </option>
-                </select>
+                <AppSelect
+                  v-model="attachmentForm.kind"
+                  :aria-label="t('tasks.addAttachment')"
+                  :label-for="(kind) => t(`status.attachmentKind.${kind}`)"
+                  :options="attachmentKindOptions"
+                />
                 <button class="primary-action spotlight-surface" @click="submitAttachment">
                   <Paperclip :size="15" />
                   {{ t("tasks.addAttachmentAction") }}

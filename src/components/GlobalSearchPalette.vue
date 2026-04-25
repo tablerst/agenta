@@ -4,6 +4,7 @@ import { computed, nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
 
+import AppSelect from "./AppSelect.vue";
 import { desktopBridge } from "../lib/desktop";
 import { knowledgeStatusOptions, taskKindOptions, taskPriorityOptions } from "../lib/options";
 import { buildProjectWorkspacePath, resolveProjectSlug } from "../lib/projectWorkspace";
@@ -25,6 +26,21 @@ const selectedTaskKind = ref("");
 const selectedPriority = ref("");
 const selectedKnowledgeStatus = ref("");
 let timer: number | undefined;
+
+const taskKindFilterOptions = computed(() => [
+  { value: "", label: t("tasks.allTaskKinds") },
+  ...taskKindOptions.map((kind) => ({ value: kind, label: t(`status.taskKind.${kind}`) })),
+]);
+
+const taskPriorityFilterOptions = computed(() => [
+  { value: "", label: t("tasks.allPriorities") },
+  ...taskPriorityOptions.map((priority) => ({ value: priority, label: t(`status.priority.${priority}`) })),
+]);
+
+const knowledgeStatusFilterOptions = computed(() => [
+  { value: "", label: t("tasks.allKnowledgeStatuses") },
+  ...knowledgeStatusOptions.map((status) => ({ value: status, label: t(`status.knowledge.${status}`) })),
+]);
 
 const activeFilters = computed<GlobalSearchFilters>(() => ({
   knowledge_status: selectedKnowledgeStatus.value ? (selectedKnowledgeStatus.value as KnowledgeStatus) : undefined,
@@ -239,36 +255,30 @@ async function jumpToTask(taskId: string) {
             <span v-if="activeFilterLabels.length > 0"> · {{ activeFilterLabels.join(" · ") }}</span>
           </p>
           <div class="mt-3 flex flex-wrap items-center gap-2">
-            <select
+            <AppSelect
               v-model="selectedTaskKind"
-              class="quiet-control-select compact-control max-w-[11rem]"
+              class="max-w-[11rem]"
               :aria-label="t('tasks.fields.taskKind')"
-            >
-              <option value="">{{ t("tasks.allTaskKinds") }}</option>
-              <option v-for="kind in taskKindOptions" :key="kind" :value="kind">
-                {{ t(`status.taskKind.${kind}`) }}
-              </option>
-            </select>
-            <select
+              :options="taskKindFilterOptions"
+              size="compact"
+              variant="quiet"
+            />
+            <AppSelect
               v-model="selectedPriority"
-              class="quiet-control-select compact-control max-w-[10rem]"
+              class="max-w-[10rem]"
               :aria-label="t('tasks.fields.priority')"
-            >
-              <option value="">{{ t("tasks.allPriorities") }}</option>
-              <option v-for="priority in taskPriorityOptions" :key="priority" :value="priority">
-                {{ t(`status.priority.${priority}`) }}
-              </option>
-            </select>
-            <select
+              :options="taskPriorityFilterOptions"
+              size="compact"
+              variant="quiet"
+            />
+            <AppSelect
               v-model="selectedKnowledgeStatus"
-              class="quiet-control-select compact-control max-w-[11rem]"
+              class="max-w-[11rem]"
               :aria-label="t('tasks.fields.knowledgeStatus')"
-            >
-              <option value="">{{ t("tasks.allKnowledgeStatuses") }}</option>
-              <option v-for="status in knowledgeStatusOptions" :key="status" :value="status">
-                {{ t(`status.knowledge.${status}`) }}
-              </option>
-            </select>
+              :options="knowledgeStatusFilterOptions"
+              size="compact"
+              variant="quiet"
+            />
             <button
               v-if="activeFilterLabels.length > 0"
               class="status-pill hover:border-[var(--accent-color)]/50"

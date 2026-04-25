@@ -10,10 +10,12 @@ import {
 import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
 
+import AppSelect from "../components/AppSelect.vue";
 import JsonBlock from "../components/JsonBlock.vue";
 import { formatDateTime } from "../lib/format";
 import type { RuntimeConsoleContext } from "../lib/runtimeConsole";
 import { buildRuntimeWorkspacePath } from "../lib/runtimeWorkspace";
+import type { McpLogLevel } from "../lib/types";
 
 const router = useRouter();
 const props = defineProps<{
@@ -24,6 +26,10 @@ const { t } = useI18n({ useScope: "global" });
 
 function openSync() {
   void router.push(buildRuntimeWorkspacePath("sync"));
+}
+
+function formatLogLevelOption(level: string) {
+  return runtimeConsole.formatLogLevel(level as McpLogLevel);
 }
 </script>
 
@@ -141,15 +147,13 @@ function openSync() {
               </label>
               <label class="form-field">
                 <span class="field-label">{{ t("runtime.fields.logLevel") }}</span>
-                <select v-model="runtimeConsole.form.logLevel" class="quiet-control-select">
-                  <option
-                    v-for="level in runtimeConsole.logLevelOptions"
-                    :key="level"
-                    :value="level"
-                  >
-                    {{ runtimeConsole.formatLogLevel(level) }}
-                  </option>
-                </select>
+                <AppSelect
+                  v-model="runtimeConsole.form.logLevel"
+                  :aria-label="t('runtime.fields.logLevel')"
+                  :label-for="formatLogLevelOption"
+                  :options="runtimeConsole.logLevelOptions"
+                  variant="quiet"
+                />
               </label>
               <label class="form-field">
                 <span class="field-label">{{ t("runtime.fields.uiBufferLines") }}</span>

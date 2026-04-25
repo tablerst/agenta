@@ -4,6 +4,7 @@ import { computed, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 
+import AppSelect from "../components/AppSelect.vue";
 import { DesktopBridgeError, desktopBridge } from "../lib/desktop";
 import { formatDesktopError } from "../lib/errorMessage";
 import { formatDateTime } from "../lib/format";
@@ -394,11 +395,13 @@ function openSection(section: "versions" | "tasks" | "approvals") {
             </label>
             <label class="form-field">
               <span class="field-label">{{ t("common.status") }}</span>
-              <select v-model="projectForm.status" class="quiet-control-select">
-                <option v-for="status in projectStatusOptions" :key="status" :value="status">
-                  {{ t(`status.project.${status}`) }}
-                </option>
-              </select>
+              <AppSelect
+                v-model="projectForm.status"
+                :aria-label="t('common.status')"
+                :label-for="(status) => t(`status.project.${status}`)"
+                :options="projectStatusOptions"
+                variant="quiet"
+              />
             </label>
           </div>
 

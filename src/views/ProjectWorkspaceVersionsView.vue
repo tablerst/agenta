@@ -4,6 +4,7 @@ import { computed, reactive, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 
+import AppSelect from "../components/AppSelect.vue";
 import { DesktopBridgeError } from "../lib/desktop";
 import { formatDesktopError } from "../lib/errorMessage";
 import { versionStatusOptions } from "../lib/options";
@@ -203,11 +204,12 @@ async function submitVersionUpdate() {
             </label>
             <label class="form-field">
               <span class="field-label">{{ t("common.status") }}</span>
-              <select v-model="createVersionForm.status" class="control-select">
-                <option v-for="status in versionStatusOptions" :key="status" :value="status">
-                  {{ t(`status.version.${status}`) }}
-                </option>
-              </select>
+              <AppSelect
+                v-model="createVersionForm.status"
+                :aria-label="t('common.status')"
+                :label-for="(status) => t(`status.version.${status}`)"
+                :options="versionStatusOptions"
+              />
             </label>
             <button class="primary-action spotlight-surface" @click="submitCreateVersion">
               <Plus :size="15" />
@@ -284,11 +286,12 @@ async function submitVersionUpdate() {
             </label>
             <label class="form-field">
               <span class="field-label">{{ t("common.status") }}</span>
-              <select v-model="versionForm.status" class="control-select">
-                <option v-for="status in versionStatusOptions" :key="status" :value="status">
-                  {{ t(`status.version.${status}`) }}
-                </option>
-              </select>
+              <AppSelect
+                v-model="versionForm.status"
+                :aria-label="t('common.status')"
+                :label-for="(status) => t(`status.version.${status}`)"
+                :options="versionStatusOptions"
+              />
             </label>
             <button class="primary-action spotlight-surface" @click="submitVersionUpdate">
               <BadgeCheck :size="15" />
