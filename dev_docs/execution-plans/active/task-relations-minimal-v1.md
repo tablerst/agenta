@@ -40,6 +40,12 @@
 | [x] | 更新示例 policy 与 quickstart | 新 action 默认 auto |
 | [x] | 完成 Rust 测试与前端构建验证 | 已通过 `cargo test --manifest-path src-tauri/Cargo.toml` 与 `npm run build` |
 
+## Agenta 台账同步
+
+- 2026-04-25 核查：本计划当前没有拆成独立的 `TaskRelV1-*` Agenta 任务。
+- 已通过 `ReleaseV011-00` 版本级索引补记到 `v0.1.1` 发布范围，避免 Git tag 内容与 Agenta 项目规划脱节。
+- 如果后续需要恢复更细的任务上下文，可补建 `TaskRelV1-00` index 任务，并把本文件作为主要阅读入口。
+
 ## 验收标准
 
 - 创建或绑定父子任务后，`task_context_get` 能返回 parent/children，并且父子双方 digest 与活动记录更新。

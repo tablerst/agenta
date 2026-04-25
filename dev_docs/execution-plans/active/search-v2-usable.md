@@ -1,4 +1,4 @@
-# Search 真正可用版本规划（v0.2.0-search-usable）
+# Search 真正可用版本规划（v0.1.1-search-usable）
 
 ## 背景
 
@@ -15,7 +15,7 @@
 
 ## 方案
 
-版本名称采用 `v0.2.0-search-usable`，定位为搜索可用性版本。该版本不追求把检索系统做成通用搜索平台，而是先解决 Agenta 当前最直接的恢复上下文问题：
+版本名称采用 `v0.1.1-search-usable`，定位为搜索可用性版本。该版本不追求把检索系统做成通用搜索平台，而是先解决 Agenta 当前最直接的恢复上下文问题：
 
 - 用户输入任务编号、精确短语、中文关键词、概念描述或状态意图时，前列结果需要稳定且明显合理。
 - 结果必须带可读证据，而不是只返回 task 标题和摘要。
@@ -60,12 +60,39 @@
 
 这一阶段的目标是让 SearchV2 从“试验性能力”收口成“可发布能力”。
 
+## v0.1.1 TAG 同步核查
+
+核查时间：2026-04-25。核查范围：`v0.1.0..v0.1.1`，Git tag `v0.1.1` 指向 `3f6941d`。
+
+### 已同步到 Agenta 台账
+
+- `SearchV2-00` 到 `SearchV2-08` 均挂在 Agenta 版本 `v0.1.1-search-usable` 下，状态为 `done`，版本状态为 `closed`。
+- 搜索索引运行态语义重构已补充到 `SearchV2-06` 的 2026-04-25 结论 note，并在本地 TODO 中记录为完成。
+- `agenta-workflow` 与仓库级 workflow 规则已同步到 `WorkflowCtx-01`。该任务保持 `context / in_progress`，作为长期工作流沉淀入口。
+- `ReleaseV011-00` 已补为版本级索引任务，状态为 `done / reusable`，用于恢复 `v0.1.1` tag 的完整发布范围。
+- `ReleaseV011-01` 已补为 UI 专项任务，状态为 `done / reusable`，用于恢复 `AppSelect`、Markdown/JSON 展示、Runtime console 和 sidebar 打磨范围。
+- `ReleaseV011-02` 已补为 manifest bump 与 release 构建任务，状态为 `done / reusable`，记录 `0.1.1` 版本源同步和 Windows release artifact 产物位置。
+
+### 尚未作为独立 Agenta 任务同步
+
+- `Task 轻量关系层 V1`：本地计划 `dev_docs/execution-plans/active/task-relations-minimal-v1.md` 已完成，但 Agenta 台账中没有独立的 `TaskRelV1-*` 任务；`v0.1.1` 中的 `task_relations`、同步依赖顺序、MCP/CLI/Desktop 关系工具已通过 `ReleaseV011-00` 做版本级补记。
+- 项目上下文与桌面基础设施：project context 初始化/管理、dialog plugin、`.agenta/project.yaml`、MCP schema 拆分和 service 模块拆分随 tag 发布，但没有独立计划任务；适合补为 `ContextOps` 或 `DesktopFoundation` 类恢复入口。
+- 发布工程与版本口径：build metadata、CLI version、release script、`AGENTA_BUILD_FORCE_RERUN` 随 tag 发布；`package.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml` 与 `Cargo.lock` 已对齐到 `0.1.1`，当前 dirty release artifact 已由 `ReleaseV011-02` 记录。
+- 桌面 UI 打磨：`AppSelect`、`MarkdownBlock`、`JsonBlock` 深度/高度控制、Runtime log JSON 展示、Sidebar locale/flyout 调整已补入 `ReleaseV011-01`；它们是 `v0.1.1` 发布随带项，不应并入 SearchV2 验收口径。
+
+### 同步处理建议
+
+- 不把非 SearchV2 项改写成 SearchV2 任务；SearchV2 只记录 tag 边界和依赖关系。
+- Agenta 台账已补 `ReleaseV011-00` 版本索引任务，统一记录 `v0.1.1` 的 SearchV2、TaskRelV1、workflow、release ops 与桌面打磨范围；UI 细项由 `ReleaseV011-01` 承接，manifest bump 与 release artifact 由 `ReleaseV011-02` 承接。
+- 如果需要更细恢复入口，再为 `TaskRelV1-00` 单独补一个已完成的 index 任务，并把现有本地计划作为该任务的主要阅读入口。
+
 ## TODO 追踪
 
 状态说明：`[x]` 表示本版本当前验收范围已经完成；`[~]` 表示仍在本版本内继续推进；`[ ]` 表示尚未开始。已经完成但仍值得增强的内容统一记录为“后续增强”，不再用 `[~]` 混淆任务完成状态。
 
 | 状态 | 事项 | 备注 |
-| [x] | 创建并启用 `v0.2.0-search-usable` 版本台账 | 已切换为 active，并设为项目默认版本 |
+| --- | --- | --- |
+| [x] | 创建并启用 `v0.1.1-search-usable` 版本台账 | 已切换为 active，曾设为项目默认版本；当前版本已关闭 |
 | [x] | 建立 `SearchV2-00` 索引任务并维护统一导航说明 | 已在 Agenta 中创建索引任务并写入结论说明 |
 | [x] | 完成 `SearchV2-01` 查询理解与 lexical 召回升级 | 已交付 quoted phrase、identifier intent、FTS exact/prefix 级联、SQLite LIKE fallback，以及 identifier 查询禁用 semantic；后续增强：fuzzy/CJK 质量评估 |
 | [x] | 完成 `SearchV2-02` 命中证据片段与 explainability | 已交付：task/activity hit 返回 `evidence_source + evidence_snippet`，全局搜索与项目搜索已展示友好标签和简单高亮；后续增强：semantic rationale、多证据聚合和更稳定的 snippet 排序 |
@@ -75,7 +102,6 @@
 | [x] | 完成 `SearchV2-06` 向量运行时与回填可靠性 | 已交付本地 `search status` / Desktop 搜索索引状态面、回填 run 摘要、失败任务样本、processing lease、search tab 自动刷新与运行进度条，并新增失败重试与过期 processing 恢复动作；后续增强：更细的异常分级 |
 | [x] | 完成 `SearchV2-07` 检索评测集与验收基线 | 已交付 golden queries 回归测试，覆盖编号查询、精确短语、旧 note 正文、文本型 attachment 正文、状态过滤、知识状态过滤，以及长 note 深层 chunk 命中；后续增强：中文查询、semantic explainability 与更多边界门槛 |
 | [x] | 完成 `SearchV2-08` 发布闸口、迁移与文档收口 | 已新增 `docs/search-v2-release.md`，覆盖发布范围、配置模板、发布闸口、搜索专项验收、回填运维、回滚策略和发布检查清单；README 与 CLI reference 已链接该说明 |
-
 | [x] | 完成搜索索引运行态语义重构 | 已将 Desktop 搜索索引维护从“回填”语义调整为“重建 + 后台增量维护”，补充 run operation 派生字段、统一运行态摘要、队列健康区、高级参数折叠和最近执行解释；后续增强：基于内容指纹或 Chroma 存在性检查实现跳过已有 embedding |
 
 ## 验收标准
