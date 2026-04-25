@@ -118,6 +118,7 @@ Official Chroma references:
 ## Documentation
 
 - Quickstart: [docs/cli-mcp-quickstart.md](docs/cli-mcp-quickstart.md)
+- Agent workflow installation: [docs/agent-workflow-installation.md](docs/agent-workflow-installation.md)
 - CLI reference: [docs/cli-reference.md](docs/cli-reference.md)
 - SearchV2 release guide: [docs/search-v2-release.md](docs/search-v2-release.md)
 - Latest archived execution plan: [dev_docs/execution-plans/archive/fifth-milestone-remote-replica-sync-foundation.md](dev_docs/execution-plans/archive/fifth-milestone-remote-replica-sync-foundation.md)

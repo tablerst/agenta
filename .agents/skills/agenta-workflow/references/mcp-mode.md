@@ -11,6 +11,10 @@ Use this file when `operating-surfaces.md` selects MCP mode.
 
 ## Common Tool Groups
 
+Context:
+
+- `context_init`
+
 Projects:
 
 - `project_create`
@@ -30,6 +34,7 @@ Tasks:
 - `task_create`
 - `task_create_child`
 - `task_get`
+- `task_context_get`
 - `task_list`
 - `task_update`
 - `task_attach_child`
@@ -45,20 +50,22 @@ Notes and attachments:
 - `attachment_get`
 - `attachment_list`
 
-Search:
+Activities, search, and recovery:
 
+- `activity_list`
 - `search_query`
 
 ## MCP Usage Habits
 
 - Use `project_list` or `project_get` first to decide whether to reuse an existing project.
 - If a new version is supposed to be the active lane, verify and update `version.status` plus `project.default_version` before implementation starts.
-- When restoring context, prefer `task_list` or `search_query`.
+- After project/version initialization, run `context_init` when the workspace context manifest needs to exist or be refreshed.
+- When restoring context, prefer `task_context_get` if a task id is known; otherwise use `task_list` or `search_query` first.
 - Set `task_code` explicitly when creating numbered tasks.
 - Set `task_kind` explicitly when creating context or index tasks.
 - Set `note_kind` explicitly when writing notes.
 - When one batch advances multiple adjacent tasks, issue explicit `task_update` and `note_create` calls for each affected task instead of only updating the first one.
-- After serialized writes, read back the updated task or note state before moving on.
+- After serialized writes, read back the updated task, note, version, or project state before moving on. For task notes, `task_context_get` is usually the most useful readback.
 
 ## MCP Mode Guidance
 

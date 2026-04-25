@@ -19,17 +19,26 @@ Use this skill when the work needs one or more of these outcomes:
 
 ## Operating Modes
 
-This skill has two operating modes:
+This skill has two first-class operating modes:
 
 1. CLI mode
 
-Use this for local scripting, batch operations, quick verification, or when Agenta MCP tools are unavailable.
+Use this for local scripting, batch operations, quick verification, user-requested command-line workflows, or when Agenta MCP tools are unavailable but the `agenta` CLI is available.
 
 2. MCP mode
 
 Use this when Agenta MCP tools are available in the current environment, or when the work is about tool contracts or integration boundaries.
 
-Do not assume CLI is the default. Choose the most direct and stable boundary for the current environment before proceeding.
+Do not assume CLI is the default, and do not treat MCP as the only valid entry point. Choose the most direct and stable boundary for the current environment before proceeding.
+
+## Default Loop
+
+1. Select MCP or CLI mode from `references/operating-surfaces.md`.
+2. Restore or initialize the Agenta project and active version.
+3. Restore any relevant task/index context before making changes.
+4. Do the requested work and run the appropriate verification.
+5. Sync code/verifications, local execution plans, and Agenta task notes/statuses.
+6. Read back every Agenta write before reporting completion.
 
 ## References To Read
 
