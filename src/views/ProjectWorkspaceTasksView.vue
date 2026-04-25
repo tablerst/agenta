@@ -61,6 +61,7 @@ const projectSearchInput = ref("");
 const projectSearchResults = ref<SearchResponse | null>(null);
 const projectSearchLoading = ref(false);
 const projectSearchError = ref("");
+const showAdvancedFilters = ref(false);
 let projectSearchTimer: number | undefined;
 let projectSearchRequestId = 0;
 
@@ -164,6 +165,47 @@ const projectSearchRetrievalStatus = computed(() => {
   }
   return t("search.retrieval.lexicalFallback");
 });
+const activeTaskFilterLabels = computed(() => {
+  const labels: string[] = [];
+  if (selectedTaskKindFilter.value) {
+    labels.push(
+      t("tasks.filterSummary.taskKind", {
+        value: t(`status.taskKind.${selectedTaskKindFilter.value}`),
+      }),
+    );
+  }
+  if (selectedPriorityFilter.value) {
+    labels.push(
+      t("tasks.filterSummary.priority", {
+        value: t(`status.priority.${selectedPriorityFilter.value}`),
+      }),
+    );
+  }
+  if (selectedKnowledgeStatusFilter.value) {
+    labels.push(
+      t("tasks.filterSummary.knowledgeStatus", {
+        value: t(`status.knowledge.${selectedKnowledgeStatusFilter.value}`),
+      }),
+    );
+  }
+  if (taskCodePrefixFilter.value.trim()) {
+    labels.push(
+      t("tasks.filterSummary.taskCodePrefix", {
+        value: taskCodePrefixFilter.value.trim(),
+      }),
+    );
+  }
+  if (selectedSortBy.value !== "task_code" || selectedSortOrder.value !== "asc") {
+    labels.push(
+      t("tasks.filterSummary.sort", {
+        field: t(`tasks.sortBy.${selectedSortBy.value}`),
+        order: t(`tasks.sortOrder.${selectedSortOrder.value}`),
+      }),
+    );
+  }
+  return labels;
+});
+const activeTaskFilterCount = computed(() => activeTaskFilterLabels.value.length);
 
 type TaskQueryKey = "q" | "status" | "task" | "version";
 
@@ -302,6 +344,15 @@ function resetCreateTaskForm() {
   createTaskForm.description = "";
   createTaskForm.status = "ready";
   createTaskForm.priority = "normal";
+}
+
+function clearAdvancedTaskFilters() {
+  selectedTaskKindFilter.value = "";
+  selectedPriorityFilter.value = "";
+  selectedKnowledgeStatusFilter.value = "";
+  taskCodePrefixFilter.value = "";
+  selectedSortBy.value = "task_code";
+  selectedSortOrder.value = "asc";
 }
 
 function focusCreateTaskField() {
@@ -801,104 +852,136 @@ async function jumpToQueuedApproval(error: unknown) {
             </div>
           </div>
           <div class="workspace-filter-toolbar">
-            <div class="workspace-filter-title">
-              <ListFilter :size="14" />
-              <span>{{ t("tasks.filters") }}</span>
-            </div>
-            <label class="compact-field compact-field-wide">
-              <span class="field-label">{{ t("tasks.projectSearch.label") }}</span>
-              <div class="relative">
-                <Search
-                  :size="14"
-                  class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)]"
-                />
-                <input
-                  v-model="projectSearchInput"
-                  class="control-input compact-control pl-9"
-                  :placeholder="t('tasks.projectSearch.placeholder')"
-                />
+            <div class="workspace-filter-primary">
+              <label class="compact-field compact-field-wide workspace-search-field">
+                <span class="field-label">{{ t("tasks.projectSearch.label") }}</span>
+                <div class="relative">
+                  <Search
+                    :size="14"
+                    class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)]"
+                  />
+                  <input
+                    v-model="projectSearchInput"
+                    class="control-input compact-control pl-9"
+                    :placeholder="t('tasks.projectSearch.placeholder')"
+                  />
+                </div>
+              </label>
+              <label class="compact-field">
+                <span class="field-label">{{ t("routes.projects.sections.versions") }}</span>
+                <select
+                  class="control-select compact-control"
+                  :value="selectedVersionId"
+                  @change="updateVersionFilter(($event.target as HTMLSelectElement).value)"
+                >
+                  <option value="">{{ t("tasks.allVersions") }}</option>
+                  <option v-for="version in projectsStore.versions" :key="version.version_id" :value="version.version_id">
+                    {{ version.name }}
+                  </option>
+                </select>
+              </label>
+              <label class="compact-field">
+                <span class="field-label">{{ t("common.status") }}</span>
+                <select
+                  class="control-select compact-control"
+                  :value="selectedStatus"
+                  @change="updateStatusFilter(($event.target as HTMLSelectElement).value)"
+                >
+                  <option value="">{{ t("tasks.allStatuses") }}</option>
+                  <option v-for="status in taskStatusOptions" :key="status" :value="status">
+                    {{ t(`status.task.${status}`) }}
+                  </option>
+                </select>
+              </label>
+              <div class="workspace-filter-actions">
+                <button
+                  class="secondary-action spotlight-surface"
+                  type="button"
+                  aria-controls="task-advanced-filters"
+                  :aria-expanded="showAdvancedFilters"
+                  @click="showAdvancedFilters = !showAdvancedFilters"
+                >
+                  <ListFilter :size="15" />
+                  {{
+                    activeTaskFilterCount > 0
+                      ? t("tasks.advancedFiltersWithCount", { count: activeTaskFilterCount })
+                      : t("tasks.advancedFilters")
+                  }}
+                </button>
+                <button class="primary-action spotlight-surface" type="button" @click="openCreateTask($event)">
+                  <Plus :size="15" />
+                  {{ t("tasks.createTaskAction") }}
+                </button>
               </div>
-            </label>
-            <label class="compact-field">
-              <span class="field-label">{{ t("routes.projects.sections.versions") }}</span>
-              <select
-                class="control-select compact-control"
-                :value="selectedVersionId"
-                @change="updateVersionFilter(($event.target as HTMLSelectElement).value)"
+            </div>
+
+            <div v-if="activeTaskFilterLabels.length > 0" class="filter-chip-row">
+              <span v-for="label in activeTaskFilterLabels" :key="label" class="filter-chip filter-chip-active">
+                {{ label }}
+              </span>
+              <button
+                class="icon-button spotlight-surface"
+                type="button"
+                :aria-label="t('tasks.clearAdvancedFilters')"
+                :title="t('tasks.clearAdvancedFilters')"
+                @click="clearAdvancedTaskFilters"
               >
-                <option value="">{{ t("tasks.allVersions") }}</option>
-                <option v-for="version in projectsStore.versions" :key="version.version_id" :value="version.version_id">
-                  {{ version.name }}
-                </option>
-              </select>
-            </label>
-            <label class="compact-field">
-              <span class="field-label">{{ t("common.status") }}</span>
-              <select
-                class="control-select compact-control"
-                :value="selectedStatus"
-                @change="updateStatusFilter(($event.target as HTMLSelectElement).value)"
-              >
-                <option value="">{{ t("tasks.allStatuses") }}</option>
-                <option v-for="status in taskStatusOptions" :key="status" :value="status">
-                  {{ t(`status.task.${status}`) }}
-                </option>
-              </select>
-            </label>
-            <label class="compact-field">
-              <span class="field-label">{{ t("tasks.fields.taskKind") }}</span>
-              <select v-model="selectedTaskKindFilter" class="control-select compact-control">
-                <option value="">{{ t("tasks.allTaskKinds") }}</option>
-                <option v-for="kind in taskKindOptions" :key="kind" :value="kind">
-                  {{ t(`status.taskKind.${kind}`) }}
-                </option>
-              </select>
-            </label>
-            <label class="compact-field">
-              <span class="field-label">{{ t("tasks.fields.priority") }}</span>
-              <select v-model="selectedPriorityFilter" class="control-select compact-control">
-                <option value="">{{ t("tasks.allPriorities") }}</option>
-                <option v-for="priority in taskPriorityOptions" :key="priority" :value="priority">
-                  {{ t(`status.priority.${priority}`) }}
-                </option>
-              </select>
-            </label>
-            <label class="compact-field">
-              <span class="field-label">{{ t("tasks.fields.knowledgeStatus") }}</span>
-              <select v-model="selectedKnowledgeStatusFilter" class="control-select compact-control">
-                <option value="">{{ t("tasks.allKnowledgeStatuses") }}</option>
-                <option v-for="status in knowledgeStatusOptions" :key="status" :value="status">
-                  {{ t(`status.knowledge.${status}`) }}
-                </option>
-              </select>
-            </label>
-            <label class="compact-field">
-              <span class="field-label">{{ t("tasks.fields.taskCode") }}</span>
-              <input
-                v-model="taskCodePrefixFilter"
-                class="control-input compact-control"
-                :placeholder="t('tasks.placeholders.taskCodePrefix')"
-              />
-            </label>
-            <label class="compact-field">
-              <span class="field-label">{{ t("tasks.fields.sortBy") }}</span>
-              <select v-model="selectedSortBy" class="control-select compact-control">
-                <option v-for="sortBy in taskSortOptions" :key="sortBy" :value="sortBy">
-                  {{ t(`tasks.sortBy.${sortBy}`) }}
-                </option>
-              </select>
-            </label>
-            <label class="compact-field">
-              <span class="field-label">{{ t("tasks.fields.sortOrder") }}</span>
-              <select v-model="selectedSortOrder" class="control-select compact-control">
-                <option value="asc">{{ t("tasks.sortOrder.asc") }}</option>
-                <option value="desc">{{ t("tasks.sortOrder.desc") }}</option>
-              </select>
-            </label>
-            <button class="primary-action spotlight-surface" type="button" @click="openCreateTask($event)">
-              <Plus :size="15" />
-              {{ t("tasks.createTaskAction") }}
-            </button>
+                <X :size="14" />
+              </button>
+            </div>
+
+            <div v-if="showAdvancedFilters" id="task-advanced-filters" class="workspace-advanced-filter-panel">
+              <label class="compact-field">
+                <span class="field-label">{{ t("tasks.fields.taskKind") }}</span>
+                <select v-model="selectedTaskKindFilter" class="control-select compact-control">
+                  <option value="">{{ t("tasks.allTaskKinds") }}</option>
+                  <option v-for="kind in taskKindOptions" :key="kind" :value="kind">
+                    {{ t(`status.taskKind.${kind}`) }}
+                  </option>
+                </select>
+              </label>
+              <label class="compact-field">
+                <span class="field-label">{{ t("tasks.fields.priority") }}</span>
+                <select v-model="selectedPriorityFilter" class="control-select compact-control">
+                  <option value="">{{ t("tasks.allPriorities") }}</option>
+                  <option v-for="priority in taskPriorityOptions" :key="priority" :value="priority">
+                    {{ t(`status.priority.${priority}`) }}
+                  </option>
+                </select>
+              </label>
+              <label class="compact-field">
+                <span class="field-label">{{ t("tasks.fields.knowledgeStatus") }}</span>
+                <select v-model="selectedKnowledgeStatusFilter" class="control-select compact-control">
+                  <option value="">{{ t("tasks.allKnowledgeStatuses") }}</option>
+                  <option v-for="status in knowledgeStatusOptions" :key="status" :value="status">
+                    {{ t(`status.knowledge.${status}`) }}
+                  </option>
+                </select>
+              </label>
+              <label class="compact-field">
+                <span class="field-label">{{ t("tasks.fields.taskCode") }}</span>
+                <input
+                  v-model="taskCodePrefixFilter"
+                  class="control-input compact-control"
+                  :placeholder="t('tasks.placeholders.taskCodePrefix')"
+                />
+              </label>
+              <label class="compact-field">
+                <span class="field-label">{{ t("tasks.fields.sortBy") }}</span>
+                <select v-model="selectedSortBy" class="control-select compact-control">
+                  <option v-for="sortBy in taskSortOptions" :key="sortBy" :value="sortBy">
+                    {{ t(`tasks.sortBy.${sortBy}`) }}
+                  </option>
+                </select>
+              </label>
+              <label class="compact-field">
+                <span class="field-label">{{ t("tasks.fields.sortOrder") }}</span>
+                <select v-model="selectedSortOrder" class="control-select compact-control">
+                  <option value="asc">{{ t("tasks.sortOrder.asc") }}</option>
+                  <option value="desc">{{ t("tasks.sortOrder.desc") }}</option>
+                </select>
+              </label>
+            </div>
           </div>
         </section>
 
@@ -1192,7 +1275,7 @@ async function jumpToQueuedApproval(error: unknown) {
             role="tabpanel"
             tabindex="0"
           >
-            <div class="grid gap-5 xl:grid-cols-[minmax(0,0.66fr)_minmax(320px,0.34fr)]">
+            <div class="grid gap-5 2xl:grid-cols-[minmax(360px,0.62fr)_minmax(320px,0.38fr)]">
               <section class="panel-section">
                 <p class="section-label">{{ t("tasks.editTask") }}</p>
                 <div class="space-y-3">
@@ -1233,7 +1316,7 @@ async function jumpToQueuedApproval(error: unknown) {
                 <JsonBlock :value="selectedTask" />
               </section>
             </div>
-            <section class="grid gap-5 xl:grid-cols-2">
+            <section class="grid gap-5 2xl:grid-cols-2">
               <article class="panel-section space-y-4">
                 <div class="flex items-center justify-between gap-3">
                   <p class="section-label">{{ t("tasks.relationships.parentChild") }}</p>

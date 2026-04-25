@@ -65,6 +65,11 @@ const flatResults = computed(() => {
   ];
 });
 
+const activeResultId = computed(() => {
+  const active = flatResults.value[activeIndex.value];
+  return active ? globalSearchOptionId(active.key) : undefined;
+});
+
 const retrievalStatus = computed(() => {
   if (!search.results) {
     return "";
@@ -95,6 +100,8 @@ watch(
     search.clear();
     inputValue.value = "";
     activeIndex.value = 0;
+    await nextTick();
+    shell.restoreSearchFocus();
   },
 );
 
@@ -150,6 +157,10 @@ function isActive(key: string) {
   return flatResults.value[activeIndex.value]?.key === key;
 }
 
+function globalSearchOptionId(key: string) {
+  return `global-search-${key.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+}
+
 function onInputKeydown(event: KeyboardEvent) {
   if (event.key === "ArrowDown") {
     event.preventDefault();
@@ -203,13 +214,21 @@ async function jumpToTask(taskId: string) {
       class="fixed inset-0 z-50 flex items-start justify-center bg-black/50 px-4 py-16 backdrop-blur-sm"
       @click.self="close"
     >
-      <section class="glass-panel flex w-full max-w-3xl flex-col overflow-hidden">
+      <section
+        class="glass-panel flex w-full max-w-3xl flex-col overflow-hidden"
+        role="dialog"
+        aria-modal="true"
+        :aria-label="t('search.dialogLabel')"
+      >
         <div class="border-b border-[var(--border-color)] px-5 py-4">
           <label class="flex items-center gap-3">
             <Search :size="18" class="text-[var(--text-muted)]" />
             <input
               ref="inputEl"
               v-model="inputValue"
+              aria-controls="global-search-results"
+              :aria-activedescendant="activeResultId"
+              :aria-label="t('search.placeholder')"
               class="w-full bg-transparent text-base text-[var(--text-main)] outline-none"
               :placeholder="t('search.placeholder')"
               @keydown="onInputKeydown"
@@ -220,19 +239,31 @@ async function jumpToTask(taskId: string) {
             <span v-if="activeFilterLabels.length > 0"> · {{ activeFilterLabels.join(" · ") }}</span>
           </p>
           <div class="mt-3 flex flex-wrap items-center gap-2">
-            <select v-model="selectedTaskKind" class="quiet-control-select compact-control max-w-[11rem]">
+            <select
+              v-model="selectedTaskKind"
+              class="quiet-control-select compact-control max-w-[11rem]"
+              :aria-label="t('tasks.fields.taskKind')"
+            >
               <option value="">{{ t("tasks.allTaskKinds") }}</option>
               <option v-for="kind in taskKindOptions" :key="kind" :value="kind">
                 {{ t(`status.taskKind.${kind}`) }}
               </option>
             </select>
-            <select v-model="selectedPriority" class="quiet-control-select compact-control max-w-[10rem]">
+            <select
+              v-model="selectedPriority"
+              class="quiet-control-select compact-control max-w-[10rem]"
+              :aria-label="t('tasks.fields.priority')"
+            >
               <option value="">{{ t("tasks.allPriorities") }}</option>
               <option v-for="priority in taskPriorityOptions" :key="priority" :value="priority">
                 {{ t(`status.priority.${priority}`) }}
               </option>
             </select>
-            <select v-model="selectedKnowledgeStatus" class="quiet-control-select compact-control max-w-[11rem]">
+            <select
+              v-model="selectedKnowledgeStatus"
+              class="quiet-control-select compact-control max-w-[11rem]"
+              :aria-label="t('tasks.fields.knowledgeStatus')"
+            >
               <option value="">{{ t("tasks.allKnowledgeStatuses") }}</option>
               <option v-for="status in knowledgeStatusOptions" :key="status" :value="status">
                 {{ t(`status.knowledge.${status}`) }}
@@ -249,20 +280,29 @@ async function jumpToTask(taskId: string) {
           </div>
         </div>
 
-        <div class="max-h-[60vh] overflow-y-auto px-3 py-3">
+        <div
+          id="global-search-results"
+          class="max-h-[60vh] overflow-y-auto px-3 py-3"
+          role="listbox"
+          :aria-label="t('search.resultsLabel')"
+        >
           <div v-if="search.loading" class="empty-state">{{ t("search.loading") }}</div>
           <div v-else-if="!search.results" class="empty-state">
             {{ t("search.empty") }}
           </div>
           <div v-else class="space-y-4">
-            <section>
+            <section role="group" :aria-label="t('search.tasks')">
               <p class="section-label">{{ t("search.tasks") }}</p>
               <button
                 v-for="(item, index) in search.results.tasks"
                 :key="item.task_id"
+                :id="globalSearchOptionId(`task:${item.task_id}`)"
                 v-spotlight
                 class="list-row spotlight-surface"
                 :class="{ 'border-[var(--accent-color)]/60': isActive(`task:${item.task_id}`) }"
+                role="option"
+                :aria-selected="isActive(`task:${item.task_id}`)"
+                tabindex="-1"
                 @mouseenter="setActive(index)"
                 @click="jumpToTask(item.task_id)"
               >
@@ -301,14 +341,18 @@ async function jumpToTask(taskId: string) {
               </button>
             </section>
 
-            <section>
+            <section role="group" :aria-label="t('search.activity')">
               <p class="section-label">{{ t("search.activity") }}</p>
               <button
                 v-for="(item, index) in search.results.activities"
                 :key="item.activity_id"
+                :id="globalSearchOptionId(`activity:${item.activity_id}`)"
                 v-spotlight
                 class="list-row spotlight-surface"
                 :class="{ 'border-[var(--accent-color)]/60': isActive(`activity:${item.activity_id}`) }"
+                role="option"
+                :aria-selected="isActive(`activity:${item.activity_id}`)"
+                tabindex="-1"
                 @mouseenter="setActive(search.results.tasks.length + index)"
                 @click="jumpToTask(item.task_id)"
               >

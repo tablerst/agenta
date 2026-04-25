@@ -21,6 +21,7 @@ export const useShellStore = defineStore("shell", () => {
   const locale = ref<AppLocale>(detectBrowserLocale());
   const theme = ref<ThemeMode>("system");
   const searchOpen = ref(false);
+  const searchTrigger = ref<HTMLElement | null>(null);
   const sidebarCollapsed = ref(false);
   const mobileSidebarOpen = ref(false);
   const isCompactViewport = ref(false);
@@ -111,12 +112,21 @@ export const useShellStore = defineStore("shell", () => {
     );
   }
 
-  function openSearch() {
+  function openSearch(trigger?: HTMLElement | null) {
+    searchTrigger.value = trigger ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
     searchOpen.value = true;
   }
 
   function closeSearch() {
     searchOpen.value = false;
+  }
+
+  function restoreSearchFocus() {
+    const target = searchTrigger.value;
+    searchTrigger.value = null;
+    if (target?.isConnected) {
+      target.focus({ preventScroll: true });
+    }
   }
 
   function toggleSidebar() {
@@ -159,6 +169,7 @@ export const useShellStore = defineStore("shell", () => {
     initialize,
     openSearch,
     pushNotice,
+    restoreSearchFocus,
     setLocale,
     setTheme,
     toggleSidebar,

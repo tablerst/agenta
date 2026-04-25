@@ -144,7 +144,7 @@ function navigateAndClose(navigate: () => void) {
         </RouterLink>
       </nav>
 
-      <div class="mt-auto flex flex-col gap-3">
+      <div class="shell-sidebar-footer-stack">
         <div class="shell-sidebar-footer">
           <button
             class="search-mock-input spotlight-surface"

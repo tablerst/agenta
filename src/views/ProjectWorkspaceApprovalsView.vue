@@ -391,7 +391,7 @@ function statusClass(status: ApprovalStatus) {
             </span>
           </div>
 
-          <div class="grid gap-4 md:grid-cols-2">
+          <div class="grid gap-4 xl:grid-cols-2">
             <section class="panel-section">
               <p class="section-label">{{ t("approvals.request") }}</p>
               <dl class="space-y-2 text-sm">

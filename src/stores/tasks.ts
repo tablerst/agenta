@@ -20,6 +20,10 @@ function extractTaskRecord(value: unknown): Task {
   return value as Task;
 }
 
+function ensureArray<T>(value: T[] | null | undefined): T[] {
+  return Array.isArray(value) ? value : [];
+}
+
 export const useTasksStore = defineStore("tasks", () => {
   const tasks = ref<Task[]>([]);
   const taskSummary = ref<TaskListSummary | null>(null);
@@ -59,16 +63,16 @@ export const useTasksStore = defineStore("tasks", () => {
     loadingDetail.value = true;
     try {
       const envelope = await desktopBridge.task({ action: "get_context", task });
-      const context = envelope.result as TaskContextPayload;
+      const context = envelope.result as Partial<TaskContextPayload> & { task: Task };
 
       currentTask.value = context.task;
-      parentTask.value = context.parent;
-      childTasks.value = context.children;
-      blockedByTasks.value = context.blocked_by;
-      blockingTasks.value = context.blocking;
-      notes.value = context.notes;
-      attachments.value = context.attachments;
-      activities.value = context.recent_activities;
+      parentTask.value = context.parent ?? null;
+      childTasks.value = ensureArray(context.children);
+      blockedByTasks.value = ensureArray(context.blocked_by);
+      blockingTasks.value = ensureArray(context.blocking);
+      notes.value = ensureArray(context.notes);
+      attachments.value = ensureArray(context.attachments);
+      activities.value = ensureArray(context.recent_activities);
     } finally {
       loadingDetail.value = false;
     }
