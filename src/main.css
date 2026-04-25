@@ -258,6 +258,7 @@ html[data-theme="dark"] {
 
   .app-shell-sidebar-collapsed .shell-sidebar-inner {
     @apply items-center px-3;
+    overflow: visible;
   }
 
   .app-shell-sidebar-collapsed .shell-brand {
@@ -301,9 +302,10 @@ html[data-theme="dark"] {
   .app-shell-sidebar-collapsed .sidebar-setting-flyout,
   .sidebar-setting-flyout-collapsed {
     right: auto;
-    left: 50%;
-    width: 190px;
-    transform: translateX(-50%);
+    left: calc(100% + 12px);
+    width: 180px;
+    transform: none;
+    transform-origin: bottom left;
   }
 
   .page-grid {

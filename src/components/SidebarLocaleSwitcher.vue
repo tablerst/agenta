@@ -121,7 +121,7 @@ onBeforeUnmount(() => {
         :aria-checked="shell.locale === option"
         @click="selectLocale(option)"
       >
-        <span class="flex-1 text-left">{{ t(getLocaleLabelKey(option)) }}</span>
+        <span class="min-w-0 flex-1 truncate text-left">{{ t(getLocaleLabelKey(option)) }}</span>
         <Check v-if="shell.locale === option" :size="14" />
       </button>
     </div>
