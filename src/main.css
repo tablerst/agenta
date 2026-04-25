@@ -1303,10 +1303,9 @@ html[data-theme="dark"] {
   }
 
   .runtime-log-fields {
-    @apply mt-3 overflow-x-auto px-3 py-3 text-[12px] leading-6 text-[var(--text-main)];
+    margin-top: 12px;
+    padding-left: 12px;
     border-left: 1px solid var(--border-color);
-    background: color-mix(in srgb, var(--bg-panel) 48%, transparent);
-    font-family: "JetBrains Mono", "Fira Code", "SF Mono", monospace;
   }
 
   .runtime-page {
@@ -1917,6 +1916,12 @@ html[data-theme="dark"] {
 .json-block .vjs-tree-brackets:hover,
 .json-block .vjs-carets:hover {
   color: var(--text-main);
+}
+
+.json-block.runtime-log-json {
+  padding: 12px;
+  max-height: 260px;
+  background: color-mix(in srgb, var(--bg-panel) 62%, transparent);
 }
 
 @media (max-width: 1200px) {

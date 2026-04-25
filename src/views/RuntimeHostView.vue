@@ -10,6 +10,7 @@ import {
 import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
 
+import JsonBlock from "../components/JsonBlock.vue";
 import { formatDateTime } from "../lib/format";
 import type { RuntimeConsoleContext } from "../lib/runtimeConsole";
 import { buildRuntimeWorkspacePath } from "../lib/runtimeWorkspace";
@@ -368,9 +369,15 @@ function openSync() {
                 <span>{{ entry.component }}</span>
               </div>
               <p class="runtime-log-message">{{ entry.message }}</p>
-              <pre v-if="runtimeConsole.formatFields(entry.fields)" class="runtime-log-fields">{{
-                runtimeConsole.formatFields(entry.fields)
-              }}</pre>
+              <div v-if="runtimeConsole.hasLogFields(entry.fields)" class="runtime-log-fields">
+                <JsonBlock
+                  :value="entry.fields"
+                  :deep="1"
+                  class="runtime-log-json"
+                  max-height="260px"
+                  root-path="fields"
+                />
+              </div>
             </article>
           </div>
         </aside>

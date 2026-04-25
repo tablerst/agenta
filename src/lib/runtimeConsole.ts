@@ -283,11 +283,8 @@ function createRuntimeConsoleModel() {
     logs.value = [...logs.value, entry].slice(-capacity);
   }
 
-  function formatFields(fields: Record<string, unknown>) {
-    if (Object.keys(fields).length === 0) {
-      return "";
-    }
-    return JSON.stringify(fields, null, 2);
+  function hasLogFields(fields: Record<string, unknown>) {
+    return Object.keys(fields).length > 0;
   }
 
   function toggleDestination(destination: McpLogDestination) {
@@ -682,7 +679,7 @@ function createRuntimeConsoleModel() {
     canSaveDefaults,
     endpointLabel,
     form,
-    formatFields,
+    hasLogFields,
     formatLogDestination,
     formatLogDestinations,
     formatLogLevel,
