@@ -16,6 +16,7 @@ import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 
 import JsonBlock from "../components/JsonBlock.vue";
+import MarkdownBlock from "../components/MarkdownBlock.vue";
 import { DesktopBridgeError, desktopBridge } from "../lib/desktop";
 import { formatDesktopError } from "../lib/errorMessage";
 import { formatDateTime } from "../lib/format";
@@ -812,7 +813,7 @@ async function jumpToQueuedApproval(error: unknown) {
 
 <template>
   <section class="workspace-section-grid">
-    <aside class="workspace-list-pane">
+    <aside class="workspace-list-pane task-list-pane">
       <div class="workspace-pane-stack">
         <section class="workspace-list-toolbar">
           <div class="workspace-list-toolbar-head">
@@ -1313,7 +1314,7 @@ async function jumpToQueuedApproval(error: unknown) {
 
               <section class="panel-section">
                 <p class="section-label">{{ t("tasks.contextDigest") }}</p>
-                <JsonBlock :value="selectedTask" />
+                <JsonBlock :value="selectedTask" root-path="task" />
               </section>
             </div>
             <section class="grid gap-5 2xl:grid-cols-2">
@@ -1464,7 +1465,7 @@ async function jumpToQueuedApproval(error: unknown) {
                   </div>
                   <span class="text-xs text-[var(--text-muted)]">{{ formatDateTime(note.created_at) }}</span>
                 </div>
-                <p class="text-sm leading-6 text-[var(--text-main)]">{{ note.content }}</p>
+                <MarkdownBlock :content="note.content" />
               </article>
               <div v-if="tasksStore.notes.length === 0" class="empty-state">
                 {{ t("tasks.notesEmpty") }}
@@ -1543,7 +1544,7 @@ async function jumpToQueuedApproval(error: unknown) {
                   {{ formatDateTime(item.created_at) }}
                 </span>
               </div>
-              <p class="text-sm text-[var(--text-main)]">{{ item.content }}</p>
+              <MarkdownBlock :content="item.content" />
               <div v-if="Object.keys(item.metadata_json || {}).length > 0" class="mt-3">
                 <JsonBlock :value="item.metadata_json" />
               </div>
