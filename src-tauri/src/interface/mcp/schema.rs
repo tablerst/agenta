@@ -27,6 +27,10 @@ pub struct ContextInitToolInput {
     pub instructions: Option<String>,
     /// Optional memory directory written into the manifest. Defaults to `memory`.
     pub memory_dir: Option<String>,
+    /// Optional default recovery task UUID written into the manifest.
+    pub entry_task_id: Option<String>,
+    /// Optional default recovery task code written into the manifest.
+    pub entry_task_code: Option<String>,
     /// When true, overwrite an existing manifest if its contents differ.
     pub force: Option<bool>,
     /// When true, do not write files and only report the resolved target and outcome.
@@ -40,6 +44,8 @@ pub struct ContextInitRecord {
     pub manifest_path: String,
     pub status: String,
     pub used_defaults: bool,
+    pub entry_task_id: Option<String>,
+    pub entry_task_code: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, JsonSchema)]
@@ -169,6 +175,8 @@ impl From<ContextInitResult> for ContextInitRecord {
             manifest_path: result.manifest_path.display().to_string(),
             status: result.status.to_string(),
             used_defaults: result.used_defaults,
+            entry_task_id: result.entry_task_id,
+            entry_task_code: result.entry_task_code,
         }
     }
 }
@@ -334,6 +342,14 @@ pub struct TaskContextGetToolInput {
     pub task: String,
     /// Optional maximum number of recent activities to include. Defaults to 20 and is clamped to the server range.
     pub recent_activity_limit: Option<usize>,
+    /// Whether to include note records. Defaults to true.
+    pub include_notes: Option<bool>,
+    /// Optional maximum number of note records to include when notes are enabled.
+    pub notes_limit: Option<usize>,
+    /// Whether to include attachment records. Defaults to true.
+    pub include_attachments: Option<bool>,
+    /// Optional maximum number of attachment records to include when attachments are enabled.
+    pub attachments_limit: Option<usize>,
 }
 
 /// List tasks with optional project, version, and status filters.
@@ -507,6 +523,10 @@ pub struct TaskRecord {
     pub summary: Option<String>,
     /// Optional long-form description.
     pub description: Option<String>,
+    /// Compact task-level text used for search recall.
+    pub task_search_summary: String,
+    /// Compact task-level digest used for lightweight context recovery.
+    pub task_context_digest: String,
     /// Search-friendly summary of the latest note when one exists.
     pub latest_note_summary: Option<String>,
     /// Rollup showing whether the task has reusable knowledge.
@@ -671,6 +691,8 @@ impl From<Task> for TaskRecord {
             title: task.title,
             summary: task.summary,
             description: task.description,
+            task_search_summary: task.task_search_summary,
+            task_context_digest: task.task_context_digest,
             latest_note_summary: task.latest_note_summary,
             knowledge_status: task.knowledge_status,
             status: task.status,
@@ -715,6 +737,8 @@ impl From<TaskDetail> for TaskRecord {
             title: task.title,
             summary: task.summary,
             description: task.description,
+            task_search_summary: task.task_search_summary,
+            task_context_digest: task.task_context_digest,
             latest_note_summary: task.latest_note_summary,
             knowledge_status: task.knowledge_status,
             status: task.status,
@@ -1039,6 +1063,10 @@ pub struct SearchQueryToolInput {
 pub struct SearchTaskHitRecord {
     /// Stable task UUID for the hit.
     pub task_id: String,
+    /// Stable project UUID that owns the task.
+    pub project_id: String,
+    /// Linked version UUID when one exists.
+    pub version_id: Option<String>,
     /// Optional stable task code for grouped flows.
     pub task_code: Option<String>,
     /// Task context role.
@@ -1063,6 +1091,12 @@ pub struct SearchTaskHitRecord {
     pub evidence_source: Option<String>,
     /// Short evidence snippet aligned with the primary evidence field.
     pub evidence_snippet: Option<String>,
+    /// Activity UUID for the evidence source when the hit was explained by activity/chunk content.
+    pub evidence_activity_id: Option<String>,
+    /// Activity chunk UUID for second-hop evidence reads.
+    pub evidence_chunk_id: Option<String>,
+    /// Attachment UUID for second-hop evidence reads.
+    pub evidence_attachment_id: Option<String>,
 }
 
 /// Structured MCP representation of an activity search hit.
@@ -1072,10 +1106,18 @@ pub struct SearchActivityHitRecord {
     pub activity_id: String,
     /// Stable task UUID that owns the activity.
     pub task_id: String,
+    /// Stable project UUID that owns the task.
+    pub project_id: String,
+    /// Linked version UUID when one exists.
+    pub version_id: Option<String>,
+    /// Title of the task that owns the activity.
+    pub task_title: String,
     /// Activity kind as stored by the search index.
     pub kind: String,
     /// Search-oriented activity summary.
     pub summary: String,
+    /// Retrieval lane that produced the hit. Activity hits are currently lexical-only.
+    pub retrieval_source: String,
     /// Optional lexical score used for ordering.
     pub score: Option<f64>,
     /// Indexed fields that matched the lexical query terms.
@@ -1084,6 +1126,10 @@ pub struct SearchActivityHitRecord {
     pub evidence_source: Option<String>,
     /// Short evidence snippet aligned with the primary evidence field.
     pub evidence_snippet: Option<String>,
+    /// Activity chunk UUID for second-hop evidence reads.
+    pub evidence_chunk_id: Option<String>,
+    /// Attachment UUID for second-hop evidence reads.
+    pub evidence_attachment_id: Option<String>,
 }
 
 /// Structured MCP representation of indexed field coverage.
@@ -1122,6 +1168,46 @@ pub struct SearchMetaRecord {
     pub vector_status: String,
     /// Pending task vector index jobs still waiting to be processed.
     pub pending_index_jobs: usize,
+    /// Whether semantic retrieval was attempted for the task bucket.
+    pub semantic_attempted: bool,
+    /// Whether semantic retrieval contributed at least one task candidate.
+    pub semantic_used: bool,
+    /// Semantic retrieval error when the system fell back to lexical results.
+    pub semantic_error: Option<String>,
+    /// Number of semantic task candidates returned before fusion and filtering.
+    pub semantic_candidate_count: usize,
+}
+
+/// Load a second-hop evidence source returned by search_query.
+#[derive(Debug, Deserialize, JsonSchema, Default)]
+pub struct SearchEvidenceGetToolInput {
+    /// Activity chunk UUID returned as `evidence_chunk_id`.
+    pub chunk_id: Option<String>,
+    /// Attachment UUID returned as `evidence_attachment_id`.
+    pub attachment_id: Option<String>,
+}
+
+/// Structured text payload for a search evidence source.
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+pub struct SearchEvidenceRecord {
+    pub source_kind: String,
+    pub task_id: String,
+    pub project_id: String,
+    pub version_id: Option<String>,
+    pub task_title: String,
+    pub activity_id: Option<String>,
+    pub chunk_id: Option<String>,
+    pub chunk_index: Option<i64>,
+    pub attachment_id: Option<String>,
+    pub activity_kind: Option<String>,
+    pub summary: String,
+    pub text: String,
+}
+
+/// Result returned by search evidence lookup.
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+pub struct SearchEvidenceGetToolOutput {
+    pub evidence: SearchEvidenceRecord,
 }
 
 /// Result returned by local search queries.
@@ -1135,6 +1221,25 @@ pub struct SearchQueryToolOutput {
     pub activities: Vec<SearchActivityHitRecord>,
     /// Search behavior metadata describing index scope and sorting.
     pub meta: SearchMetaRecord,
+}
+
+impl From<crate::service::SearchEvidenceDetail> for SearchEvidenceRecord {
+    fn from(evidence: crate::service::SearchEvidenceDetail) -> Self {
+        Self {
+            source_kind: evidence.source_kind,
+            task_id: evidence.task_id,
+            project_id: evidence.project_id,
+            version_id: evidence.version_id,
+            task_title: evidence.task_title,
+            activity_id: evidence.activity_id,
+            chunk_id: evidence.chunk_id,
+            chunk_index: evidence.chunk_index,
+            attachment_id: evidence.attachment_id,
+            activity_kind: evidence.activity_kind,
+            summary: evidence.summary,
+            text: evidence.text,
+        }
+    }
 }
 
 impl SearchQueryToolOutput {
@@ -1151,6 +1256,8 @@ impl SearchQueryToolOutput {
                 .into_iter()
                 .map(|task| SearchTaskHitRecord {
                     task_id: task.task_id,
+                    project_id: task.project_id,
+                    version_id: task.version_id,
                     task_code: task.task_code,
                     task_kind: task.task_kind,
                     title: task.title,
@@ -1163,6 +1270,9 @@ impl SearchQueryToolOutput {
                     matched_fields: task.matched_fields,
                     evidence_source: task.evidence_source,
                     evidence_snippet: task.evidence_snippet,
+                    evidence_activity_id: task.evidence_activity_id,
+                    evidence_chunk_id: task.evidence_chunk_id,
+                    evidence_attachment_id: task.evidence_attachment_id,
                 })
                 .collect(),
             activities: activities
@@ -1170,12 +1280,18 @@ impl SearchQueryToolOutput {
                 .map(|activity| SearchActivityHitRecord {
                     activity_id: activity.activity_id,
                     task_id: activity.task_id,
+                    project_id: activity.project_id,
+                    version_id: activity.version_id,
+                    task_title: activity.task_title,
                     kind: activity.kind,
                     summary: activity.summary,
+                    retrieval_source: activity.retrieval_source,
                     score: activity.score,
                     matched_fields: activity.matched_fields,
                     evidence_source: activity.evidence_source,
                     evidence_snippet: activity.evidence_snippet,
+                    evidence_chunk_id: activity.evidence_chunk_id,
+                    evidence_attachment_id: activity.evidence_attachment_id,
                 })
                 .collect(),
             meta: SearchMetaRecord {
@@ -1194,6 +1310,10 @@ impl SearchQueryToolOutput {
                 vector_backend: meta.vector_backend,
                 vector_status: meta.vector_status,
                 pending_index_jobs: meta.pending_index_jobs,
+                semantic_attempted: meta.semantic_attempted,
+                semantic_used: meta.semantic_used,
+                semantic_error: meta.semantic_error,
+                semantic_candidate_count: meta.semantic_candidate_count,
             },
         }
     }

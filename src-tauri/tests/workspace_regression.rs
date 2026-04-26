@@ -21,8 +21,9 @@ use agenta_lib::{
     error::AppError,
     service::{
         ApprovalQuery, ContextInitInput, ContextInitStatus, CreateAttachmentInput, CreateNoteInput,
-        CreateProjectInput, CreateTaskInput, CreateVersionInput, PageRequest, SearchInput,
-        SortOrder, TaskQuery, TaskSortBy, UpdateProjectInput, UpdateTaskInput, UpdateVersionInput,
+        CreateProjectInput, CreateTaskInput, CreateVersionInput, PageRequest, SearchEvidenceInput,
+        SearchInput, SortOrder, TaskQuery, TaskSortBy, UpdateProjectInput, UpdateTaskInput,
+        UpdateVersionInput,
     },
 };
 
@@ -433,6 +434,8 @@ fn write_vector_test_config(
 struct MockSearchServerState {
     embedding_batch_sizes: Arc<Mutex<Vec<usize>>>,
     upsert_batch_sizes: Arc<Mutex<Vec<usize>>>,
+    upsert_ids: Arc<Mutex<Vec<Vec<String>>>>,
+    upsert_metadatas: Arc<Mutex<Vec<Vec<Value>>>>,
     upsert_documents: Arc<Mutex<Vec<Vec<String>>>>,
 }
 
@@ -471,6 +474,16 @@ async fn search_upsert(
 ) -> StatusCode {
     let ids = payload["ids"].as_array().cloned().unwrap_or_default();
     state.upsert_batch_sizes.lock().await.push(ids.len());
+    state.upsert_ids.lock().await.push(
+        ids.iter()
+            .filter_map(|value| value.as_str().map(str::to_string))
+            .collect(),
+    );
+    state
+        .upsert_metadatas
+        .lock()
+        .await
+        .push(payload["metadatas"].as_array().cloned().unwrap_or_default());
     let documents = payload["documents"]
         .as_array()
         .cloned()
@@ -480,6 +493,56 @@ async fn search_upsert(
         .collect::<Vec<_>>();
     state.upsert_documents.lock().await.push(documents);
     StatusCode::OK
+}
+
+async fn search_vector_query(
+    State(state): State<MockSearchServerState>,
+    Path(_collection_id): Path<String>,
+    Json(_payload): Json<Value>,
+) -> Json<Value> {
+    let ids = state.upsert_ids.lock().await.clone();
+    let metadatas = state.upsert_metadatas.lock().await.clone();
+    let documents = state.upsert_documents.lock().await.clone();
+    let mut entries = ids
+        .into_iter()
+        .zip(metadatas.into_iter())
+        .zip(documents.into_iter())
+        .flat_map(|((ids, metadatas), documents)| {
+            ids.into_iter()
+                .zip(metadatas.into_iter())
+                .zip(documents.into_iter())
+                .map(|((id, metadata), document)| (id, metadata, document))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    entries.sort_by_key(|(_, metadata, _)| {
+        if metadata["source_kind"] == "activity_chunk" {
+            0
+        } else {
+            1
+        }
+    });
+    let ids = entries
+        .iter()
+        .map(|entry| entry.0.clone())
+        .collect::<Vec<_>>();
+    let metadatas = entries
+        .iter()
+        .map(|entry| entry.1.clone())
+        .collect::<Vec<_>>();
+    let documents = entries
+        .iter()
+        .map(|entry| entry.2.clone())
+        .collect::<Vec<_>>();
+    let distances = (0..entries.len())
+        .map(|index| index as f64 * 0.01)
+        .collect::<Vec<_>>();
+    Json(json!({
+        "ids": [ids],
+        "distances": [distances],
+        "metadatas": [metadatas],
+        "documents": [documents],
+    }))
 }
 
 async fn spawn_mock_search_server(
@@ -495,6 +558,10 @@ async fn spawn_mock_search_server(
         .route(
             "/api/v2/tenants/default_tenant/databases/default_database/collections/{collection_id}/upsert",
             post(search_upsert),
+        )
+        .route(
+            "/api/v2/tenants/default_tenant/databases/default_database/collections/{collection_id}/query",
+            post(search_vector_query),
         )
         .route("/v1/embeddings", post(search_embeddings))
         .with_state(state.clone());
@@ -1057,6 +1124,26 @@ async fn search_quality_golden_queries_hold_expected_hits() -> Result<(), Box<dy
                 .as_deref()
                 .is_some_and(|snippet| snippet.contains("archival-keyword-alpha"))
     }));
+    let archival_hit = archival_note
+        .tasks
+        .iter()
+        .find(|hit| hit.task_code.as_deref() == Some("InitCtx-01"))
+        .expect("archival note task hit");
+    let archival_chunk_id = archival_hit
+        .evidence_chunk_id
+        .clone()
+        .expect("archival note should expose evidence chunk id");
+    assert!(archival_hit.evidence_activity_id.is_some());
+    let archival_evidence = runtime
+        .service
+        .get_search_evidence(SearchEvidenceInput {
+            chunk_id: Some(archival_chunk_id),
+            attachment_id: None,
+        })
+        .await?;
+    assert_eq!(archival_evidence.source_kind, "activity_chunk");
+    assert_eq!(archival_evidence.task_id, init_ctx.task_id.to_string());
+    assert!(archival_evidence.text.contains("archival-keyword-alpha"));
 
     let attachment_body = runtime
         .service
@@ -1074,6 +1161,29 @@ async fn search_quality_golden_queries_hold_expected_hits() -> Result<(), Box<dy
         hit.task_code.as_deref() == Some("SearchV2-08")
             && hit.evidence_source.as_deref() == Some("activity_search_text")
     }));
+    let attachment_hit = attachment_body
+        .tasks
+        .iter()
+        .find(|hit| hit.task_code.as_deref() == Some("SearchV2-08"))
+        .expect("attachment task hit");
+    let attachment_id = attachment_hit
+        .evidence_attachment_id
+        .clone()
+        .expect("attachment evidence should expose attachment id");
+    assert!(attachment_hit.evidence_chunk_id.is_some());
+    let attachment_evidence = runtime
+        .service
+        .get_search_evidence(SearchEvidenceInput {
+            chunk_id: None,
+            attachment_id: Some(attachment_id),
+        })
+        .await?;
+    assert_eq!(attachment_evidence.source_kind, "attachment");
+    assert_eq!(
+        attachment_evidence.task_id,
+        attachment_task.task_id.to_string()
+    );
+    assert!(attachment_evidence.text.contains("attachment-needle-omega"));
 
     let deep_chunk_search = runtime
         .service
@@ -1202,6 +1312,32 @@ async fn task_search_reindex_jobs_persist_when_vector_runtime_is_unavailable(
             created_by: Some("search-test".to_string()),
         })
         .await?;
+
+    let fallback_search = runtime
+        .service
+        .search(SearchInput {
+            text: Some("Vector job source".to_string()),
+            project: Some("search-index-jobs".to_string()),
+            version: Some(version.version_id.to_string()),
+            status: None,
+            priority: None,
+            knowledge_status: None,
+            task_kind: None,
+            task_code_prefix: None,
+            title_prefix: None,
+            limit: Some(10),
+            all_projects: false,
+        })
+        .await?;
+    assert_eq!(fallback_search.meta.retrieval_mode, "lexical_only");
+    assert!(fallback_search.meta.semantic_attempted);
+    assert!(!fallback_search.meta.semantic_used);
+    assert_eq!(fallback_search.meta.semantic_candidate_count, 0);
+    assert!(fallback_search
+        .meta
+        .semantic_error
+        .as_deref()
+        .is_some_and(|error| error.contains("chroma endpoint is unavailable")));
 
     tokio::time::sleep(std::time::Duration::from_millis(250)).await;
 
@@ -1337,8 +1473,28 @@ async fn search_backfill_batches_embeddings_and_upserts_task_documents(
         Some((summary.run_id, "completed", 2))
     );
 
-    assert_eq!(*state.embedding_batch_sizes.lock().await, vec![1, 1]);
-    assert_eq!(*state.upsert_batch_sizes.lock().await, vec![1, 1]);
+    assert_eq!(*state.embedding_batch_sizes.lock().await, vec![2, 2]);
+    assert_eq!(*state.upsert_batch_sizes.lock().await, vec![2, 2]);
+    let upsert_ids = state.upsert_ids.lock().await.clone();
+    let flattened_ids = upsert_ids.into_iter().flatten().collect::<Vec<_>>();
+    assert!(flattened_ids.contains(&task_a.task_id.to_string()));
+    assert!(flattened_ids.contains(&task_b.task_id.to_string()));
+    assert!(flattened_ids
+        .iter()
+        .any(|id| id.starts_with("activity_chunk:")));
+    let upsert_metadatas = state.upsert_metadatas.lock().await.clone();
+    let flattened_metadatas = upsert_metadatas.into_iter().flatten().collect::<Vec<_>>();
+    assert!(flattened_metadatas.iter().any(|metadata| {
+        metadata["source_kind"] == "activity_chunk"
+            && metadata["task_id"] == task_a.task_id.to_string()
+            && metadata["activity_id"].is_string()
+            && metadata["chunk_id"].is_string()
+    }));
+    assert!(flattened_metadatas.iter().any(|metadata| {
+        metadata["source_kind"] == "activity_chunk"
+            && metadata["task_id"] == task_b.task_id.to_string()
+            && metadata["attachment_id"].is_string()
+    }));
     let upsert_documents = state.upsert_documents.lock().await.clone();
     let flattened = upsert_documents.into_iter().flatten().collect::<Vec<_>>();
     assert!(flattened
@@ -1350,6 +1506,39 @@ async fn search_backfill_batches_embeddings_and_upserts_task_documents(
     assert!(flattened
         .iter()
         .any(|document| document.contains("attachment Architecture Overview")));
+    assert!(flattened
+        .iter()
+        .any(|document| document.contains("activity kind note")));
+    assert!(flattened
+        .iter()
+        .any(|document| document.contains("Backfill conclusion note")));
+
+    let semantic_search = runtime
+        .service
+        .search(SearchInput {
+            text: Some("semantic-only paraphrase token".to_string()),
+            project: Some("search-batch".to_string()),
+            version: Some(version.version_id.to_string()),
+            status: None,
+            priority: None,
+            knowledge_status: None,
+            task_kind: None,
+            task_code_prefix: None,
+            title_prefix: None,
+            limit: Some(10),
+            all_projects: false,
+        })
+        .await?;
+    assert_eq!(semantic_search.meta.retrieval_mode, "hybrid");
+    assert!(semantic_search.meta.semantic_attempted);
+    assert!(semantic_search.meta.semantic_used);
+    assert!(semantic_search.meta.semantic_error.is_none());
+    assert!(semantic_search.meta.semantic_candidate_count >= 4);
+    assert!(semantic_search.tasks.iter().any(|hit| {
+        hit.retrieval_source == "semantic"
+            && hit.evidence_source.as_deref() == Some("semantic_activity_chunk")
+            && hit.evidence_chunk_id.is_some()
+    }));
 
     server.abort();
     Ok(())
@@ -1962,6 +2151,8 @@ async fn context_init_creates_and_updates_manifest() -> Result<(), Box<dyn std::
             context_dir: None,
             instructions: None,
             memory_dir: None,
+            entry_task_id: None,
+            entry_task_code: None,
             force: false,
             dry_run: false,
         })
@@ -1983,6 +2174,8 @@ async fn context_init_creates_and_updates_manifest() -> Result<(), Box<dyn std::
             context_dir: None,
             instructions: Some("docs/overview.md".to_string()),
             memory_dir: Some("notes".to_string()),
+            entry_task_id: None,
+            entry_task_code: None,
             force: false,
             dry_run: false,
         })
@@ -1998,15 +2191,21 @@ async fn context_init_creates_and_updates_manifest() -> Result<(), Box<dyn std::
             context_dir: None,
             instructions: Some("docs/overview.md".to_string()),
             memory_dir: Some("notes".to_string()),
+            entry_task_id: Some("task-entry".to_string()),
+            entry_task_code: Some("InitCtx-00".to_string()),
             force: true,
             dry_run: false,
         })
         .await?;
     assert_eq!(updated.status, ContextInitStatus::Updated);
+    assert_eq!(updated.entry_task_id.as_deref(), Some("task-entry"));
+    assert_eq!(updated.entry_task_code.as_deref(), Some("InitCtx-00"));
     assert!(updated.context_dir.join("notes").exists());
     let updated_manifest = std::fs::read_to_string(&updated.manifest_path)?;
     assert!(updated_manifest.contains("instructions: docs/overview.md"));
     assert!(updated_manifest.contains("memory_dir: notes"));
+    assert!(updated_manifest.contains("entry_task_id: task-entry"));
+    assert!(updated_manifest.contains("entry_task_code: InitCtx-00"));
 
     Ok(())
 }

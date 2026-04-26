@@ -15,6 +15,7 @@ import type {
   Project,
   RuntimeStatus,
   SearchBackfillSummary,
+  SearchEvidenceDetail,
   SearchQueueRecoverySummary,
   SearchIndexStatusSummary,
   SearchResponse,
@@ -401,7 +402,21 @@ export const desktopBridge = {
   search(input: Record<string, unknown>) {
     return resolveBridgeMode() === "desktop"
       ? callDesktop<SearchResponse>("desktop_search", input)
-      : callPreview<SearchResponse>(() => mockDesktopBridge.search(input));
+      : callPreview<SearchResponse>(
+          () => mockDesktopBridge.search(input) as Promise<SuccessEnvelope<SearchResponse>>,
+        );
+  },
+  searchEvidence(input: { chunk_id?: string | null; attachment_id?: string | null }) {
+    const payload = {
+      action: "evidence",
+      chunk_id: input.chunk_id ?? null,
+      attachment_id: input.attachment_id ?? null,
+    };
+    return resolveBridgeMode() === "desktop"
+      ? callDesktop<SearchEvidenceDetail>("desktop_search", payload)
+      : callPreview<SearchEvidenceDetail>(
+          () => mockDesktopBridge.search(payload) as Promise<SuccessEnvelope<SearchEvidenceDetail>>,
+        );
   },
   searchBackfill(options: SearchBackfillOptions = {}) {
     const input = {

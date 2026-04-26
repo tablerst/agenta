@@ -23,7 +23,7 @@
 - 至少一个 Agenta 操作面已经可用：
   - MCP：Agenta Desktop 托管 MCP 或 `agenta-mcp` 已经运行，且 Agent Host 已经接入 MCP 服务。
   - CLI：`agenta --help` 可以执行，或 Agent Host 被允许运行等价的 Agenta CLI 命令。
-- 如果使用 MCP，Agent 能看到 Agenta 工具，至少应包含 `project_list`、`version_list`、`task_list`、`context_init`、`task_create`、`note_create`、`search_query`。
+- 如果使用 MCP，Agent 能看到 Agenta 工具，至少应包含 `project_list`、`version_list`、`task_list`、`context_init`、`task_create`、`note_create`、`search_query`、`search_evidence_get`。
 - 如果使用 CLI，Agent 能在目标项目根目录运行 `agenta project list`、`agenta context init`、`agenta task list` 等命令。
 - 目标项目允许新增项目本地目录 `.agents/skills/`。
 - 目标项目根目录允许维护至少一个 Agent 指令文件，例如 `AGENTS.md`。

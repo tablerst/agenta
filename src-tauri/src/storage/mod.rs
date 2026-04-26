@@ -24,8 +24,8 @@ use crate::domain::{
 };
 use crate::error::{AppError, AppResult};
 use crate::search::{
-    build_activity_search_chunks, build_task_vector_document_text, SearchVectorJob,
-    TaskVectorDocument,
+    build_activity_chunk_vector_document_text, build_activity_search_chunks,
+    build_task_vector_document_text, SearchVectorJob, TaskVectorDocument,
 };
 
 use mapping::{format_time, map_activity, map_task, parse_time};
@@ -65,6 +65,8 @@ pub struct TaskListFilter {
 #[derive(Clone, Debug)]
 pub struct TaskLexicalSearchRow {
     pub task_id: String,
+    pub project_id: String,
+    pub version_id: Option<String>,
     pub task_code: Option<String>,
     pub task_kind: String,
     pub title: String,
@@ -83,10 +85,31 @@ pub struct TaskLexicalSearchRow {
 pub struct ActivityLexicalSearchRow {
     pub activity_id: String,
     pub task_id: String,
+    pub project_id: String,
+    pub version_id: Option<String>,
+    pub task_title: String,
     pub kind: String,
     pub summary: String,
+    pub chunk_id: String,
+    pub chunk_index: i64,
     pub search_text: String,
+    pub attachment_id: Option<String>,
     pub score: f64,
+}
+
+#[derive(Clone, Debug)]
+pub struct ActivityChunkRecord {
+    pub chunk_id: String,
+    pub activity_id: String,
+    pub task_id: String,
+    pub project_id: String,
+    pub version_id: Option<String>,
+    pub task_title: String,
+    pub kind: String,
+    pub summary: String,
+    pub chunk_index: i64,
+    pub chunk_text: String,
+    pub attachment_id: Option<String>,
 }
 
 #[derive(Clone, Debug)]

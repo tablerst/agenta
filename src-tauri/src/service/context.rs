@@ -34,10 +34,34 @@ impl AgentaService {
             .filter(|value| !value.is_empty())
             .unwrap_or("memory")
             .to_string();
+        let entry_task_id = input
+            .entry_task_id
+            .as_deref()
+            .or_else(|| {
+                existing_manifest
+                    .as_ref()
+                    .and_then(|manifest| manifest.entry_task_id.as_deref())
+            })
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        let entry_task_code = input
+            .entry_task_code
+            .as_deref()
+            .or_else(|| {
+                existing_manifest
+                    .as_ref()
+                    .and_then(|manifest| manifest.entry_task_code.as_deref())
+            })
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
         let desired_manifest = ProjectContextManifest {
             project: Some(project.clone()),
             instructions: Some(instructions.clone()),
             memory_dir: Some(memory_dir.clone()),
+            entry_task_id: entry_task_id.clone(),
+            entry_task_code: entry_task_code.clone(),
         };
         let used_defaults = input.context_dir.is_none()
             || input.instructions.is_none()
@@ -86,6 +110,8 @@ impl AgentaService {
             manifest_path: target.manifest_path,
             status,
             used_defaults,
+            entry_task_id,
+            entry_task_code,
         })
     }
 

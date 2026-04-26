@@ -195,4 +195,96 @@ impl SqliteStore {
 
         rows.into_iter().map(map_activity).collect()
     }
+
+    pub async fn list_activity_chunks_for_task(
+        &self,
+        task_id: Uuid,
+    ) -> AppResult<Vec<ActivityChunkRecord>> {
+        let rows = query(
+            r#"
+            SELECT
+                c.chunk_id,
+                c.activity_id,
+                c.task_id,
+                t.project_id,
+                t.version_id,
+                t.title AS task_title,
+                a.kind,
+                a.activity_search_summary,
+                c.chunk_index,
+                c.chunk_text,
+                json_extract(a.metadata_json, '$.attachment_id') AS attachment_id
+            FROM task_activity_chunks c
+            JOIN task_activities a ON a.activity_id = c.activity_id
+            JOIN tasks t ON t.task_id = c.task_id
+            WHERE c.task_id = ?
+            ORDER BY a.created_at ASC, c.chunk_index ASC, c.chunk_id ASC
+            "#,
+        )
+        .bind(task_id.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter()
+            .map(|row| {
+                Ok(ActivityChunkRecord {
+                    chunk_id: row.get::<String, _>("chunk_id"),
+                    activity_id: row.get::<String, _>("activity_id"),
+                    task_id: row.get::<String, _>("task_id"),
+                    project_id: row.get::<String, _>("project_id"),
+                    version_id: row.get::<Option<String>, _>("version_id"),
+                    task_title: row.get::<String, _>("task_title"),
+                    kind: row.get::<String, _>("kind"),
+                    summary: row.get::<String, _>("activity_search_summary"),
+                    chunk_index: row.get::<i64, _>("chunk_index"),
+                    chunk_text: row.get::<String, _>("chunk_text"),
+                    attachment_id: row.get::<Option<String>, _>("attachment_id"),
+                })
+            })
+            .collect()
+    }
+
+    pub async fn get_activity_chunk(&self, chunk_id: &str) -> AppResult<ActivityChunkRecord> {
+        let row = query(
+            r#"
+            SELECT
+                c.chunk_id,
+                c.activity_id,
+                c.task_id,
+                t.project_id,
+                t.version_id,
+                t.title AS task_title,
+                a.kind,
+                a.activity_search_summary,
+                c.chunk_index,
+                c.chunk_text,
+                json_extract(a.metadata_json, '$.attachment_id') AS attachment_id
+            FROM task_activity_chunks c
+            JOIN task_activities a ON a.activity_id = c.activity_id
+            JOIN tasks t ON t.task_id = c.task_id
+            WHERE c.chunk_id = ?
+            "#,
+        )
+        .bind(chunk_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.map(|row| ActivityChunkRecord {
+            chunk_id: row.get::<String, _>("chunk_id"),
+            activity_id: row.get::<String, _>("activity_id"),
+            task_id: row.get::<String, _>("task_id"),
+            project_id: row.get::<String, _>("project_id"),
+            version_id: row.get::<Option<String>, _>("version_id"),
+            task_title: row.get::<String, _>("task_title"),
+            kind: row.get::<String, _>("kind"),
+            summary: row.get::<String, _>("activity_search_summary"),
+            chunk_index: row.get::<i64, _>("chunk_index"),
+            chunk_text: row.get::<String, _>("chunk_text"),
+            attachment_id: row.get::<Option<String>, _>("attachment_id"),
+        })
+        .ok_or_else(|| AppError::NotFound {
+            entity: "activity_chunk".to_string(),
+            reference: chunk_id.to_string(),
+        })
+    }
 }

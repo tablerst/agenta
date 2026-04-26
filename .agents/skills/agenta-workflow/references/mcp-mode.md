@@ -54,13 +54,16 @@ Activities, search, and recovery:
 
 - `activity_list`
 - `search_query`
+- `search_evidence_get`
 
 ## MCP Usage Habits
 
 - Use `project_list` or `project_get` first to decide whether to reuse an existing project.
 - If a new version is supposed to be the active lane, verify and update `version.status` plus `project.default_version` before implementation starts.
 - After project/version initialization, run `context_init` when the workspace context manifest needs to exist or be refreshed.
-- When restoring context, prefer `task_context_get` if a task id is known; otherwise use `task_list` or `search_query` first.
+- When restoring context, prefer `task_context_get` if a task id is known; use `include_notes=false`, `include_attachments=false`, and a small `recent_activity_limit` for a lightweight first pass, then add `notes_limit` / `attachments_limit` when expanding.
+- When search returns `evidence_chunk_id` or `evidence_attachment_id`, use `search_evidence_get` for the second-hop evidence text instead of pulling an entire task context.
+- Treat `search_query.meta.retrieval_mode` as task-bucket-only: `structured_only`, `lexical_only`, or `hybrid`. Activity hits are currently lexical-only; semantic fallback details live in `semantic_attempted`, `semantic_used`, `semantic_error`, and `semantic_candidate_count`.
 - Set `task_code` explicitly when creating numbered tasks.
 - Set `task_kind` explicitly when creating context or index tasks.
 - Set `note_kind` explicitly when writing notes.

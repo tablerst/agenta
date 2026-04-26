@@ -43,6 +43,7 @@ Agenta 会按配置的候选目录查找 `project.yaml`。这个 manifest 只需
 project: demo
 instructions: README.md
 memory_dir: memory
+entry_task_code: InitCtx-00 # optional recovery entry task
 ```
 
 Agent 推荐工作流：
@@ -73,6 +74,7 @@ Agent 推荐工作流：
 agenta context init --project demo
 agenta context init --project demo --workspace-root D:\repo
 agenta context init --project demo --context-dir D:\repo\.agenta --force
+agenta context init --project demo --entry-task-code InitCtx-00
 agenta context init --project demo --context-dir D:\repo\.agenta --dry-run
 ```
 
@@ -83,6 +85,8 @@ agenta context init --project demo --context-dir D:\repo\.agenta --dry-run
 - `--context-dir`: 显式指定目标上下文目录，优先级最高
 - `--instructions`: 写入 manifest 的入口文档，默认 `README.md`
 - `--memory-dir`: 写入 manifest 的记忆目录，默认 `memory`
+- `--entry-task-id`: 写入 manifest 的恢复入口任务 UUID
+- `--entry-task-code`: 写入 manifest 的恢复入口任务编号，例如 `InitCtx-00`
 - `--force`: 已有 manifest 不一致时允许覆盖
 - `--dry-run`: 只返回目标路径和状态，不写文件
 
@@ -183,6 +187,13 @@ agenta search query --project demo --priority high --knowledge-status reusable
 agenta search query --text tracing --all-projects
 ```
 
+读取 `search query` 返回的二跳证据：
+
+```powershell
+agenta search evidence --chunk-id <evidence_chunk_id>
+agenta search evidence --attachment-id <evidence_attachment_id>
+```
+
 多项目环境下，`task list` 和 `search query` 在未显式传 `project` 时默认不会跨项目返回结果：
 
 - 如果当前项目上下文目录能解析出唯一项目，会自动收窄到该项目
@@ -192,9 +203,15 @@ agenta search query --text tracing --all-projects
 
 搜索结果的 `meta` 字段会说明当前检索模式：
 
-- `retrieval_mode=lexical`: 仅 SQLite FTS5
-- `retrieval_mode=hybrid`: SQLite FTS5 + Chroma semantic rank
-- `vector_status=ready`: Chroma 可用
+- `retrieval_mode=structured_only`: 无 query 时仅返回结构化任务过滤结果
+- `retrieval_mode=lexical_only`: task bucket 仅使用 SQLite FTS5 / LIKE / activity chunk lexical fallback
+- `retrieval_mode=hybrid`: task bucket 合并 lexical cascade + Chroma semantic rank
+- activity bucket 当前仍是 lexical-only，`retrieval_mode` 只描述 task bucket
+- `semantic_attempted`: 是否尝试语义检索
+- `semantic_used`: 语义候选是否实际参与结果融合
+- `semantic_error`: Chroma/embedding 失败时的 fallback 原因
+- `semantic_candidate_count`: 检后融合前的语义候选数
+- `vector_status=ready`: Chroma 可用且实际贡献向量结果
 - `pending_index_jobs`: 仍待处理的向量索引任务数
 
 SearchV2 的发布闸口、回滚策略和专项验收命令见 [SearchV2 发布与运维说明](search-v2-release.md)。

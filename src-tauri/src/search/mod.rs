@@ -27,6 +27,8 @@ const ACTIVITY_CHUNK_OVERLAP_CHARS: usize = 180;
 #[derive(Clone, Debug, Serialize)]
 pub struct TaskSearchHit {
     pub task_id: String,
+    pub project_id: String,
+    pub version_id: Option<String>,
     pub task_code: Option<String>,
     pub task_kind: String,
     pub title: String,
@@ -39,18 +41,27 @@ pub struct TaskSearchHit {
     pub matched_fields: Vec<String>,
     pub evidence_source: Option<String>,
     pub evidence_snippet: Option<String>,
+    pub evidence_activity_id: Option<String>,
+    pub evidence_chunk_id: Option<String>,
+    pub evidence_attachment_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ActivitySearchHit {
     pub activity_id: String,
     pub task_id: String,
+    pub project_id: String,
+    pub version_id: Option<String>,
+    pub task_title: String,
     pub kind: String,
     pub summary: String,
+    pub retrieval_source: String,
     pub score: Option<f64>,
     pub matched_fields: Vec<String>,
     pub evidence_source: Option<String>,
     pub evidence_snippet: Option<String>,
+    pub evidence_chunk_id: Option<String>,
+    pub evidence_attachment_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -73,6 +84,10 @@ pub struct SearchMeta {
     pub vector_backend: Option<String>,
     pub vector_status: String,
     pub pending_index_jobs: usize,
+    pub semantic_attempted: bool,
+    pub semantic_used: bool,
+    pub semantic_error: Option<String>,
+    pub semantic_candidate_count: usize,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -85,6 +100,8 @@ pub struct SearchResponse {
 
 #[derive(Clone, Debug)]
 pub struct TaskVectorDocument {
+    pub vector_id: String,
+    pub source_kind: String,
     pub task_id: String,
     pub project_id: String,
     pub project_slug: String,
@@ -101,6 +118,10 @@ pub struct TaskVectorDocument {
     pub knowledge_status: String,
     pub latest_note_summary: Option<String>,
     pub latest_attachment_summary: Option<String>,
+    pub activity_id: Option<String>,
+    pub chunk_id: Option<String>,
+    pub chunk_index: Option<i64>,
+    pub attachment_id: Option<String>,
     pub task_search_summary: String,
     pub task_context_digest: String,
     pub updated_at: String,
@@ -128,6 +149,9 @@ pub enum SearchIntent {
 pub struct SearchEvidence {
     pub source: String,
     pub snippet: String,
+    pub activity_id: Option<String>,
+    pub chunk_id: Option<String>,
+    pub attachment_id: Option<String>,
 }
 
 pub fn build_task_search_summary(
@@ -281,6 +305,26 @@ pub fn build_task_vector_document_text(
     truncate(parts.join("\n"), 2_000)
 }
 
+pub fn build_activity_chunk_vector_document_text(
+    task_code: Option<&str>,
+    task_title: &str,
+    activity_kind: &str,
+    activity_summary: &str,
+    chunk_text: &str,
+) -> String {
+    let mut parts = Vec::new();
+    if let Some(task_code) = task_code.filter(|value| !value.trim().is_empty()) {
+        parts.push(format!("task code {}", task_code.trim()));
+    }
+    parts.push(format!("task title {}", task_title.trim()));
+    parts.push(format!("activity kind {}", activity_kind.trim()));
+    if !activity_summary.trim().is_empty() {
+        parts.push(format!("activity summary {}", activity_summary.trim()));
+    }
+    parts.push(chunk_text.trim().to_string());
+    truncate(parts.join("\n"), 2_000)
+}
+
 pub fn normalize_search_query(value: &str) -> Option<NormalizedSearchQuery> {
     let raw_text = value.trim();
     if raw_text.is_empty() {
@@ -344,6 +388,9 @@ pub fn build_search_evidence<'a>(
                 build_evidence_snippet(candidate, terms).map(|snippet| SearchEvidence {
                     source: field_name.to_string(),
                     snippet,
+                    activity_id: None,
+                    chunk_id: None,
+                    attachment_id: None,
                 })
             })
     })

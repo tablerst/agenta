@@ -10,6 +10,10 @@ pub(super) fn manifests_match(
             == normalize_manifest_value(right.instructions.as_deref())
         && normalize_manifest_value(left.memory_dir.as_deref())
             == normalize_manifest_value(right.memory_dir.as_deref())
+        && normalize_manifest_value(left.entry_task_id.as_deref())
+            == normalize_manifest_value(right.entry_task_id.as_deref())
+        && normalize_manifest_value(left.entry_task_code.as_deref())
+            == normalize_manifest_value(right.entry_task_code.as_deref())
 }
 
 pub(super) fn normalize_manifest_value(value: Option<&str>) -> Option<String> {

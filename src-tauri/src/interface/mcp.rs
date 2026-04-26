@@ -25,9 +25,9 @@ use crate::service::{
     AddTaskBlockerInput, AgentaService, AttachChildTaskInput, ContextInitInput, ContextInitResult,
     CreateAttachmentInput, CreateChildTaskInput, CreateNoteInput, CreateProjectInput,
     CreateTaskInput, CreateVersionInput, DetachChildTaskInput, PageCursor, PageRequest, PageResult,
-    RequestOrigin, ResolveTaskBlockerInput, SearchInput, SortOrder, TaskDetail, TaskLink,
-    TaskListPageResult, TaskQuery, TaskSortBy, UpdateProjectInput, UpdateTaskInput,
-    UpdateVersionInput,
+    RequestOrigin, ResolveTaskBlockerInput, SearchEvidenceInput, SearchInput, SortOrder,
+    TaskContextOptions, TaskDetail, TaskLink, TaskListPageResult, TaskQuery, TaskSortBy,
+    UpdateProjectInput, UpdateTaskInput, UpdateVersionInput,
 };
 
 #[derive(Clone)]
@@ -136,6 +136,8 @@ impl AgentaMcpServer {
                 context_dir: optional_trimmed(params.context_dir).map(PathBuf::from),
                 instructions: optional_trimmed(params.instructions),
                 memory_dir: optional_trimmed(params.memory_dir),
+                entry_task_id: optional_trimmed(params.entry_task_id),
+                entry_task_code: optional_trimmed(params.entry_task_code),
                 force: params.force.unwrap_or(false),
                 dry_run: params.dry_run.unwrap_or(false),
             })
@@ -554,9 +556,15 @@ impl AgentaMcpServer {
         self.log_tool_call("task_context_get", action).await;
         let result = self
             .service
-            .get_task_context(
+            .get_task_context_with_options(
                 &required_text(params.task, "task")?,
-                params.recent_activity_limit,
+                TaskContextOptions {
+                    recent_activity_limit: params.recent_activity_limit,
+                    include_notes: params.include_notes.unwrap_or(true),
+                    notes_limit: params.notes_limit,
+                    include_attachments: params.include_attachments.unwrap_or(true),
+                    attachments_limit: params.attachments_limit,
+                },
             )
             .await
             .map(|context| TaskContextToolOutput {
@@ -1176,6 +1184,45 @@ impl AgentaMcpServer {
 
         result.map(Json)
     }
+
+    #[tool(
+        name = "search_evidence_get",
+        description = "Load text for a search evidence source returned by search_query.",
+        annotations(
+            title = "Search Evidence Get",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    pub async fn search_evidence_get(
+        &self,
+        Parameters(params): Parameters<SearchEvidenceGetToolInput>,
+    ) -> Result<Json<SearchEvidenceGetToolOutput>, ErrorData> {
+        let action = "get_evidence";
+        self.log_tool_call("search_evidence_get", action).await;
+        let result = self
+            .service
+            .get_search_evidence(SearchEvidenceInput {
+                chunk_id: optional_trimmed(params.chunk_id),
+                attachment_id: optional_trimmed(params.attachment_id),
+            })
+            .await
+            .map(|evidence| SearchEvidenceGetToolOutput {
+                evidence: SearchEvidenceRecord::from(evidence),
+            })
+            .map_err(error_to_rmcp);
+        self.log_structured_tool_result(
+            "search_evidence_get",
+            action,
+            "Loaded search evidence",
+            &result,
+        )
+        .await;
+
+        result.map(Json)
+    }
 }
 
 #[tool_handler(router = self.tool_router)]
@@ -1232,6 +1279,7 @@ mod tests {
             AgentaMcpServer::attachment_get_tool_attr(),
             AgentaMcpServer::attachment_list_tool_attr(),
             AgentaMcpServer::search_query_tool_attr(),
+            AgentaMcpServer::search_evidence_get_tool_attr(),
         ];
 
         for tool in tools {
@@ -1247,6 +1295,16 @@ mod tests {
 
         let create_tool =
             serde_json::to_value(AgentaMcpServer::project_create_tool_attr()).expect("tool json");
+        let context_tool =
+            serde_json::to_value(AgentaMcpServer::context_init_tool_attr()).expect("tool json");
+        let context_input =
+            serde_json::to_string(&context_tool["inputSchema"]).expect("context input schema");
+        let context_output =
+            serde_json::to_string(&context_tool["outputSchema"]).expect("context output schema");
+        assert!(context_input.contains("\"entry_task_id\""));
+        assert!(context_input.contains("\"entry_task_code\""));
+        assert!(context_output.contains("\"entry_task_id\""));
+        assert!(context_output.contains("\"entry_task_code\""));
         assert_eq!(create_tool["description"], "Create a new project.");
         assert!(
             create_tool["inputSchema"]["properties"]
@@ -1324,6 +1382,24 @@ mod tests {
         let search_output =
             serde_json::to_string(&search_query["outputSchema"]).expect("search output schema");
         assert!(search_output.contains("\"meta\""));
+        assert!(search_output.contains("\"semantic_attempted\""));
+        assert!(search_output.contains("\"semantic_error\""));
+        assert!(search_output.contains("\"evidence_activity_id\""));
+        assert!(search_output.contains("\"evidence_chunk_id\""));
+        assert!(search_output.contains("\"evidence_attachment_id\""));
+
+        let search_evidence =
+            serde_json::to_value(AgentaMcpServer::search_evidence_get_tool_attr())
+                .expect("tool json");
+        assert_eq!(search_evidence["annotations"]["readOnlyHint"], true);
+        let evidence_input =
+            serde_json::to_string(&search_evidence["inputSchema"]).expect("evidence input schema");
+        let evidence_output = serde_json::to_string(&search_evidence["outputSchema"])
+            .expect("evidence output schema");
+        assert!(evidence_input.contains("\"chunk_id\""));
+        assert!(evidence_input.contains("\"attachment_id\""));
+        assert!(evidence_output.contains("\"text\""));
+        assert!(evidence_output.contains("\"source_kind\""));
     }
 
     #[test]
@@ -1353,9 +1429,13 @@ mod tests {
             serde_json::to_string(&task_list["outputSchema"]).expect("task list output");
         let task_get_output =
             serde_json::to_string(&task_get["outputSchema"]).expect("task get output");
+        let task_context_input =
+            serde_json::to_string(&task_context_get["inputSchema"]).expect("task context input");
         assert!(task_list_input.contains("\"limit\""));
         assert!(task_list_input.contains("\"cursor\""));
         assert!(task_list_output.contains("\"page\""));
+        assert!(task_get_output.contains("\"task_search_summary\""));
+        assert!(task_get_output.contains("\"task_context_digest\""));
         assert!(task_get_output.contains("\"note_count\""));
         assert!(task_get_output.contains("\"attachment_count\""));
         assert!(task_get_output.contains("\"latest_activity_at\""));
@@ -1370,6 +1450,10 @@ mod tests {
 
         let task_context_output =
             serde_json::to_string(&task_context_get["outputSchema"]).expect("task context output");
+        assert!(task_context_input.contains("\"include_notes\""));
+        assert!(task_context_input.contains("\"notes_limit\""));
+        assert!(task_context_input.contains("\"include_attachments\""));
+        assert!(task_context_input.contains("\"attachments_limit\""));
         assert!(task_context_output.contains("\"notes\""));
         assert!(task_context_output.contains("\"attachments\""));
         assert!(task_context_output.contains("\"recent_activities\""));

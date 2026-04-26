@@ -3,6 +3,8 @@ use super::*;
 pub(super) fn structured_task_hit_from_detail(detail: TaskDetail) -> TaskSearchHit {
     TaskSearchHit {
         task_id: detail.task.task_id.to_string(),
+        project_id: detail.task.project_id.to_string(),
+        version_id: detail.task.version_id.map(|value| value.to_string()),
         task_code: detail.task.task_code.clone(),
         task_kind: detail.task.task_kind.to_string(),
         title: detail.task.title.clone(),
@@ -18,6 +20,9 @@ pub(super) fn structured_task_hit_from_detail(detail: TaskDetail) -> TaskSearchH
         matched_fields: Vec::new(),
         evidence_source: None,
         evidence_snippet: None,
+        evidence_activity_id: None,
+        evidence_chunk_id: None,
+        evidence_attachment_id: None,
     }
 }
 
@@ -26,6 +31,7 @@ pub(super) fn combine_task_search_results(
     semantic_rows: Vec<crate::search::VectorQueryHit>,
     terms: &[String],
     activity_evidence_by_task: &HashMap<String, SearchEvidence>,
+    semantic_evidence_by_task: &HashMap<String, SearchEvidence>,
     limit: usize,
 ) -> Vec<TaskSearchHit> {
     #[derive(Default)]
@@ -101,19 +107,25 @@ pub(super) fn combine_task_search_results(
                 ],
             );
             let fallback_evidence = activity_evidence_by_task.get(&row.task_id).cloned();
-            let evidence = task_evidence.or(fallback_evidence);
+            let semantic_evidence = semantic_evidence_by_task.get(&row.task_id).cloned();
+            let had_lexical_signal = !matched_fields.is_empty()
+                || task_evidence.is_some()
+                || fallback_evidence.is_some();
+            let evidence = task_evidence.or(fallback_evidence).or(semantic_evidence);
             if let Some(evidence) = evidence.as_ref() {
                 if !matched_fields.contains(&evidence.source) {
                     matched_fields.push(evidence.source.clone());
                 }
             }
-            let retrieval_source = match (semantic_distance.is_some(), !matched_fields.is_empty()) {
+            let retrieval_source = match (semantic_distance.is_some(), had_lexical_signal) {
                 (true, true) => "hybrid",
                 (true, false) => "semantic",
                 _ => "lexical",
             };
             TaskSearchHit {
                 task_id: row.task_id,
+                project_id: row.project_id,
+                version_id: row.version_id,
                 task_code: row.task_code,
                 task_kind: row.task_kind,
                 title: row.title,
@@ -128,10 +140,46 @@ pub(super) fn combine_task_search_results(
                 score: Some(combined_score),
                 matched_fields,
                 evidence_source: evidence.as_ref().map(|item| item.source.clone()),
-                evidence_snippet: evidence.map(|item| item.snippet),
+                evidence_snippet: evidence.as_ref().map(|item| item.snippet.clone()),
+                evidence_activity_id: evidence.as_ref().and_then(|item| item.activity_id.clone()),
+                evidence_chunk_id: evidence.as_ref().and_then(|item| item.chunk_id.clone()),
+                evidence_attachment_id: evidence.and_then(|item| item.attachment_id),
             }
         })
         .collect()
+}
+
+pub(super) fn rerank_task_hits(hits: &mut [TaskSearchHit]) {
+    hits.sort_by(|left, right| {
+        rerank_score(right)
+            .partial_cmp(&rerank_score(left))
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| {
+                right
+                    .score
+                    .partial_cmp(&left.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .then_with(|| left.task_id.cmp(&right.task_id))
+    });
+}
+
+fn rerank_score(hit: &TaskSearchHit) -> f64 {
+    let base = hit.score.unwrap_or_default();
+    let retrieval_bonus = match hit.retrieval_source.as_str() {
+        "hybrid" => 0.003,
+        "semantic" => 0.002,
+        _ => 0.0,
+    };
+    let evidence_bonus = match hit.evidence_source.as_deref() {
+        Some("semantic_activity_chunk") => 0.002,
+        Some("activity_search_text") => 0.0015,
+        Some("semantic_task_document") => 0.001,
+        Some("latest_note_summary") => 0.0008,
+        Some("task_search_summary") | Some("task_context_digest") => 0.0005,
+        _ => 0.0,
+    };
+    base + retrieval_bonus + evidence_bonus
 }
 
 pub(super) fn build_activity_evidence_map(
@@ -148,9 +196,43 @@ pub(super) fn build_activity_evidence_map(
                 ("activity_search_summary", Some(activity.summary.as_str())),
             ],
         );
-        if let Some(evidence) = evidence {
+        if let Some(mut evidence) = evidence {
+            evidence.activity_id = Some(activity.activity_id.clone());
+            evidence.chunk_id = Some(activity.chunk_id.clone());
+            evidence.attachment_id = activity.attachment_id.clone();
             output.entry(activity.task_id.clone()).or_insert(evidence);
         }
+    }
+
+    output
+}
+
+pub(super) fn build_semantic_evidence_map(
+    semantic_rows: &[crate::search::VectorQueryHit],
+) -> HashMap<String, SearchEvidence> {
+    let mut output = HashMap::new();
+
+    for hit in semantic_rows {
+        let Some(document) = hit
+            .document
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        let source = if hit.source_kind == "activity_chunk" {
+            "semantic_activity_chunk"
+        } else {
+            "semantic_task_document"
+        };
+        output.entry(hit.task_id.clone()).or_insert(SearchEvidence {
+            source: source.to_string(),
+            snippet: truncate_evidence(document, 180),
+            activity_id: hit.activity_id.clone(),
+            chunk_id: hit.chunk_id.clone(),
+            attachment_id: hit.attachment_id.clone(),
+        });
     }
 
     output
@@ -197,8 +279,21 @@ pub(super) fn default_indexed_fields() -> SearchIndexedFields {
         activities: vec![
             "activity_search_summary".to_string(),
             "activity_search_text".to_string(),
+            "activity_chunk".to_string(),
         ],
     }
+}
+
+fn truncate_evidence(value: &str, limit: usize) -> String {
+    if value.chars().count() <= limit {
+        return value.to_string();
+    }
+    let mut output = value
+        .chars()
+        .take(limit.saturating_sub(3))
+        .collect::<String>();
+    output.push_str("...");
+    output
 }
 
 pub(super) fn vector_status_label(

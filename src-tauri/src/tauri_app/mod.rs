@@ -18,8 +18,9 @@ use crate::service::{
     AddTaskBlockerInput, ApprovalQuery, AttachChildTaskInput, ContextInitInput, ContextInitResult,
     CreateAttachmentInput, CreateChildTaskInput, CreateNoteInput, CreateProjectInput,
     CreateTaskInput, CreateVersionInput, DetachChildTaskInput, PageRequest, RequestOrigin,
-    ResolveTaskBlockerInput, ReviewApprovalInput, SearchInput, SortOrder, TaskQuery, TaskSortBy,
-    UpdateProjectInput, UpdateTaskInput, UpdateVersionInput,
+    ResolveTaskBlockerInput, ReviewApprovalInput, SearchEvidenceInput, SearchInput, SortOrder,
+    TaskContextOptions, TaskQuery, TaskSortBy, UpdateProjectInput, UpdateTaskInput,
+    UpdateVersionInput,
 };
 
 #[derive(Debug, Serialize)]
@@ -110,6 +111,8 @@ struct DesktopContextInput {
     context_dir: Option<String>,
     instructions: Option<String>,
     memory_dir: Option<String>,
+    entry_task_id: Option<String>,
+    entry_task_code: Option<String>,
     force: Option<bool>,
     dry_run: Option<bool>,
 }
@@ -149,6 +152,10 @@ struct DesktopTaskInput {
     created_by: Option<String>,
     updated_by: Option<String>,
     recent_activity_limit: Option<usize>,
+    include_notes: Option<bool>,
+    notes_limit: Option<usize>,
+    include_attachments: Option<bool>,
+    attachments_limit: Option<usize>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -185,6 +192,8 @@ struct DesktopSearchInput {
     task_kind: Option<String>,
     task_code_prefix: Option<String>,
     title_prefix: Option<String>,
+    chunk_id: Option<String>,
+    attachment_id: Option<String>,
     limit: Option<usize>,
     batch_size: Option<usize>,
 }
@@ -376,6 +385,8 @@ async fn desktop_context(
                         context_dir: input.context_dir.map(PathBuf::from),
                         instructions: input.instructions,
                         memory_dir: input.memory_dir,
+                        entry_task_id: input.entry_task_id,
+                        entry_task_code: input.entry_task_code,
                         force: input.force.unwrap_or(false),
                         dry_run: input.dry_run.unwrap_or(false),
                     })
@@ -521,7 +532,16 @@ async fn desktop_task(
             "get_context" => success(
                 "task.get_context",
                 service
-                    .get_task_context(&required(input.task, "task")?, input.recent_activity_limit)
+                    .get_task_context_with_options(
+                        &required(input.task, "task")?,
+                        TaskContextOptions {
+                            recent_activity_limit: input.recent_activity_limit,
+                            include_notes: input.include_notes.unwrap_or(true),
+                            notes_limit: input.notes_limit,
+                            include_attachments: input.include_attachments.unwrap_or(true),
+                            attachments_limit: input.attachments_limit,
+                        },
+                    )
                     .await?,
                 "Loaded task context",
             ),
@@ -783,6 +803,17 @@ async fn desktop_search(
                     })
                     .await?,
                 "Completed search",
+            ),
+            "evidence" | "evidence_get" => success(
+                "search.evidence",
+                state
+                    .service
+                    .get_search_evidence(SearchEvidenceInput {
+                        chunk_id: input.chunk_id,
+                        attachment_id: input.attachment_id,
+                    })
+                    .await?,
+                "Loaded search evidence",
             ),
             "backfill" => success(
                 "search.backfill",

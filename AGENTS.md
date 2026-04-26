@@ -64,7 +64,7 @@ Current Tauri config points at Bun:
 - Ask exploration-oriented SubAgents to return concise findings, affected paths, assumptions, and recommended next steps so their output stays easy to integrate.
 - When multiple SubAgents are used for implementation, keep ownership and write scope explicit to avoid overlapping edits and unnecessary coordination overhead.
 - Keep urgent, tightly coupled, or immediately blocking work on the main thread when local execution is faster; use SubAgents to accelerate sidecar work, not to create avoidable orchestration cost.
-- Unless the user explicitly requests another model, all SubAgents must use `gpt-5.4` (`GPT5.4`) as the default model.
+- Unless the user explicitly requests another model, all SubAgents must use `gpt-5.5` (`GPT5.5`) as the default model.
 - Reuse an existing SubAgent only when the follow-up task stays within the same bounded context; otherwise prefer spawning a new narrowly scoped SubAgent.
 
 ## Testing Guidelines

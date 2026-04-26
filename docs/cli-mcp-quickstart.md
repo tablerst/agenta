@@ -34,6 +34,7 @@ project_context:
 project: demo
 instructions: README.md
 memory_dir: memory
+entry_task_code: InitCtx-00 # optional recovery entry task
 ```
 
 MCP 配置面如下：
@@ -175,20 +176,24 @@ Standalone `agenta-mcp` 默认走 `stdout` 日志；若显式配置 `mcp.log.des
 - `attachment_get`：读取附件
 - `attachment_list`：列出任务附件
 - `search_query`：用结构化过滤 + 可选 query 搜索任务与任务活动；支持 `project/version/task_kind/task_code_prefix/title_prefix/all_projects`
+- `search_evidence_get`：按 `evidence_chunk_id` 或 `evidence_attachment_id` 读取 `search_query` 返回命中的二跳证据正文
 
 当前对外 contract 约束：
 
 - 每个 Tool 对应单一意图，不再要求客户端传递 `arguments.action`
 - `tools/list` 中会直接暴露字段说明、必填约束与可用枚举值
 - `status` / `priority` / `kind` 等字段已直接进入 JSON Schema
-- `*_get` / `*_list` / `search_query` 显式标记为只读
+- `*_get` / `*_list` / `search_query` / `search_evidence_get` 显式标记为只读
 
 任务恢复相关的推荐调用：
 
 - 恢复某个版本下的编号任务组：`task_list(project=..., version=..., sort_by=task_code, sort_order=asc)`
 - 直接按编号前缀拉一组任务：`search_query(project=..., version=..., task_code_prefix="InitCtx-")`
+- 已知入口任务时先轻量读：`task_context_get(task=..., include_notes=false, include_attachments=false, recent_activity_limit=5)`
+- 需要逐步展开时再加限额：`task_context_get(task=..., notes_limit=5, attachments_limit=3)`
+- 搜索命中后需要完整证据时：`search_evidence_get(chunk_id=...)` 或 `search_evidence_get(attachment_id=...)`
 - 只看上下文任务：`task_list(..., kind=context)`
-- 判断沉淀状态时优先看：`task.latest_note_summary`、`task.knowledge_status`、`task_list.summary`
+- 判断沉淀状态时优先看：`task.task_context_digest`、`task.task_search_summary`、`task.latest_note_summary`、`task.knowledge_status`、`task_list.summary`
 
 多项目环境下的默认行为：
 

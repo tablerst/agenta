@@ -208,9 +208,53 @@ impl AgentaService {
         task_ref: &str,
         recent_activity_limit: Option<usize>,
     ) -> AppResult<TaskContext> {
+        self.get_task_context_with_options(
+            task_ref,
+            TaskContextOptions::full(recent_activity_limit),
+        )
+        .await
+    }
+
+    pub async fn get_task_context_with_options(
+        &self,
+        task_ref: &str,
+        options: TaskContextOptions,
+    ) -> AppResult<TaskContext> {
         let task = self.get_task_detail(task_ref).await?;
-        let notes = self.list_notes(task_ref).await?;
-        let attachments = self.list_attachments(task_ref).await?;
+        let notes = if options.include_notes {
+            if options.notes_limit.is_some() {
+                self.list_notes_page(
+                    task_ref,
+                    PageRequest {
+                        limit: options.notes_limit,
+                        cursor: None,
+                    },
+                )
+                .await?
+                .items
+            } else {
+                self.list_notes(task_ref).await?
+            }
+        } else {
+            Vec::new()
+        };
+        let attachments = if options.include_attachments {
+            if options.attachments_limit.is_some() {
+                self.list_attachments_page(
+                    task_ref,
+                    PageRequest {
+                        limit: options.attachments_limit,
+                        cursor: None,
+                    },
+                )
+                .await?
+                .items
+            } else {
+                self.list_attachments(task_ref).await?
+            }
+        } else {
+            Vec::new()
+        };
         let parent = match task.parent_task_id {
             Some(parent_task_id) => {
                 let parent_relation = self
@@ -264,7 +308,7 @@ impl AgentaService {
             .list_task_activities_page(
                 task_ref,
                 PageRequest {
-                    limit: Some(recent_activity_limit.unwrap_or(20).clamp(1, 50)),
+                    limit: Some(options.recent_activity_limit.unwrap_or(20).clamp(1, 50)),
                     cursor: None,
                 },
             )

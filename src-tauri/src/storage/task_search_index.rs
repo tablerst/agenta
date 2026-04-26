@@ -521,10 +521,10 @@ impl SqliteStore {
         Ok(row.get::<i64, _>("count").max(0) as usize)
     }
 
-    pub async fn get_task_vector_document(
+    pub async fn get_task_vector_documents(
         &self,
         task_id: Uuid,
-    ) -> AppResult<Option<TaskVectorDocument>> {
+    ) -> AppResult<Vec<TaskVectorDocument>> {
         let row = query(
             r#"
             SELECT
@@ -564,7 +564,7 @@ impl SqliteStore {
         .fetch_optional(&self.pool)
         .await?;
         let Some(row) = row else {
-            return Ok(None);
+            return Ok(Vec::new());
         };
 
         let task_code = row.get::<Option<String>, _>("task_code");
@@ -574,34 +574,51 @@ impl SqliteStore {
         let task_search_summary = row.get::<String, _>("task_search_summary");
         let task_context_digest = row.get::<String, _>("task_context_digest");
 
-        Ok(Some(TaskVectorDocument {
+        let task_id_text = row.get::<String, _>("task_id");
+        let project_id = row.get::<String, _>("project_id");
+        let project_slug = row.get::<String, _>("project_slug");
+        let project_name = row.get::<String, _>("project_name");
+        let project_description = row.get::<Option<String>, _>("project_description");
+        let version_id = row.get::<Option<String>, _>("version_id");
+        let version_name = row.get::<Option<String>, _>("version_name");
+        let version_description = row.get::<Option<String>, _>("version_description");
+        let task_kind = row.get::<String, _>("task_kind");
+        let status = row.get::<String, _>("status");
+        let priority = row.get::<String, _>("priority");
+        let knowledge_status = row.get::<String, _>("knowledge_status");
+        let updated_at = row.get::<String, _>("updated_at");
+        let mut documents = vec![TaskVectorDocument {
+            vector_id: task_id_text.clone(),
+            source_kind: "task".to_string(),
             task_id: row.get::<String, _>("task_id"),
-            project_id: row.get::<String, _>("project_id"),
-            project_slug: row.get::<String, _>("project_slug"),
-            project_name: row.get::<String, _>("project_name"),
-            project_description: row.get::<Option<String>, _>("project_description"),
-            version_id: row.get::<Option<String>, _>("version_id"),
-            version_name: row.get::<Option<String>, _>("version_name"),
-            version_description: row.get::<Option<String>, _>("version_description"),
+            project_id: project_id.clone(),
+            project_slug: project_slug.clone(),
+            project_name: project_name.clone(),
+            project_description: project_description.clone(),
+            version_id: version_id.clone(),
+            version_name: version_name.clone(),
+            version_description: version_description.clone(),
             task_code: task_code.clone(),
-            task_kind: row.get::<String, _>("task_kind"),
+            task_kind: task_kind.clone(),
             title: title.clone(),
-            status: row.get::<String, _>("status"),
-            priority: row.get::<String, _>("priority"),
-            knowledge_status: row.get::<String, _>("knowledge_status"),
+            status: status.clone(),
+            priority: priority.clone(),
+            knowledge_status: knowledge_status.clone(),
             latest_note_summary: latest_note_summary.clone(),
             latest_attachment_summary: latest_attachment_summary.clone(),
+            activity_id: None,
+            chunk_id: None,
+            chunk_index: None,
+            attachment_id: None,
             task_search_summary: task_search_summary.clone(),
             task_context_digest: task_context_digest.clone(),
-            updated_at: row.get::<String, _>("updated_at"),
+            updated_at: updated_at.clone(),
             document: build_task_vector_document_text(
-                &row.get::<String, _>("project_slug"),
-                &row.get::<String, _>("project_name"),
-                row.get::<Option<String>, _>("project_description")
-                    .as_deref(),
-                row.get::<Option<String>, _>("version_name").as_deref(),
-                row.get::<Option<String>, _>("version_description")
-                    .as_deref(),
+                &project_slug,
+                &project_name,
+                project_description.as_deref(),
+                version_name.as_deref(),
+                version_description.as_deref(),
                 task_code.as_deref(),
                 &title,
                 latest_note_summary.as_deref(),
@@ -609,6 +626,45 @@ impl SqliteStore {
                 &task_search_summary,
                 &task_context_digest,
             ),
-        }))
+        }];
+
+        for chunk in self.list_activity_chunks_for_task(task_id).await? {
+            documents.push(TaskVectorDocument {
+                vector_id: format!("activity_chunk:{}", chunk.chunk_id),
+                source_kind: "activity_chunk".to_string(),
+                task_id: chunk.task_id,
+                project_id: chunk.project_id,
+                project_slug: project_slug.clone(),
+                project_name: project_name.clone(),
+                project_description: project_description.clone(),
+                version_id: chunk.version_id,
+                version_name: version_name.clone(),
+                version_description: version_description.clone(),
+                task_code: task_code.clone(),
+                task_kind: task_kind.clone(),
+                title: chunk.task_title.clone(),
+                status: status.clone(),
+                priority: priority.clone(),
+                knowledge_status: knowledge_status.clone(),
+                latest_note_summary: latest_note_summary.clone(),
+                latest_attachment_summary: latest_attachment_summary.clone(),
+                activity_id: Some(chunk.activity_id),
+                chunk_id: Some(chunk.chunk_id),
+                chunk_index: Some(chunk.chunk_index),
+                attachment_id: chunk.attachment_id,
+                task_search_summary: task_search_summary.clone(),
+                task_context_digest: task_context_digest.clone(),
+                updated_at: updated_at.clone(),
+                document: build_activity_chunk_vector_document_text(
+                    task_code.as_deref(),
+                    &chunk.task_title,
+                    &chunk.kind,
+                    &chunk.summary,
+                    &chunk.chunk_text,
+                ),
+            });
+        }
+
+        Ok(documents)
     }
 }

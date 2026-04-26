@@ -7,21 +7,22 @@ SearchV2 是 `v0.1.1-search-usable` 的搜索可用性收口版本，并随 Git 
 已纳入当前发布范围：
 
 - 查询理解与词法召回：精确短语、任务编号、prefix、identifier intent、SQLite LIKE fallback。
-- 命中证据：task/activity hit 返回 `evidence_source` 与 `evidence_snippet`，前端显示友好来源标签和高亮片段。
+- 命中证据：task/activity hit 返回 `evidence_source`、`evidence_snippet`、`evidence_activity_id`、`evidence_chunk_id` 与 `evidence_attachment_id`，可通过二跳接口读取证据正文。
 - 分块索引：活动搜索文本、note/文本附件正文、长 note 深层内容进入本地派生 chunk 索引。
 - 结构化收窄：`status`、`priority`、`knowledge_status`、`task_kind`、`task_code_prefix` 等过滤进入搜索链路。
 - 桌面交互：Global Search 与项目内搜索支持任务角色、优先级、知识状态收窄。
-- 向量运行时可观测：搜索状态面、回填 run 摘要、失败样本、processing lease、失败重试、过期 processing 恢复。
+- 向量运行时可观测：搜索状态面、回填 run 摘要、失败样本、processing lease、失败重试、过期 processing 恢复，以及 `semantic_attempted / semantic_used / semantic_error / semantic_candidate_count`。
+- RAG 化召回：保留 task vector 作为粗召回，同时为 note/attachment activity chunk 写入 chunk 级向量，并带 task/activity/chunk/attachment 回指。
+- Agent 恢复入口：`project.yaml` 支持 `entry_task_id` / `entry_task_code`，`task_context_get` 支持 notes/attachments include flags 和 limit。
 - 验收基线：golden queries 覆盖编号、精确短语、旧 note、文本附件、状态/知识状态过滤和长 note 深层 chunk。
 
 不阻塞当前发布、但建议后续增强：
 
 - fuzzy/CJK 质量评估。
-- semantic rationale、多证据聚合、更稳定的 snippet 排序。
+- 多证据聚合、更稳定的 snippet 排序和检后 rerank。
 - 非文本附件提取策略。
-- activity hit 深链到具体活动或证据位置。
 - 更细的向量运行时异常分级。
-- 更多中文查询、semantic explainability 和边界门槛。
+- 更多中文查询、semantic explainability、Recall@k/MRR 评测面和边界门槛。
 
 ## 版本口径
 
@@ -59,6 +60,7 @@ search:
 
 - `search.vector.enabled: false`，优先保证 lexical/chunk 搜索稳定可用。
 - 需要语义召回时再显式打开 `search.vector.enabled: true`。
+- 打开向量后，回填会写入 task 级向量和 activity chunk 级向量；这些仍是本地派生状态。
 - 生产或团队环境优先使用环境变量注入 embedding 凭据，不提交 `api_key`。
 - `sidecar_data_dir` 保持在本机数据目录下；向量和 chunk 都是本地派生状态，不通过 sync 复制。
 
@@ -89,6 +91,8 @@ cargo run --manifest-path src-tauri/Cargo.toml --bin agenta -- search status
 - 结果包含可读证据来源或证据片段，而不是只返回任务标题。
 - `status / priority / knowledge_status / task_kind` 过滤不会破坏基础召回。
 - 向量不可用时，系统仍能以 lexical/chunk fallback 返回可解释结果。
+- `meta.retrieval_mode` 只描述 task bucket：`structured_only | lexical_only | hybrid`；activity bucket 当前为 lexical-only。
+- 语义失败或超时时，`semantic_error` 必须说明 fallback 原因，不能静默降级。
 
 ## 回填与运维
 

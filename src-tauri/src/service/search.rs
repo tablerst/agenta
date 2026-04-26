@@ -55,7 +55,8 @@ impl AgentaService {
                 run_id,
                 status: "running".to_string(),
                 operation_kind: search_index_operation_kind("manual_backfill").to_string(),
-                operation_description: search_index_operation_description("manual_backfill").to_string(),
+                operation_description: search_index_operation_description("manual_backfill")
+                    .to_string(),
                 scanned: task_ids.len(),
                 queued,
                 skipped: task_ids.len().saturating_sub(queued),
@@ -227,7 +228,8 @@ impl AgentaService {
             run_id,
             status: run.status,
             operation_kind: search_index_operation_kind(&run.trigger_kind).to_string(),
-            operation_description: search_index_operation_description(&run.trigger_kind).to_string(),
+            operation_description: search_index_operation_description(&run.trigger_kind)
+                .to_string(),
             trigger_kind: run.trigger_kind,
             queued,
             processed: run.processed,
@@ -250,7 +252,8 @@ impl AgentaService {
             run_id: record.run_id,
             status: record.status,
             operation_kind: search_index_operation_kind(&record.trigger_kind).to_string(),
-            operation_description: search_index_operation_description(&record.trigger_kind).to_string(),
+            operation_description: search_index_operation_description(&record.trigger_kind)
+                .to_string(),
             trigger_kind: record.trigger_kind,
             scanned: record.scanned,
             queued: record.queued,
@@ -349,6 +352,10 @@ impl AgentaService {
                         pending_index_jobs,
                     ),
                     pending_index_jobs,
+                    semantic_attempted: false,
+                    semantic_used: false,
+                    semantic_error: None,
+                    semantic_candidate_count: 0,
                 },
             });
         }
@@ -388,9 +395,11 @@ impl AgentaService {
             }
         };
         let mut lexical_tasks = merge_lexical_task_rows(lexical_task_groups);
-        let vector_hits = match normalized_query.intent {
-            crate::search::SearchIntent::Identifier => Vec::new(),
-            _ => match self
+        let semantic_attempted = self.search.vector_enabled()
+            && normalized_query.intent != crate::search::SearchIntent::Identifier;
+        let mut semantic_error = None;
+        let vector_hits = if semantic_attempted {
+            match self
                 .search
                 .query_tasks(
                     &normalized_query.raw_text,
@@ -400,9 +409,16 @@ impl AgentaService {
                 .await
             {
                 Ok(vector_hits) => vector_hits,
-                Err(_) => Vec::new(),
-            },
+                Err(error) => {
+                    semantic_error = Some(error.to_string());
+                    Vec::new()
+                }
+            }
+        } else {
+            Vec::new()
         };
+        let semantic_candidate_count = vector_hits.len();
+        let semantic_evidence_by_task = build_semantic_evidence_map(&vector_hits);
         let lexical_task_ids = lexical_tasks
             .iter()
             .map(|row| row.task_id.clone())
@@ -451,11 +467,15 @@ impl AgentaService {
             vector_hits,
             &normalized_query.terms,
             &activity_evidence_by_task,
+            &semantic_evidence_by_task,
             limit,
         );
         let used_hybrid = task_sources
             .iter()
             .any(|hit| hit.retrieval_source == "hybrid" || hit.retrieval_source == "semantic");
+        if semantic_candidate_count > 0 {
+            rerank_task_hits(&mut task_sources);
+        }
         let activities = activity_rows
             .into_iter()
             .take(limit)
@@ -477,12 +497,18 @@ impl AgentaService {
                 ActivitySearchHit {
                     activity_id: activity.activity_id,
                     task_id: activity.task_id,
+                    project_id: activity.project_id,
+                    version_id: activity.version_id,
+                    task_title: activity.task_title,
                     kind: activity.kind,
                     summary: activity.summary,
+                    retrieval_source: "lexical".to_string(),
                     score: Some(activity.score),
                     matched_fields,
                     evidence_source: evidence.as_ref().map(|item| item.source.clone()),
-                    evidence_snippet: evidence.map(|item| item.snippet),
+                    evidence_snippet: evidence.as_ref().map(|item| item.snippet.clone()),
+                    evidence_chunk_id: Some(activity.chunk_id),
+                    evidence_attachment_id: activity.attachment_id,
                 }
             })
             .collect::<Vec<_>>();
@@ -495,7 +521,7 @@ impl AgentaService {
             meta: SearchMeta {
                 indexed_fields: default_indexed_fields(),
                 task_sort: if used_hybrid {
-                    "weighted RRF over lexical cascade (fts exact/prefix plus like fallback) and chroma semantic rank".to_string()
+                    "weighted RRF over lexical cascade (fts exact/prefix plus like fallback) and chroma semantic rank, followed by evidence-aware rerank".to_string()
                 } else if normalized_query.intent == crate::search::SearchIntent::Identifier {
                     "identifier-biased lexical cascade over sqlite like fallback plus sqlite fts exact/prefix".to_string()
                 } else {
@@ -519,8 +545,82 @@ impl AgentaService {
                     pending_index_jobs,
                 ),
                 pending_index_jobs,
+                semantic_attempted,
+                semantic_used: used_hybrid,
+                semantic_error,
+                semantic_candidate_count,
             },
         })
+    }
+
+    pub async fn get_search_evidence(
+        &self,
+        input: SearchEvidenceInput,
+    ) -> AppResult<SearchEvidenceDetail> {
+        if let Some(chunk_id) = input
+            .chunk_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            let chunk = self.store.get_activity_chunk(chunk_id).await?;
+            return Ok(SearchEvidenceDetail {
+                source_kind: "activity_chunk".to_string(),
+                task_id: chunk.task_id,
+                project_id: chunk.project_id,
+                version_id: chunk.version_id,
+                task_title: chunk.task_title,
+                activity_id: Some(chunk.activity_id),
+                chunk_id: Some(chunk.chunk_id),
+                chunk_index: Some(chunk.chunk_index),
+                attachment_id: chunk.attachment_id,
+                activity_kind: Some(chunk.kind),
+                summary: chunk.summary,
+                text: chunk.chunk_text,
+            });
+        }
+
+        if let Some(attachment_id) = input
+            .attachment_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            let attachment = self.store.get_attachment_by_ref(attachment_id).await?;
+            let task = self
+                .store
+                .get_task_with_stats_by_ref(&attachment.task_id.to_string())
+                .await?
+                .0;
+            let attachment_path = self.store.attachments_dir.join(&attachment.storage_path);
+            let bytes = fs::read(&attachment_path).await?;
+            let text = self
+                .store
+                .extract_attachment_search_text(
+                    &bytes,
+                    &attachment.mime,
+                    &attachment.original_filename,
+                )
+                .unwrap_or_else(|| attachment.summary.clone());
+            return Ok(SearchEvidenceDetail {
+                source_kind: "attachment".to_string(),
+                task_id: attachment.task_id.to_string(),
+                project_id: task.project_id.to_string(),
+                version_id: task.version_id.map(|value| value.to_string()),
+                task_title: task.title,
+                activity_id: None,
+                chunk_id: None,
+                chunk_index: None,
+                attachment_id: Some(attachment.attachment_id.to_string()),
+                activity_kind: None,
+                summary: attachment.summary,
+                text,
+            });
+        }
+
+        Err(AppError::InvalidArguments(
+            "search evidence lookup requires chunk_id or attachment_id".to_string(),
+        ))
     }
 
     pub(super) async fn queue_task_search_jobs_tx(

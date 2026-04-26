@@ -30,7 +30,12 @@ pub struct SearchVectorJob {
 #[derive(Clone, Debug)]
 pub struct VectorQueryHit {
     pub task_id: String,
+    pub source_kind: String,
+    pub activity_id: Option<String>,
+    pub chunk_id: Option<String>,
+    pub attachment_id: Option<String>,
     pub distance: Option<f64>,
+    pub document: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -68,6 +73,8 @@ struct ChromaCollectionRecord {
 struct ChromaQueryResponse {
     ids: Vec<Vec<String>>,
     distances: Option<Vec<Vec<f64>>>,
+    metadatas: Option<Vec<Vec<Value>>>,
+    documents: Option<Vec<Vec<String>>>,
 }
 
 #[derive(Deserialize)]
@@ -167,14 +174,12 @@ impl SearchRuntime {
             let mut documents = Vec::with_capacity(jobs.len());
             let mut queued_task_ids = Vec::with_capacity(jobs.len());
             for job in &jobs {
-                match store.get_task_vector_document(job.task_id).await? {
-                    Some(document) => {
-                        queued_task_ids.push(job.task_id);
-                        documents.push(document);
-                    }
-                    None => {
-                        store.complete_search_index_job(job.task_id).await?;
-                    }
+                let task_documents = store.get_task_vector_documents(job.task_id).await?;
+                if task_documents.is_empty() {
+                    store.complete_search_index_job(job.task_id).await?;
+                } else {
+                    queued_task_ids.push(job.task_id);
+                    documents.extend(task_documents);
                 }
             }
 
@@ -333,7 +338,7 @@ impl SearchRuntime {
         let mut payload = json!({
             "query_embeddings": [embedding],
             "n_results": limit.min(self.inner.config.vector.top_k),
-            "include": ["distances"],
+            "include": ["distances", "metadatas", "documents"],
         });
         if let Some(where_clause) = chroma_where_clause(filter) {
             payload["where"] = Value::Object(where_clause);
@@ -365,13 +370,58 @@ impl SearchRuntime {
             .into_iter()
             .next()
             .unwrap_or_default();
+        let metadatas = payload
+            .metadatas
+            .unwrap_or_default()
+            .into_iter()
+            .next()
+            .unwrap_or_default();
+        let documents = payload
+            .documents
+            .unwrap_or_default()
+            .into_iter()
+            .next()
+            .unwrap_or_default();
 
         Ok(ids
             .into_iter()
             .enumerate()
-            .map(|(index, task_id)| VectorQueryHit {
-                task_id,
-                distance: distances.get(index).copied(),
+            .filter_map(|(index, vector_id)| {
+                let metadata = metadatas.get(index);
+                let task_id = metadata
+                    .and_then(|value| value.get("task_id"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .or_else(|| parse_task_id_from_vector_id(&vector_id))?;
+                let source_kind = metadata
+                    .and_then(|value| value.get("source_kind"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| {
+                        if vector_id.starts_with("activity_chunk:") {
+                            "activity_chunk".to_string()
+                        } else {
+                            "task".to_string()
+                        }
+                    });
+                Some(VectorQueryHit {
+                    task_id,
+                    source_kind,
+                    activity_id: metadata
+                        .and_then(|value| value.get("activity_id"))
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                    chunk_id: metadata
+                        .and_then(|value| value.get("chunk_id"))
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                    attachment_id: metadata
+                        .and_then(|value| value.get("attachment_id"))
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                    distance: distances.get(index).copied(),
+                    document: documents.get(index).cloned(),
+                })
             })
             .collect())
     }
@@ -426,7 +476,7 @@ impl SearchRuntime {
         let payload = json!({
             "ids": documents
                 .iter()
-                .map(|document| document.task_id.clone())
+                .map(|document| document.vector_id.clone())
                 .collect::<Vec<_>>(),
             "embeddings": embeddings,
             "documents": inputs,
@@ -437,6 +487,12 @@ impl SearchRuntime {
                         "project_id": document.project_id,
                         "project_slug": document.project_slug,
                         "version_id": document.version_id,
+                        "source_kind": document.source_kind,
+                        "task_id": document.task_id,
+                        "activity_id": document.activity_id,
+                        "chunk_id": document.chunk_id,
+                        "chunk_index": document.chunk_index,
+                        "attachment_id": document.attachment_id,
                         "task_kind": document.task_kind,
                         "status": document.status,
                         "priority": document.priority,
@@ -677,6 +733,18 @@ fn chroma_where_clause(filter: &TaskListFilter) -> Option<Map<String, Value>> {
             Some(output)
         }
     }
+}
+
+fn parse_task_id_from_vector_id(vector_id: &str) -> Option<String> {
+    if vector_id.starts_with("activity_chunk:") {
+        return None;
+    }
+    let candidate = vector_id
+        .strip_prefix("task:")
+        .unwrap_or(vector_id)
+        .trim()
+        .to_string();
+    (!candidate.is_empty()).then_some(candidate)
 }
 
 fn backoff_seconds(attempt_count: i64) -> i64 {

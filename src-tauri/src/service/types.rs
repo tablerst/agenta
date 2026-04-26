@@ -209,6 +209,8 @@ pub struct ContextInitInput {
     pub context_dir: Option<PathBuf>,
     pub instructions: Option<String>,
     pub memory_dir: Option<String>,
+    pub entry_task_id: Option<String>,
+    pub entry_task_code: Option<String>,
     pub force: bool,
     pub dry_run: bool,
 }
@@ -220,6 +222,8 @@ pub struct ContextInitResult {
     pub manifest_path: PathBuf,
     pub status: ContextInitStatus,
     pub used_defaults: bool,
+    pub entry_task_id: Option<String>,
+    pub entry_task_code: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -529,6 +533,27 @@ pub struct TaskContext {
     pub blocking: Vec<TaskLink>,
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct TaskContextOptions {
+    pub recent_activity_limit: Option<usize>,
+    pub include_notes: bool,
+    pub notes_limit: Option<usize>,
+    pub include_attachments: bool,
+    pub attachments_limit: Option<usize>,
+}
+
+impl TaskContextOptions {
+    pub fn full(recent_activity_limit: Option<usize>) -> Self {
+        Self {
+            recent_activity_limit,
+            include_notes: true,
+            notes_limit: None,
+            include_attachments: true,
+            attachments_limit: None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SearchInput {
     pub text: Option<String>,
@@ -545,6 +570,28 @@ pub struct SearchInput {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct SearchEvidenceInput {
+    pub chunk_id: Option<String>,
+    pub attachment_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct SearchEvidenceDetail {
+    pub source_kind: String,
+    pub task_id: String,
+    pub project_id: String,
+    pub version_id: Option<String>,
+    pub task_title: String,
+    pub activity_id: Option<String>,
+    pub chunk_id: Option<String>,
+    pub chunk_index: Option<i64>,
+    pub attachment_id: Option<String>,
+    pub activity_kind: Option<String>,
+    pub summary: String,
+    pub text: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct ApprovalQuery {
     pub project: Option<String>,
     pub status: Option<ApprovalStatus>,
@@ -556,6 +603,8 @@ pub(super) struct ProjectContextManifest {
     pub(super) project: Option<String>,
     pub(super) instructions: Option<String>,
     pub(super) memory_dir: Option<String>,
+    pub(super) entry_task_id: Option<String>,
+    pub(super) entry_task_code: Option<String>,
 }
 
 #[derive(Debug)]

@@ -14,6 +14,7 @@ import type {
   Project,
   RuntimeStatus,
   SearchBackfillSummary,
+  SearchEvidenceDetail,
   SearchQueueRecoverySummary,
   SearchIndexStatusSummary,
   SearchResponse,
@@ -895,15 +896,25 @@ function buildTaskLink(relation: TaskRelation, taskId: string): TaskLink {
   };
 }
 
-function getTaskContext(taskId: string): TaskContextPayload {
+function getTaskContext(taskId: string, input: JsonMap = {}): TaskContextPayload {
   const task = findTask(taskId);
   refreshTaskDerivedFields(taskId);
   const parentRelation = activeParentRelation(taskId);
+  const notes = input.include_notes === false ? [] : listNotes(taskId);
+  const attachments = input.include_attachments === false ? [] : listAttachments(taskId);
+  const recentActivities = taskActivitiesFor(taskId);
+  const notesLimit = typeof input.notes_limit === "number" ? Math.max(0, input.notes_limit) : null;
+  const attachmentsLimit =
+    typeof input.attachments_limit === "number" ? Math.max(0, input.attachments_limit) : null;
+  const recentLimit =
+    typeof input.recent_activity_limit === "number"
+      ? Math.max(1, Math.min(50, input.recent_activity_limit))
+      : null;
   return {
     task,
-    notes: listNotes(taskId),
-    attachments: listAttachments(taskId),
-    recent_activities: taskActivitiesFor(taskId),
+    notes: notesLimit === null ? notes : notes.slice(0, notesLimit),
+    attachments: attachmentsLimit === null ? attachments : attachments.slice(0, attachmentsLimit),
+    recent_activities: recentLimit === null ? recentActivities : recentActivities.slice(0, recentLimit),
     parent: parentRelation ? buildTaskLink(parentRelation, parentRelation.source_task_id) : null,
     children: activeChildRelations(taskId).map((relation) => buildTaskLink(relation, relation.target_task_id)),
     blocked_by: activeBlockerRelations(taskId).map((relation) => buildTaskLink(relation, relation.source_task_id)),
@@ -1286,6 +1297,14 @@ function initProjectContext(input: JsonMap): ContextInitResult {
     status: dryRun ? (force ? "would_update" : "would_create") : force ? "updated" : "created",
     used_defaults:
       !("context_dir" in input) || !("instructions" in input) || !("memory_dir" in input),
+    entry_task_id:
+      typeof input.entry_task_id === "string" && input.entry_task_id.trim()
+        ? input.entry_task_id.trim()
+        : null,
+    entry_task_code:
+      typeof input.entry_task_code === "string" && input.entry_task_code.trim()
+        ? input.entry_task_code.trim()
+        : null,
   };
 }
 
@@ -1866,6 +1885,9 @@ function runSearch(input: JsonMap) {
     )
     .slice(0, limit)
     .map((item) => ({
+      task_id: item.task_id,
+      project_id: item.project_id,
+      version_id: item.version_id,
       task_code: item.task_code,
       task_kind: item.task_kind,
       knowledge_status: item.knowledge_status,
@@ -1907,7 +1929,9 @@ function runSearch(input: JsonMap) {
             item.task_context_digest,
           ].find((value) => value.toLowerCase().includes(query)) ?? null
         : null,
-      task_id: item.task_id,
+      evidence_activity_id: null,
+      evidence_chunk_id: null,
+      evidence_attachment_id: null,
       title: item.title,
     }));
 
@@ -1920,31 +1944,43 @@ function runSearch(input: JsonMap) {
         `${item.activity_search_summary} ${item.content}`.toLowerCase().includes(query),
     )
     .slice(0, limit)
-    .map((item) => ({
-      activity_id: item.activity_id,
-      kind: item.kind,
-      score: query ? 1 : null,
-      summary: item.activity_search_summary,
-      matched_fields: query
-        ? [
-            item.activity_search_summary.toLowerCase().includes(query) ? "activity_search_summary" : null,
-            item.content.toLowerCase().includes(query) ? "activity_search_text" : null,
-          ].filter((value): value is string => value !== null)
-        : [],
-      evidence_source: query
-        ? (item.activity_search_summary.toLowerCase().includes(query)
-            ? "activity_search_summary"
-            : item.content.toLowerCase().includes(query)
-              ? "activity_search_text"
-              : null)
-        : null,
-      evidence_snippet: query
-        ? (item.activity_search_summary.toLowerCase().includes(query)
-            ? item.activity_search_summary
-            : item.content)
-        : null,
-      task_id: item.task_id,
-    }));
+    .map((item) => {
+      const task = state.tasks.find((taskItem) => taskItem.task_id === item.task_id);
+      return {
+        activity_id: item.activity_id,
+        task_id: item.task_id,
+        project_id: task?.project_id ?? "",
+        version_id: task?.version_id ?? null,
+        task_title: task?.title ?? "",
+        kind: item.kind,
+        retrieval_source: "lexical" as const,
+        score: query ? 1 : null,
+        summary: item.activity_search_summary,
+        matched_fields: query
+          ? [
+              item.activity_search_summary.toLowerCase().includes(query) ? "activity_search_summary" : null,
+              item.content.toLowerCase().includes(query) ? "activity_search_text" : null,
+            ].filter((value): value is string => value !== null)
+          : [],
+        evidence_source: query
+          ? (item.activity_search_summary.toLowerCase().includes(query)
+              ? "activity_search_summary"
+              : item.content.toLowerCase().includes(query)
+                ? "activity_search_text"
+                : null)
+          : null,
+        evidence_snippet: query
+          ? (item.activity_search_summary.toLowerCase().includes(query)
+              ? item.activity_search_summary
+              : item.content)
+          : null,
+        evidence_chunk_id: null,
+        evidence_attachment_id:
+          typeof item.metadata_json.attachment_id === "string"
+            ? item.metadata_json.attachment_id
+            : null,
+      };
+    });
 
   const results: SearchResponse = {
     query,
@@ -1975,9 +2011,46 @@ function runSearch(input: JsonMap) {
       vector_backend: null,
       vector_status: "disabled",
       pending_index_jobs: 0,
+      semantic_attempted: false,
+      semantic_used: false,
+      semantic_error: null,
+      semantic_candidate_count: 0,
     },
   };
   return results;
+}
+
+function getSearchEvidence(input: JsonMap): SearchEvidenceDetail {
+  const chunkId = typeof input.chunk_id === "string" && input.chunk_id.trim() ? input.chunk_id.trim() : null;
+  const attachmentId =
+    typeof input.attachment_id === "string" && input.attachment_id.trim()
+      ? input.attachment_id.trim()
+      : null;
+  if (chunkId) {
+    bridgeError("not_found", `Preview search evidence chunk not found: ${chunkId}`);
+  }
+  if (!attachmentId) {
+    bridgeError("invalid_input", "Provide chunk_id or attachment_id.");
+  }
+  const attachment = state.attachments.find((item) => item.attachment_id === attachmentId);
+  if (!attachment) {
+    bridgeError("not_found", `Preview attachment not found: ${attachmentId}`);
+  }
+  const task = findTask(attachment.task_id);
+  return {
+    source_kind: "attachment",
+    task_id: task.task_id,
+    project_id: task.project_id,
+    version_id: task.version_id,
+    task_title: task.title,
+    activity_id: null,
+    chunk_id: null,
+    chunk_index: null,
+    attachment_id: attachment.attachment_id,
+    activity_kind: null,
+    summary: attachment.summary,
+    text: attachment.summary || attachment.original_filename,
+  };
 }
 
 function runtimeStatus(): RuntimeStatus {
@@ -2106,7 +2179,7 @@ export const mockDesktopBridge = {
         return Promise.resolve(
           envelope(
             "desktop_task",
-            getTaskContext(requireString(input.task, "task")),
+            getTaskContext(requireString(input.task, "task"), input),
             "Loaded preview task context.",
           ),
         );
@@ -2201,6 +2274,9 @@ export const mockDesktopBridge = {
     }
   },
   search(input: JsonMap = {}) {
+    if (input.action === "evidence" || input.action === "evidence_get") {
+      return Promise.resolve(envelope("desktop_search", getSearchEvidence(input), "Loaded preview search evidence."));
+    }
     return Promise.resolve(envelope("desktop_search", runSearch(input), "Loaded preview search results."));
   },
   searchBackfill(options: { limit?: number; batchSize?: number } = {}) {

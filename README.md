@@ -99,6 +99,7 @@ Agenta also exposes a unified `context_init` action through CLI, Desktop, and MC
 - MCP: `context_init`
 
 Use it when a project needs an initial or migrated context directory, especially when the target path does not match the default candidates.
+`project.yaml` may also include `entry_task_id` or `entry_task_code` so agents have a first-class recovery entry task instead of relying on title conventions.
 
 ## Search / Chroma Prerequisites
 
@@ -107,6 +108,8 @@ Vector search and `回填搜索索引` depend on a reachable Chroma backend when
 - If `search.vector.autostart_sidecar: true`, Desktop will try to run `chroma` locally. This only works when the Chroma CLI is installed and available on `PATH`.
 - If you prefer to run Chroma yourself, start a local server first and keep `search.vector.endpoint` pointed at that server.
 - If neither the CLI nor a running server is available, search backfill jobs may be queued but processing will fail until Chroma becomes reachable.
+- Search query meta uses `retrieval_mode=structured_only|lexical_only|hybrid`; that mode describes the task bucket, while activity hits are currently lexical-only. Semantic fallback is explicit through `semantic_attempted`, `semantic_used`, `semantic_error`, and `semantic_candidate_count`.
+- Search hits can expose `evidence_chunk_id` or `evidence_attachment_id`; use `agenta search evidence` or MCP `search_evidence_get` to read the second-hop evidence text.
 - Queue/runs/failures can be inspected locally via `agenta search status` or the Desktop Runtime search-index panel. Failed jobs can be retried with `agenta search retry-failed`, and expired processing leases can be recovered with `agenta search recover-stale`; embeddings remain local-only derived state and are not replicated through sync.
 - SearchV2 release, rollback, and verification guidance lives in [docs/search-v2-release.md](docs/search-v2-release.md).
 

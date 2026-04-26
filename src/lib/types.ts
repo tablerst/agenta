@@ -78,6 +78,8 @@ export interface ContextInitResult {
   manifest_path: string;
   status: ContextInitStatus;
   used_defaults: boolean;
+  entry_task_id: string | null;
+  entry_task_code: string | null;
 }
 
 export interface Task {
@@ -471,6 +473,8 @@ export interface GlobalSearchFilters {
 
 export interface SearchTaskHit {
   task_id: string;
+  project_id: string;
+  version_id: string | null;
   task_code: string | null;
   task_kind: TaskKind;
   title: string;
@@ -483,17 +487,26 @@ export interface SearchTaskHit {
   matched_fields: string[];
   evidence_source: string | null;
   evidence_snippet: string | null;
+  evidence_activity_id: string | null;
+  evidence_chunk_id: string | null;
+  evidence_attachment_id: string | null;
 }
 
 export interface SearchActivityHit {
   activity_id: string;
   task_id: string;
+  project_id: string;
+  version_id: string | null;
+  task_title: string;
   kind: TaskActivity["kind"];
   summary: string;
+  retrieval_source: "lexical";
   score: number | null;
   matched_fields: string[];
   evidence_source: string | null;
   evidence_snippet: string | null;
+  evidence_chunk_id: string | null;
+  evidence_attachment_id: string | null;
 }
 
 export interface SearchMeta {
@@ -512,6 +525,10 @@ export interface SearchMeta {
   vector_backend: string | null;
   vector_status: "disabled" | "ready" | "indexing" | "lexical_fallback";
   pending_index_jobs: number;
+  semantic_attempted: boolean;
+  semantic_used: boolean;
+  semantic_error: string | null;
+  semantic_candidate_count: number;
 }
 
 export interface SearchResponse {
@@ -519,6 +536,21 @@ export interface SearchResponse {
   tasks: SearchTaskHit[];
   activities: SearchActivityHit[];
   meta: SearchMeta;
+}
+
+export interface SearchEvidenceDetail {
+  source_kind: string;
+  task_id: string;
+  project_id: string;
+  version_id: string | null;
+  task_title: string;
+  activity_id: string | null;
+  chunk_id: string | null;
+  chunk_index: number | null;
+  attachment_id: string | null;
+  activity_kind: string | null;
+  summary: string;
+  text: string;
 }
 
 export interface AppBridgeError {

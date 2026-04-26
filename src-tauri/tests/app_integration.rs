@@ -774,6 +774,8 @@ async fn mcp_context_init_creates_manifest_in_explicit_directory(
                 context_dir: Some(context_dir.display().to_string()),
                 instructions: Some("README.md".to_string()),
                 memory_dir: Some("memory".to_string()),
+                entry_task_id: None,
+                entry_task_code: None,
                 force: Some(false),
                 dry_run: Some(false),
             },

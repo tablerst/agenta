@@ -9,8 +9,8 @@ use crate::service::{
     AddTaskBlockerInput, AttachChildTaskInput, ContextInitInput, ContextInitResult,
     CreateAttachmentInput, CreateChildTaskInput, CreateNoteInput, CreateProjectInput,
     CreateTaskInput, CreateVersionInput, DetachChildTaskInput, RequestOrigin,
-    ResolveTaskBlockerInput, SearchInput, TaskQuery, UpdateProjectInput, UpdateTaskInput,
-    UpdateVersionInput,
+    ResolveTaskBlockerInput, SearchEvidenceInput, SearchInput, TaskQuery, UpdateProjectInput,
+    UpdateTaskInput, UpdateVersionInput,
 };
 
 #[derive(Debug, Parser)]
@@ -96,6 +96,7 @@ enum AttachmentCommand {
 enum SearchCommand {
     Status,
     Query(SearchQueryArgs),
+    Evidence(SearchEvidenceArgs),
     Backfill(SearchExecuteArgs),
     RetryFailed(SearchExecuteArgs),
     RecoverStale(SearchExecuteArgs),
@@ -138,6 +139,10 @@ struct ContextInitArgs {
     instructions: Option<String>,
     #[arg(long = "memory-dir")]
     memory_dir: Option<String>,
+    #[arg(long = "entry-task-id")]
+    entry_task_id: Option<String>,
+    #[arg(long = "entry-task-code")]
+    entry_task_code: Option<String>,
     #[arg(long)]
     force: bool,
     #[arg(long = "dry-run")]
@@ -411,6 +416,14 @@ struct SearchExecuteArgs {
 }
 
 #[derive(Debug, Args)]
+struct SearchEvidenceArgs {
+    #[arg(long = "chunk-id")]
+    chunk_id: Option<String>,
+    #[arg(long = "attachment-id")]
+    attachment_id: Option<String>,
+}
+
+#[derive(Debug, Args)]
 struct SyncOutboxListArgs {
     #[arg(long)]
     limit: Option<usize>,
@@ -489,6 +502,8 @@ async fn execute_context(app: AgentaApp, command: ContextCommand) -> AppResult<S
                     context_dir: args.context_dir,
                     instructions: args.instructions,
                     memory_dir: args.memory_dir,
+                    entry_task_id: args.entry_task_id,
+                    entry_task_code: args.entry_task_code,
                     force: args.force,
                     dry_run: args.dry_run,
                 })
@@ -843,6 +858,16 @@ async fn execute_search(app: AgentaApp, command: SearchCommand) -> AppResult<Suc
                 })
                 .await?;
             success("search.query", result, "Completed search")
+        }
+        SearchCommand::Evidence(args) => {
+            let result = app
+                .service
+                .get_search_evidence(SearchEvidenceInput {
+                    chunk_id: args.chunk_id,
+                    attachment_id: args.attachment_id,
+                })
+                .await?;
+            success("search.evidence", result, "Loaded search evidence")
         }
         SearchCommand::Backfill(args) => {
             let result = app
