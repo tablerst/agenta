@@ -37,6 +37,16 @@ Current Tauri config points at Bun:
 - Before adding a new SQL migration under `src-tauri/migrations/`, verify that the numeric prefix is not already taken.
 - For tests that bootstrap isolated runtime configs, pin `project_context.paths` to a temp-local directory so repository-level `.agenta/project.yaml` files do not leak into scope resolution.
 
+## Agenta Workflow
+- Use the project-local skill at `.agents/skills/agenta-workflow` for Agenta project, version, task, note, and closeout workflows.
+- Treat Agenta as the project context ledger and closeout surface, not only as a todo list.
+- Select one Agenta operation surface before writes: prefer MCP when Agenta MCP tools are available and the user has not requested CLI; use `agenta` CLI when the user requests command-line operation, MCP is unavailable, or a repeatable batch/verification command is the better fit.
+- Before substantial investigation or implementation, reuse or initialize the Agenta project and active version through the selected operation surface.
+- For numbered or reusable work, set `task_code`, `task_kind`, and `note_kind` explicitly.
+- After each substantive phase, keep code and verification artifacts, active execution plans, and Agenta task notes/statuses synchronized.
+- After any Agenta write, read back the affected project, version, task, note, or attachment before continuing.
+- If neither Agenta MCP tools nor the `agenta` CLI are available, report the workflow installation/configuration issue instead of silently skipping the ledger.
+
 ## Configuration Conventions
 - Prefer YAML for persisted runtime configuration across apps, packages, tools, and local services.
 - Commit safe templates as `*.example.yaml` or `*.example.yml`; keep machine-local or secret-bearing overrides in `*.local.yaml` or `*.local.yml`.
