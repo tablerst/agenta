@@ -24,6 +24,7 @@ Agenta is a local-first task and context service for agent hosts. The local desk
 - `cargo check --manifest-path src-tauri/Cargo.toml`
 - `cargo test --manifest-path src-tauri/Cargo.toml`
 - `cargo run --manifest-path src-tauri/Cargo.toml --bin agenta -- context init --project demo`
+- `cargo run --manifest-path src-tauri/Cargo.toml --bin agenta -- task context --task <task-id>`
 - `cargo run --manifest-path src-tauri/Cargo.toml --bin agenta -- sync status`
 - `cargo run --manifest-path src-tauri/Cargo.toml --bin agenta -- sync outbox list --limit 20`
 - `cargo run --manifest-path src-tauri/Cargo.toml --bin agenta -- --help`
@@ -86,6 +87,8 @@ Current sync defaults stay intentionally conservative:
 
 Agenta is a task ledger, not a project memory system. In multi-project environments:
 
+- Repository files remain the source of truth for long-lived project context: agent instructions, README files, architecture notes, execution plans, and project-local skills
+- Agenta records task-level status, findings, validation, closeout, and searchable evidence; notes should reference project files instead of duplicating them
 - `task list` and `search query` no longer default to cross-project results
 - if the current project context directory resolves a unique project, queries scope to that project automatically
 - if only one project exists, queries still scope to it for compatibility
@@ -99,7 +102,7 @@ Agenta also exposes a unified `context_init` action through CLI, Desktop, and MC
 - MCP: `context_init`
 
 Use it when a project needs an initial or migrated context directory, especially when the target path does not match the default candidates.
-`project.yaml` may also include `entry_task_id` or `entry_task_code` so agents have a first-class recovery entry task instead of relying on title conventions.
+`project.yaml` may also include `entry_task_id` or `entry_task_code` for task-lane recovery, but Agenta does not require a project-wide long-term context task.
 
 ## Search / Chroma Prerequisites
 

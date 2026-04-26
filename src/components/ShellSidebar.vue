@@ -9,7 +9,7 @@ import {
   SunMedium,
   X,
 } from "@lucide/vue";
-import { computed } from "vue";
+import { computed, onMounted } from "vue";
 import { useI18n } from "vue-i18n";
 import { RouterLink, useRoute } from "vue-router";
 
@@ -18,10 +18,12 @@ import logoUrl from "../assets/logo.svg";
 import { resolveBridgeMode } from "../lib/desktop";
 import { buildProjectWorkspacePath, readRouteString } from "../lib/projectWorkspace";
 import { buildRuntimeWorkspacePath } from "../lib/runtimeWorkspace";
+import { useApprovalsStore } from "../stores/approvals";
 import { useProjectsStore } from "../stores/projects";
 import { useShellStore } from "../stores/shell";
 
 const shell = useShellStore();
+const approvalsStore = useApprovalsStore();
 const projectsStore = useProjectsStore();
 const route = useRoute();
 const { locale, t } = useI18n({ useScope: "global" });
@@ -35,8 +37,14 @@ const projectsTarget = computed(() => {
 const navItems = computed(() => {
   void locale.value;
   return [
-    { key: "projects", label: t("routes.projects.title"), to: projectsTarget.value, icon: FolderKanban },
-    { key: "runtime", label: t("routes.runtime.title"), to: buildRuntimeWorkspacePath("host"), icon: Activity },
+    {
+      key: "projects",
+      badge: approvalsStore.pendingCount,
+      label: t("routes.projects.title"),
+      to: projectsTarget.value,
+      icon: FolderKanban,
+    },
+    { key: "runtime", badge: 0, label: t("routes.runtime.title"), to: buildRuntimeWorkspacePath("host"), icon: Activity },
   ];
 });
 
@@ -59,6 +67,10 @@ const toggleIcon = computed(() => {
     return X;
   }
   return isCondensed.value ? PanelLeftOpen : PanelLeftClose;
+});
+
+onMounted(() => {
+  void approvalsStore.refreshPendingCount();
 });
 
 function isActive(key: string, to: string) {
@@ -140,6 +152,13 @@ function navigateAndClose(navigate: () => void) {
           >
             <component :is="item.icon" class="nav-item-icon" :size="17" />
             <span v-if="!isCondensed" class="truncate">{{ item.label }}</span>
+            <span
+              v-if="item.badge && item.badge > 0"
+              class="nav-item-badge"
+              :aria-label="t('sidebar.pendingApprovalsBadge', { count: item.badge })"
+            >
+              {{ item.badge }}
+            </span>
           </a>
         </RouterLink>
       </nav>

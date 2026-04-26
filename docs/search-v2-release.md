@@ -13,7 +13,7 @@ SearchV2 是 `v0.1.1-search-usable` 的搜索可用性收口版本，并随 Git 
 - 桌面交互：Global Search 与项目内搜索支持任务角色、优先级、知识状态收窄。
 - 向量运行时可观测：搜索状态面、回填 run 摘要、失败样本、processing lease、失败重试、过期 processing 恢复，以及 `semantic_attempted / semantic_used / semantic_error / semantic_candidate_count`。
 - RAG 化召回：保留 task vector 作为粗召回，同时为 note/attachment activity chunk 写入 chunk 级向量，并带 task/activity/chunk/attachment 回指。
-- Agent 恢复入口：`project.yaml` 支持 `entry_task_id` / `entry_task_code`，`task_context_get` 支持 notes/attachments include flags 和 limit。
+- Agent 任务级恢复：`project.yaml` 可选支持 `entry_task_id` / `entry_task_code` 作为任务泳道恢复提示；项目长期上下文仍由仓库文件承载，`task_context_get` 支持 notes/attachments include flags 和 limit。
 - 验收基线：golden queries 覆盖编号、精确短语、旧 note、文本附件、状态/知识状态过滤和长 note 深层 chunk。
 
 不阻塞当前发布、但建议后续增强：

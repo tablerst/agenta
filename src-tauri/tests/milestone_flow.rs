@@ -266,12 +266,16 @@ async fn mcp_streamable_http_lists_tools_and_calls_project_tool() {
     assert!(tools.iter().any(|tool| tool.name == "attachment_get"));
     assert!(tools.iter().any(|tool| tool.name == "attachment_list"));
     assert!(tools.iter().any(|tool| tool.name == "search_query"));
+    assert!(tools.iter().any(|tool| tool.name == "search_evidence_get"));
     assert!(!tools.iter().any(|tool| tool.name == "project"));
     assert!(!tools.iter().any(|tool| tool.name == "version"));
     assert!(!tools.iter().any(|tool| tool.name == "task"));
     assert!(!tools.iter().any(|tool| tool.name == "note"));
     assert!(!tools.iter().any(|tool| tool.name == "attachment"));
     assert!(!tools.iter().any(|tool| tool.name == "search"));
+    assert!(!tools
+        .iter()
+        .any(|tool| tool.name.as_ref().starts_with("sync_")));
 
     let result = client
         .call_tool(

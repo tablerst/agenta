@@ -8,6 +8,7 @@ Use this file when `operating-surfaces.md` selects MCP mode.
 - Trust the exposed tool descriptions, input schemas, and output schemas.
 - Do not assume an old multiplexed `action + arguments.action` interface still exists.
 - Each tool should map to one clear intent.
+- Keep the Agent MCP surface task-critical. Runtime, release, and remote sync operations are user/desktop/CLI concerns and should not be expected in the default Agent tool list.
 
 ## Common Tool Groups
 

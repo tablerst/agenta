@@ -759,6 +759,14 @@ html[data-theme="dark"] {
     box-shadow: inset 0 1px 0 var(--border-highlight);
   }
 
+  .panel-section-target {
+    border-color: color-mix(in srgb, var(--accent-color) 38%, var(--border-color));
+    background: linear-gradient(180deg, var(--accent-soft), var(--bg-panel));
+    box-shadow:
+      inset 0 1px 0 var(--border-highlight),
+      0 0 0 2px color-mix(in srgb, var(--accent-color) 12%, transparent);
+  }
+
   .spotlight-surface {
     @apply relative overflow-hidden;
   }
@@ -798,6 +806,13 @@ html[data-theme="dark"] {
 
   .nav-item-icon {
     flex-shrink: 0;
+  }
+
+  .nav-item-badge {
+    @apply ml-auto inline-flex min-w-5 items-center justify-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold;
+    color: var(--danger-text);
+    border: 1px solid rgba(244, 63, 94, 0.24);
+    background: rgba(244, 63, 94, 0.12);
   }
 
   .shell-nav-dot {
@@ -1839,7 +1854,21 @@ html[data-theme="dark"] {
   }
 
   .shell-notice {
-    @apply fixed right-5 top-5 z-50 max-w-sm rounded-2xl border px-4 py-3 text-sm shadow-[var(--surface-shadow)] backdrop-blur-xl;
+    @apply fixed right-5 top-5 z-50 flex max-w-sm items-start gap-3 rounded-[8px] border px-4 py-3 text-sm shadow-[var(--surface-shadow)] backdrop-blur-xl;
+  }
+
+  .shell-notice-message {
+    @apply min-w-0 flex-1 leading-6;
+  }
+
+  .shell-notice-dismiss {
+    @apply inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-[6px] text-[var(--text-main)] transition;
+    border: 1px solid transparent;
+  }
+
+  .shell-notice-dismiss:hover {
+    border-color: var(--border-color);
+    background: color-mix(in srgb, var(--bg-panel) 72%, transparent);
   }
 
   .shell-notice-success {

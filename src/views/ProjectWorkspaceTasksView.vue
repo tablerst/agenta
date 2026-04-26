@@ -36,7 +36,9 @@ import type {
   KnowledgeStatus,
   NoteKind,
   ProjectSearchFilters,
+  SearchActivityHit,
   SearchResponse,
+  SearchTaskHit,
   TaskKind,
   TaskPriority,
   TaskStatus,
@@ -108,6 +110,12 @@ const relationForm = reactive({
 const selectedProjectSlug = computed(() => String(route.params.projectSlug ?? ""));
 const selectedVersionId = computed(() => readRouteString(route.query.version) ?? "");
 const selectedTaskId = computed(() => readRouteString(route.query.task) ?? "");
+const selectedDetailTab = computed<TaskDetailTab | undefined>(() => {
+  const tab = readRouteString(route.query.tab);
+  return taskDetailTabOptions.includes(tab as TaskDetailTab) ? (tab as TaskDetailTab) : undefined;
+});
+const selectedActivityId = computed(() => readRouteString(route.query.activity) ?? "");
+const selectedAttachmentId = computed(() => readRouteString(route.query.attachment) ?? "");
 const selectedStatus = computed(() => readRouteString(route.query.status) ?? "");
 const selectedSearchQuery = computed(() => readRouteString(route.query.q) ?? "");
 const selectedTaskKindFilter = ref("");
@@ -265,7 +273,7 @@ const activeTaskFilterLabels = computed(() => {
 });
 const activeTaskFilterCount = computed(() => activeTaskFilterLabels.value.length);
 
-type TaskQueryKey = "q" | "status" | "task" | "version";
+type TaskQueryKey = "activity" | "attachment" | "q" | "status" | "tab" | "task" | "version";
 
 function queryValue(
   overrides: Record<TaskQueryKey, string | undefined>,
@@ -287,8 +295,11 @@ function serializeStatusValues(value: string | string[]) {
 
 function buildTaskQuery(overrides: Partial<Record<TaskQueryKey, string | undefined>> = {}) {
   return mergeWorkspaceQuery({
+    activity: queryValue(overrides as Record<TaskQueryKey, string | undefined>, "activity", selectedActivityId.value),
+    attachment: queryValue(overrides as Record<TaskQueryKey, string | undefined>, "attachment", selectedAttachmentId.value),
     q: queryValue(overrides as Record<TaskQueryKey, string | undefined>, "q", selectedSearchQuery.value),
     status: queryValue(overrides as Record<TaskQueryKey, string | undefined>, "status", selectedStatus.value),
+    tab: queryValue(overrides as Record<TaskQueryKey, string | undefined>, "tab", selectedDetailTab.value ?? ""),
     task: queryValue(overrides as Record<TaskQueryKey, string | undefined>, "task", selectedTaskId.value),
     version: queryValue(overrides as Record<TaskQueryKey, string | undefined>, "version", selectedVersionId.value),
   });
@@ -451,7 +462,36 @@ function cancelCreateTask() {
 
 async function selectTask(taskId: string) {
   isCreatingTask.value = false;
-  await updateQuery({ task: taskId });
+  await updateQuery({ activity: undefined, attachment: undefined, tab: undefined, task: taskId });
+}
+
+function taskHitTab(task: SearchTaskHit): TaskDetailTab | undefined {
+  if (task.evidence_attachment_id) {
+    return "attachments";
+  }
+  if (task.evidence_activity_id || task.evidence_chunk_id) {
+    return "activity";
+  }
+  return undefined;
+}
+
+async function selectSearchTask(task: SearchTaskHit) {
+  const tab = taskHitTab(task);
+  await updateQuery({
+    activity: tab === "activity" ? (task.evidence_activity_id ?? undefined) : undefined,
+    attachment: tab === "attachments" ? (task.evidence_attachment_id ?? undefined) : undefined,
+    tab,
+    task: task.task_id,
+  });
+}
+
+async function selectSearchActivity(activity: SearchActivityHit) {
+  await updateQuery({
+    activity: activity.activity_id,
+    attachment: activity.evidence_attachment_id ?? undefined,
+    tab: "activity",
+    task: activity.task_id,
+  });
 }
 
 async function updateVersionFilter(version: string) {
@@ -637,7 +677,7 @@ watch(
 watch(
   selectedTaskId,
   async (taskId) => {
-    detailTab.value = "overview";
+    detailTab.value = selectedDetailTab.value ?? "overview";
 
     if (!taskId) {
       tasksStore.clearTaskDetail();
@@ -647,6 +687,13 @@ watch(
     await tasksStore.loadTaskDetail(taskId);
   },
   { immediate: true },
+);
+
+watch(
+  selectedDetailTab,
+  (tab) => {
+    detailTab.value = tab ?? "overview";
+  },
 );
 
 onMounted(async () => {
@@ -1087,7 +1134,7 @@ async function jumpToQueuedApproval(error: unknown) {
                     v-spotlight
                     class="list-row spotlight-surface"
                     :class="{ 'list-row-active': selectedTaskId === task.task_id }"
-                    @click="selectTask(task.task_id)"
+                    @click="selectSearchTask(task)"
                   >
                     <SquareKanban :size="16" />
                     <div class="min-w-0 flex-1 space-y-2">
@@ -1139,7 +1186,7 @@ async function jumpToQueuedApproval(error: unknown) {
                     v-spotlight
                     class="list-row spotlight-surface"
                     :class="{ 'list-row-active': selectedTaskId === item.task_id }"
-                    @click="selectTask(item.task_id)"
+                    @click="selectSearchActivity(item)"
                   >
                     <Search :size="16" />
                     <div class="min-w-0 flex-1 space-y-2">
@@ -1582,7 +1629,12 @@ async function jumpToQueuedApproval(error: unknown) {
                 </button>
               </div>
             </section>
-            <article v-for="attachment in tasksStore.attachments" :key="attachment.attachment_id" class="panel-section">
+            <article
+              v-for="attachment in tasksStore.attachments"
+              :key="attachment.attachment_id"
+              class="panel-section"
+              :class="{ 'panel-section-target': selectedAttachmentId === attachment.attachment_id }"
+            >
               <div class="flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <p class="text-sm font-medium text-[var(--text-main)]">{{ attachment.summary }}</p>
@@ -1613,7 +1665,12 @@ async function jumpToQueuedApproval(error: unknown) {
             role="tabpanel"
             tabindex="0"
           >
-            <article v-for="item in tasksStore.activities" :key="item.activity_id" class="panel-section">
+            <article
+              v-for="item in tasksStore.activities"
+              :key="item.activity_id"
+              class="panel-section"
+              :class="{ 'panel-section-target': selectedActivityId === item.activity_id }"
+            >
               <div class="mb-2 flex items-center justify-between">
                 <span class="status-pill">{{ t(`activityKind.${item.kind}`) }}</span>
                 <span class="inline-flex items-center gap-1 text-xs text-[var(--text-muted)]">

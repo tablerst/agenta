@@ -45,6 +45,7 @@ const baseMessages = {
       languageLabel: "Language: {language}",
       languageMenuLabel: "Choose language",
       openGlobalSearch: "Open global search",
+      pendingApprovalsBadge: "{count} pending approvals",
       previewCaption:
         "Browser preview uses seeded local data so Playwright and day-to-day UI work stay explorable without the desktop bridge.",
       previewData: "Preview data",
@@ -55,6 +56,7 @@ const baseMessages = {
     common: {
       all: "All",
       cancel: "Cancel",
+      dismiss: "Dismiss",
       na: "N/A",
       redirecting: "Redirecting",
       resource: "resource",
@@ -509,6 +511,7 @@ const baseMessages = {
       languageLabel: "语言: {language}",
       languageMenuLabel: "选择语言",
       openGlobalSearch: "打开全局搜索",
+      pendingApprovalsBadge: "{count} 个待审批",
       previewCaption:
         "浏览器预览会使用本地种子数据，这样即使没有桌面桥接，也能继续进行 Playwright 调试和日常 UI 开发。",
       previewData: "预览数据",
@@ -519,6 +522,7 @@ const baseMessages = {
     common: {
       all: "全部",
       cancel: "取消",
+      dismiss: "关闭",
       na: "暂无",
       redirecting: "正在跳转",
       resource: "资源",

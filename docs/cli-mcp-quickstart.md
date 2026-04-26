@@ -28,13 +28,13 @@ project_context:
   manifest: project.yaml
 ```
 
-`project.yaml` 由用户或 Agent 直接维护，Agenta 只读取，不负责初始化或同步。推荐最小内容：
+`project.yaml` 是项目级提示文件，不是 Agenta 托管的长期记忆。Codex、Claude Code 等 Agent 应先读取仓库里的 `AGENTS.md`、`README.md`、架构说明、执行计划和本地 skill，再用 Agenta 恢复任务级台账。推荐最小内容：
 
 ```yaml
 project: demo
 instructions: README.md
 memory_dir: memory
-entry_task_code: InitCtx-00 # optional recovery entry task
+# entry_task_code: InitCtx-00 # optional task-lane recovery entry
 ```
 
 MCP 配置面如下：
@@ -97,9 +97,16 @@ cargo run --manifest-path src-tauri/Cargo.toml --bin agenta -- `
   task create --project demo --title "Ship runtime console" --summary "Desktop-hosted MCP baseline"
 ```
 
+恢复任务上下文：
+
+```powershell
+cargo run --manifest-path src-tauri/Cargo.toml --bin agenta -- `
+  task context --task <task-id> --notes-limit 5 --attachments-limit 3
+```
+
 CLI 默认输出 JSON。
 
-更完整的 CLI 命令面、搜索回填、Chroma 前置条件和同步命令说明见 [CLI Reference](cli-reference.md)。
+更完整的 CLI 命令面、搜索回填、Chroma 前置条件和用户主动同步命令说明见 [CLI Reference](cli-reference.md)。
 
 ## 4. Desktop Runtime 控制台
 
@@ -178,6 +185,10 @@ Standalone `agenta-mcp` 默认走 `stdout` 日志；若显式配置 `mcp.log.des
 - `search_query`：用结构化过滤 + 可选 query 搜索任务与任务活动；支持 `project/version/task_kind/task_code_prefix/title_prefix/all_projects`
 - `search_evidence_get`：按 `evidence_chunk_id` 或 `evidence_attachment_id` 读取 `search_query` 返回命中的二跳证据正文
 
+不属于 Agent 默认 MCP 工具面的能力：
+
+- sync、release、runtime 运维操作保留在 Desktop 或用户主动 CLI 路径中，不进入默认 `tools/list`
+
 当前对外 contract 约束：
 
 - 每个 Tool 对应单一意图，不再要求客户端传递 `arguments.action`
@@ -207,9 +218,10 @@ Standalone `agenta-mcp` 默认走 `stdout` 日志；若显式配置 `mcp.log.des
 - Agent 或客户端先调用 `context_init`
 - 如果项目上下文目录位置不固定，显式传 `context_dir` 或 `workspace_root`
 - Desktop、CLI 和 MCP 都应复用这同一个动作，而不是各自手写目录规则
+- 不要为了项目级长期上下文强制写入 `entry_task_code`；只有某个任务泳道确实需要稳定恢复入口时才写
 
 接入建议：
 
 - 客户端应优先读取 `tools/list` 中的 `description`、`inputSchema`、`outputSchema`、`annotations`
 - 不要假设仍存在旧的 `project` / `version` / `task` / `note` / `attachment` / `search` 多路复用工具
-- Agent 应先读取当前项目的上下文目录，再调用 Agenta 的 task ledger tools；Agenta 不负责维护项目全局记忆
+- Agent 应先读取项目文件，再调用 Agenta 的 task ledger tools；Agenta 不负责维护项目全局记忆

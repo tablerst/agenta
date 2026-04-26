@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Menu, Search } from "@lucide/vue";
+import { Menu, Search, X } from "@lucide/vue";
 import { computed, onMounted, onUnmounted, watch } from "vue";
 import { useRoute } from "vue-router";
 import { useI18n } from "vue-i18n";
@@ -119,7 +119,17 @@ onUnmounted(() => {
         'shell-notice-info': shell.notice.kind === 'info',
       }"
     >
-      {{ shell.notice.message }}
+      <span class="shell-notice-message">{{ shell.notice.message }}</span>
+      <button
+        v-if="shell.notice.sticky"
+        class="shell-notice-dismiss"
+        type="button"
+        :aria-label="t('common.dismiss')"
+        :title="t('common.dismiss')"
+        @click="shell.clearNotice()"
+      >
+        <X :size="14" />
+      </button>
     </div>
 
     <GlobalSearchPalette />

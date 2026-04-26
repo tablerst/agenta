@@ -1,11 +1,11 @@
 ---
 name: agenta-workflow
-description: "Use when managing Agenta as a project/context ledger: initialize or activate projects and versions, organize context or implementation tasks, restore task context, advance adjacent tasks in phase-sized batches, append findings/conclusions, sync Agenta state with local execution plans, verify task state, or close out work through either CLI or MCP."
+description: "Use when managing Agenta as a task-level project ledger: reuse projects and versions, organize implementation tasks, restore task context, advance adjacent tasks in phase-sized batches, append findings/conclusions, synchronize Agenta notes/statuses with code and local plans, verify task state, or close out work through either CLI or MCP."
 ---
 
 # Agenta Workflow
 
-Use Agenta as a project context ledger and task closeout surface, not just as a todo list.
+Use Agenta as a task-level ledger and closeout surface, not as the project's long-term memory system.
 
 ## When To Use
 
@@ -16,6 +16,8 @@ Use this skill when the work needs one or more of these outcomes:
 - Turn module-level exploration into reusable context tasks, index tasks, or conclusion notes.
 - Restore historical context from an Agenta task and continue the work.
 - Close out state, conclusions, and risks after parallel exploration or implementation.
+
+Project source files come first. Agent hosts should read repository-maintained context such as `AGENTS.md`, `README.md`, architecture notes, execution plans, and local skill files before using Agenta to recover task-level ledger state. Agenta notes should reference those files when useful; they should not duplicate or replace them.
 
 ## Operating Modes
 
@@ -53,10 +55,10 @@ After using this skill, produce one or more of these artifacts:
 
 - A confirmed reusable Agenta project.
 - A stable default baseline version.
-- A set of tasks organized around future context recovery.
+- A set of tasks organized around task-level recovery.
 - Findings or conclusion notes bound to Agenta tasks.
 - Trustworthy task state and knowledge state.
-- An index-style task suitable for restoring future context.
+- An index-style task only when a task lane genuinely needs a reusable recovery entry.
 
 ## Constraints
 

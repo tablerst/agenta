@@ -39,7 +39,8 @@ Current Tauri config points at Bun:
 
 ## Agenta Workflow
 - Use the project-local skill at `.agents/skills/agenta-workflow` for Agenta project, version, task, note, and closeout workflows.
-- Treat Agenta as the project context ledger and closeout surface, not only as a todo list.
+- Treat Agenta as the task-level ledger and closeout surface, not as the project's long-term memory system.
+- Read repository-maintained context first: `AGENTS.md`, `README.md`, architecture notes, execution plans, and local skills.
 - Select one Agenta operation surface before writes: prefer MCP when Agenta MCP tools are available and the user has not requested CLI; use `agenta` CLI when the user requests command-line operation, MCP is unavailable, or a repeatable batch/verification command is the better fit.
 - Before substantial investigation or implementation, reuse or initialize the Agenta project and active version through the selected operation surface.
 - For numbered or reusable work, set `task_code`, `task_kind`, and `note_kind` explicitly.

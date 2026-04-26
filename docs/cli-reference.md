@@ -43,13 +43,14 @@ Agenta 会按配置的候选目录查找 `project.yaml`。这个 manifest 只需
 project: demo
 instructions: README.md
 memory_dir: memory
-entry_task_code: InitCtx-00 # optional recovery entry task
+# entry_task_code: InitCtx-00 # optional task-lane recovery entry
 ```
 
 Agent 推荐工作流：
 
-1. 先读取当前项目的上下文目录和 `project.yaml`
-2. 再调用 Agenta 的 `task / note / attachment / search` 工具处理账本对象
+1. 先读取仓库维护的项目文件，例如 `AGENTS.md`、`README.md`、架构说明、执行计划和本地 skill
+2. 再读取当前项目的上下文目录和 `project.yaml` 来确定 Agenta 项目范围
+3. 最后调用 Agenta 的 `task / note / attachment / search` 工具处理任务级台账对象
 
 如果 `project.yaml` 可解析出唯一项目，而 CLI/MCP 调用没有显式传 `project`，Agenta 会默认把查询收窄到该项目。
 
@@ -85,12 +86,14 @@ agenta context init --project demo --context-dir D:\repo\.agenta --dry-run
 - `--context-dir`: 显式指定目标上下文目录，优先级最高
 - `--instructions`: 写入 manifest 的入口文档，默认 `README.md`
 - `--memory-dir`: 写入 manifest 的记忆目录，默认 `memory`
-- `--entry-task-id`: 写入 manifest 的恢复入口任务 UUID
-- `--entry-task-code`: 写入 manifest 的恢复入口任务编号，例如 `InitCtx-00`
+- `--entry-task-id`: 写入 manifest 的任务泳道恢复入口 UUID，可省略
+- `--entry-task-code`: 写入 manifest 的任务泳道恢复入口编号，例如 `InitCtx-00`，可省略
 - `--force`: 已有 manifest 不一致时允许覆盖
 - `--dry-run`: 只返回目标路径和状态，不写文件
 
 `context init` 会创建 `project.yaml`，并在 `memory_dir` 非空时创建对应目录。
+
+不要为了项目级长期上下文强制设置 `entry_task_id` 或 `entry_task_code`。项目级长期上下文应继续由仓库文件承载，Agenta 只记录任务级结论、验证、风险和 closeout。
 
 ## 项目与任务
 
@@ -123,6 +126,14 @@ agenta task list --project demo --version <version-id> --sort-by task_code --sor
 agenta task list --all-projects
 ```
 
+恢复单个任务上下文：
+
+```powershell
+agenta task context --task <task-id>
+agenta task context --task <task-id> --include-notes false --recent-activity-limit 5
+agenta task context --task <task-id> --notes-limit 5 --attachments-limit 3
+```
+
 更新任务：
 
 ```powershell
@@ -136,7 +147,7 @@ agenta task create-child --parent <task-id> --title "Child task"
 agenta task attach-child --parent <task-id> --child <task-id>
 agenta task detach-child --parent <task-id> --child <task-id>
 agenta task add-blocker --blocked <task-id> --blocker <task-id>
-agenta task resolve-blocker --blocked <task-id> --blocker <task-id>
+agenta task resolve-blocker --task <task-id> --blocker <task-id>
 ```
 
 ## 备注与附件

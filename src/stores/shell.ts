@@ -9,6 +9,7 @@ type NoticeKind = "info" | "success" | "error";
 interface Notice {
   kind: NoticeKind;
   message: string;
+  sticky: boolean;
 }
 
 const DARK_QUERY = "(prefers-color-scheme: dark)";
@@ -121,6 +122,10 @@ export const useShellStore = defineStore("shell", () => {
     searchOpen.value = false;
   }
 
+  function clearNotice() {
+    notice.value = null;
+  }
+
   function restoreSearchFocus() {
     const target = searchTrigger.value;
     searchTrigger.value = null;
@@ -143,13 +148,15 @@ export const useShellStore = defineStore("shell", () => {
     mobileSidebarOpen.value = false;
   }
 
-  function pushNotice(kind: NoticeKind, message: string) {
-    notice.value = { kind, message };
-    window.setTimeout(() => {
-      if (notice.value?.message === message) {
-        notice.value = null;
-      }
-    }, 3200);
+  function pushNotice(kind: NoticeKind, message: string, sticky = kind === "error") {
+    notice.value = { kind, message, sticky };
+    if (!sticky) {
+      window.setTimeout(() => {
+        if (notice.value?.message === message) {
+          notice.value = null;
+        }
+      }, 3200);
+    }
   }
 
   return {
@@ -165,6 +172,7 @@ export const useShellStore = defineStore("shell", () => {
     applyTheme,
     closeSearch,
     closeSidebar,
+    clearNotice,
     cycleTheme,
     initialize,
     openSearch,

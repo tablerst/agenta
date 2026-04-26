@@ -9,8 +9,8 @@ use crate::service::{
     AddTaskBlockerInput, AttachChildTaskInput, ContextInitInput, ContextInitResult,
     CreateAttachmentInput, CreateChildTaskInput, CreateNoteInput, CreateProjectInput,
     CreateTaskInput, CreateVersionInput, DetachChildTaskInput, RequestOrigin,
-    ResolveTaskBlockerInput, SearchEvidenceInput, SearchInput, TaskQuery, UpdateProjectInput,
-    UpdateTaskInput, UpdateVersionInput,
+    ResolveTaskBlockerInput, SearchEvidenceInput, SearchInput, TaskContextOptions, TaskQuery,
+    UpdateProjectInput, UpdateTaskInput, UpdateVersionInput,
 };
 
 #[derive(Debug, Parser)]
@@ -71,6 +71,7 @@ enum TaskCommand {
     Create(TaskCreateArgs),
     CreateChild(TaskCreateChildArgs),
     Get(TaskRefArgs),
+    Context(TaskContextArgs),
     List(TaskListArgs),
     Update(TaskUpdateArgs),
     AttachChild(TaskAttachChildArgs),
@@ -259,6 +260,22 @@ struct TaskCreateChildArgs {
 struct TaskRefArgs {
     #[arg(long)]
     task: String,
+}
+
+#[derive(Debug, Args)]
+struct TaskContextArgs {
+    #[arg(long)]
+    task: String,
+    #[arg(long = "recent-activity-limit")]
+    recent_activity_limit: Option<usize>,
+    #[arg(long = "include-notes", default_value_t = true, action = clap::ArgAction::Set)]
+    include_notes: bool,
+    #[arg(long = "notes-limit")]
+    notes_limit: Option<usize>,
+    #[arg(long = "include-attachments", default_value_t = true, action = clap::ArgAction::Set)]
+    include_attachments: bool,
+    #[arg(long = "attachments-limit")]
+    attachments_limit: Option<usize>,
 }
 
 #[derive(Debug, Args)]
@@ -663,6 +680,22 @@ async fn execute_task(app: AgentaApp, command: TaskCommand) -> AppResult<Success
         TaskCommand::Get(args) => {
             let task = app.service.get_task_detail(&args.task).await?;
             success("task.get", task, "Loaded task")
+        }
+        TaskCommand::Context(args) => {
+            let context = app
+                .service
+                .get_task_context_with_options(
+                    &args.task,
+                    TaskContextOptions {
+                        recent_activity_limit: args.recent_activity_limit,
+                        include_notes: args.include_notes,
+                        notes_limit: args.notes_limit,
+                        include_attachments: args.include_attachments,
+                        attachments_limit: args.attachments_limit,
+                    },
+                )
+                .await?;
+            success("task.context", context, "Loaded task context")
         }
         TaskCommand::List(args) => {
             let tasks = app

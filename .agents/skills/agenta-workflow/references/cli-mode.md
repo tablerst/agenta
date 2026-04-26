@@ -17,7 +17,6 @@ Installed binary:
 ```powershell
 agenta --help
 agenta --human project list
-agenta --config agenta.local.yaml sync status
 ```
 
 Repository development:
@@ -25,7 +24,6 @@ Repository development:
 ```powershell
 cargo run --manifest-path src-tauri/Cargo.toml --bin agenta -- --help
 cargo run --manifest-path src-tauri/Cargo.toml --bin agenta -- --human project list
-cargo run --manifest-path src-tauri/Cargo.toml --bin agenta -- --config agenta.local.yaml sync status
 ```
 
 ## Common Commands
@@ -45,6 +43,7 @@ agenta version list --project demo
 agenta version create --project demo --name "workspace-baseline-2026-04-17"
 agenta project update --project demo --default-version <version-id>
 agenta task create --project demo --title "Map runtime search flow"
+agenta task context --task <task-id> --notes-limit 5 --attachments-limit 3
 agenta task list --project demo
 agenta task update --task <task-id> --status done
 ```
@@ -65,7 +64,7 @@ agenta search query --project localgpt-langflow --task-code-prefix InitCtx- --li
 agenta search backfill --limit 1000 --batch-size 10
 ```
 
-Sync:
+User-operated sync, outside the default Agent workflow:
 
 ```powershell
 agenta sync status

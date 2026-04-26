@@ -322,6 +322,82 @@ fn cli_outputs_json_and_reuses_same_database() -> Result<(), Box<dyn std::error:
         .clone();
     let compat_json: Value = serde_json::from_slice(&compat_output)?;
 
+    let mut task_create = Command::cargo_bin("agenta")?;
+    let task_create_output = task_create
+        .args([
+            "--config",
+            &config_path_str,
+            "task",
+            "create",
+            "--project",
+            "cli-demo",
+            "--title",
+            "CLI context recovery",
+            "--summary",
+            "Task context fallback smoke test",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let task_create_json: Value = serde_json::from_slice(&task_create_output)?;
+    let task_id = task_create_json["result"]["task"]["task_id"]
+        .as_str()
+        .ok_or("task create result missing task id")?;
+
+    let mut note_create = Command::cargo_bin("agenta")?;
+    note_create
+        .args([
+            "--config",
+            &config_path_str,
+            "note",
+            "create",
+            "--task",
+            task_id,
+            "--note-kind",
+            "conclusion",
+            "--content",
+            "CLI task context returns reusable notes.",
+        ])
+        .assert()
+        .success();
+
+    let mut task_context = Command::cargo_bin("agenta")?;
+    let task_context_output = task_context
+        .args([
+            "--config",
+            &config_path_str,
+            "task",
+            "context",
+            "--task",
+            task_id,
+            "--notes-limit",
+            "1",
+            "--attachments-limit",
+            "0",
+            "--recent-activity-limit",
+            "2",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let task_context_json: Value = serde_json::from_slice(&task_context_output)?;
+    assert_eq!(task_context_json["action"], "task.context");
+    assert_eq!(
+        task_context_json["result"]["task"]["task"]["task_id"],
+        task_id
+    );
+    assert_eq!(
+        task_context_json["result"]["notes"][0]["metadata_json"]["note_kind"],
+        "conclusion"
+    );
+    assert!(task_context_json["result"]["recent_activities"]
+        .as_array()
+        .is_some_and(|activities| !activities.is_empty()));
+
     let mut list = Command::cargo_bin("agenta-cli")?;
     let list_output = list
         .args(["--config", &config_path_str, "project", "list"])
@@ -487,12 +563,18 @@ async fn mcp_streamable_http_tool_call_returns_structured_content(
     assert!(tools.iter().any(|tool| tool["name"] == "attachment_get"));
     assert!(tools.iter().any(|tool| tool["name"] == "attachment_list"));
     assert!(tools.iter().any(|tool| tool["name"] == "search_query"));
+    assert!(tools
+        .iter()
+        .any(|tool| tool["name"] == "search_evidence_get"));
     assert!(!tools.iter().any(|tool| tool["name"] == "project"));
     assert!(!tools.iter().any(|tool| tool["name"] == "version"));
     assert!(!tools.iter().any(|tool| tool["name"] == "task"));
     assert!(!tools.iter().any(|tool| tool["name"] == "note"));
     assert!(!tools.iter().any(|tool| tool["name"] == "attachment"));
     assert!(!tools.iter().any(|tool| tool["name"] == "search"));
+    assert!(!tools.iter().any(|tool| tool["name"]
+        .as_str()
+        .is_some_and(|name| name.starts_with("sync_"))));
 
     let project_create_tool = tools
         .iter()
@@ -870,6 +952,7 @@ async fn standalone_agenta_mcp_binary_exposes_explicit_tools_and_runs_smoke_flow
         "attachment_get",
         "attachment_list",
         "search_query",
+        "search_evidence_get",
     ] {
         assert!(
             tools.iter().any(|tool| tool["name"] == required),
@@ -882,6 +965,12 @@ async fn standalone_agenta_mcp_binary_exposes_explicit_tools_and_runs_smoke_flow
             "legacy tool should not be exposed: {legacy}"
         );
     }
+    assert!(
+        !tools.iter().any(|tool| tool["name"]
+            .as_str()
+            .is_some_and(|name| name.starts_with("sync_"))),
+        "sync operations are user/runtime concerns and should not pollute the Agent MCP surface"
+    );
 
     let project_payload = post_jsonrpc(
         &client,

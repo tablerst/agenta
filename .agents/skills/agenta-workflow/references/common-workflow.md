@@ -1,6 +1,6 @@
 # Agenta Common Workflow
 
-This file defines workflow rules shared by CLI mode and MCP mode. Regardless of the entry point, organize Agenta projects, versions, tasks, and notes according to these rules.
+This file defines workflow rules shared by CLI mode and MCP mode. Regardless of the entry point, organize Agenta projects, versions, tasks, and notes according to these rules. Repository files remain the source of truth for long-lived project context; Agenta stores task-level ledger state, findings, validation, and closeout.
 
 ## 1. Classify The Scenario
 
@@ -11,6 +11,8 @@ First decide which scenario the request belongs to:
 - Task progress: an existing task needs reading conclusions, design conclusions, or implementation progress.
 - Task closeout: the current task is done and needs status, summary, and closure verification.
 - Index capture: multiple pieces of context need to be summarized into a persistent entry point.
+
+Before restoring Agenta task context, read the project-maintained files that govern the work: root agent instructions, README, relevant architecture notes, active execution plans, and local skills. Use Agenta after that to recover task history, decisions, evidence, and status.
 
 ## 2. Scenario Playbooks
 
@@ -23,9 +25,9 @@ Use these playbooks as default call order. Adapt field names to the selected ope
 3. List versions for that project and reuse an active/default baseline when appropriate.
 4. Create a baseline version only when no suitable version exists.
 5. Set the project default version when this is the active lane.
-6. Run `context_init` or the CLI `context init` equivalent for the workspace.
-7. Create or reuse an index/context task for future recovery.
-8. Write a conclusion note that records the project slug, active version, index task, and recovery path.
+6. Run `context_init` or the CLI `context init` equivalent only when the workspace needs a manifest hint or migration.
+7. Create or reuse a task-level index/context task only when a work lane needs reusable recovery beyond the repository files.
+8. Write a conclusion note that records the project slug, active version, relevant repository files, and any task-level recovery path.
 9. Read back the project, version, task, and note state.
 
 ### Context Restore
@@ -78,7 +80,7 @@ If the request assumes a new version is now the active lane:
 
 ## 4. Decompose Tasks Around Context Recovery
 
-Do not flatten tasks only by directory. Prefer the recovery entry points future contributors will use most often:
+Do not flatten tasks only by directory. Prefer recovery entry points for task-level work. Long-lived project context belongs in repository files; Agenta tasks should capture work lanes, decisions, verification, risks, and closeout.
 
 - Startup and runtime baseline.
 - API routes and domain boundaries.
@@ -89,7 +91,7 @@ Do not flatten tasks only by directory. Prefer the recovery entry points future 
 - Tracing, Langfuse, and observability.
 - Evaluations capability and compatibility boundaries.
 - Test entry points and high-risk regression areas.
-- Persistent summary or context index.
+- Persistent task-lane summary or context index when it is genuinely useful.
 
 Use first-class fields explicitly when creating tasks:
 

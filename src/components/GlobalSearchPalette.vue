@@ -6,10 +6,18 @@ import { useRouter } from "vue-router";
 
 import AppSelect from "./AppSelect.vue";
 import { desktopBridge } from "../lib/desktop";
-import { knowledgeStatusOptions, taskKindOptions, taskPriorityOptions } from "../lib/options";
+import { knowledgeStatusOptions, taskKindOptions, taskPriorityOptions, type TaskDetailTab } from "../lib/options";
 import { buildProjectWorkspacePath, resolveProjectSlug } from "../lib/projectWorkspace";
 import { localizeEvidenceSource, renderHighlightedEvidence } from "../lib/searchEvidence";
-import type { GlobalSearchFilters, KnowledgeStatus, Task, TaskKind, TaskPriority } from "../lib/types";
+import type {
+  GlobalSearchFilters,
+  KnowledgeStatus,
+  SearchActivityHit,
+  SearchTaskHit,
+  Task,
+  TaskKind,
+  TaskPriority,
+} from "../lib/types";
 import { useProjectsStore } from "../stores/projects";
 import { useSearchStore } from "../stores/search";
 import { useShellStore } from "../stores/shell";
@@ -68,15 +76,24 @@ const flatResults = computed(() => {
   }
 
   return [
-    ...search.results.tasks.map((item) => ({
+    ...search.results.tasks.map((item) => {
+      const tab = taskHitTab(item);
+      return {
       key: `task:${item.task_id}`,
       kind: "task" as const,
       taskId: item.task_id,
-    })),
+      activityId: tab === "activity" ? item.evidence_activity_id : null,
+      attachmentId: tab === "attachments" ? item.evidence_attachment_id : null,
+      tab,
+    };
+    }),
     ...search.results.activities.map((item) => ({
       key: `activity:${item.activity_id}`,
       kind: "activity" as const,
       taskId: item.task_id,
+      activityId: item.activity_id,
+      attachmentId: item.evidence_attachment_id,
+      tab: "activity" as const,
     })),
   ];
 });
@@ -177,6 +194,20 @@ function globalSearchOptionId(key: string) {
   return `global-search-${key.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
 }
 
+function taskHitTab(task: SearchTaskHit): TaskDetailTab | undefined {
+  if (task.evidence_attachment_id) {
+    return "attachments";
+  }
+  if (task.evidence_activity_id || task.evidence_chunk_id) {
+    return "activity";
+  }
+  return undefined;
+}
+
+function activityHitTab(_activity: SearchActivityHit): TaskDetailTab {
+  return "activity";
+}
+
 function onInputKeydown(event: KeyboardEvent) {
   if (event.key === "ArrowDown") {
     event.preventDefault();
@@ -192,7 +223,11 @@ function onInputKeydown(event: KeyboardEvent) {
     event.preventDefault();
     const active = flatResults.value[activeIndex.value];
     if (active) {
-      void jumpToTask(active.taskId);
+      void jumpToTask(active.taskId, {
+        activityId: active.activityId ?? undefined,
+        attachmentId: active.attachmentId ?? undefined,
+        tab: active.tab,
+      });
     }
     return;
   }
@@ -202,7 +237,10 @@ function onInputKeydown(event: KeyboardEvent) {
   }
 }
 
-async function jumpToTask(taskId: string) {
+async function jumpToTask(
+  taskId: string,
+  options: { activityId?: string | null; attachmentId?: string | null; tab?: TaskDetailTab } = {},
+) {
   if (projectsStore.projects.length === 0) {
     await projectsStore.loadProjects();
   }
@@ -215,7 +253,12 @@ async function jumpToTask(taskId: string) {
     projectSlug
       ? {
           path: buildProjectWorkspacePath(projectSlug, "tasks"),
-          query: { task: taskId },
+          query: {
+            activity: options.activityId || undefined,
+            attachment: options.attachmentId || undefined,
+            tab: options.tab,
+            task: taskId,
+          },
         }
       : "/projects",
   );
@@ -314,7 +357,13 @@ async function jumpToTask(taskId: string) {
                 :aria-selected="isActive(`task:${item.task_id}`)"
                 tabindex="-1"
                 @mouseenter="setActive(index)"
-                @click="jumpToTask(item.task_id)"
+                @click="
+                  jumpToTask(item.task_id, {
+                    activityId: taskHitTab(item) === 'activity' ? item.evidence_activity_id : undefined,
+                    attachmentId: taskHitTab(item) === 'attachments' ? item.evidence_attachment_id : undefined,
+                    tab: taskHitTab(item),
+                  })
+                "
               >
                 <SquareKanban :size="15" />
                 <div class="min-w-0 flex-1 text-left">
@@ -364,7 +413,13 @@ async function jumpToTask(taskId: string) {
                 :aria-selected="isActive(`activity:${item.activity_id}`)"
                 tabindex="-1"
                 @mouseenter="setActive(search.results.tasks.length + index)"
-                @click="jumpToTask(item.task_id)"
+                @click="
+                  jumpToTask(item.task_id, {
+                    activityId: item.activity_id,
+                    attachmentId: item.evidence_attachment_id,
+                    tab: activityHitTab(item),
+                  })
+                "
               >
                 <Search :size="15" />
                 <div class="min-w-0 flex-1 text-left">

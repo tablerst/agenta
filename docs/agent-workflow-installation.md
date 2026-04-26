@@ -109,7 +109,8 @@ Test-Path .agents\skills\agenta-workflow\SKILL.md
 ## Agenta Workflow
 
 - If Agenta MCP tools are available, use the project-local skill at `.agents/skills/agenta-workflow` for project/version/task/note workflow.
-- Treat Agenta as the project context ledger and closeout surface, not only as a todo list.
+- Treat Agenta as the task-level ledger and closeout surface, not as the project's long-term memory system.
+- Read repository-maintained context first: `AGENTS.md`, `README.md`, architecture notes, execution plans, and local skills.
 - Before substantial investigation or implementation, reuse or initialize the Agenta project and active version through the selected Agenta operation surface.
 - For numbered or reusable work, set `task_code`, `task_kind`, and `note_kind` explicitly.
 - After each substantive phase, keep code and verification artifacts, local execution plans, and Agenta task notes/statuses synchronized.
@@ -154,15 +155,16 @@ Use MCP mode if Agenta MCP tools are available and I have not requested CLI.
 If MCP is unavailable but the agenta CLI is available, use CLI mode and preserve the commands you run.
 Reuse an existing Agenta project if one already matches this workspace.
 If no suitable project exists, create one.
-Create or select an active baseline version, set it as the project default when appropriate, run context_init for this workspace, and create a reusable index task for future context recovery.
-After each write, read back the resulting state and summarize the project slug, active version, and index task.
+Create or select an active baseline version, set it as the project default when appropriate, and run context_init only when this workspace needs a manifest hint or migration.
+Create a reusable index task only when a task lane genuinely needs one; do not force project-wide long-term context into Agenta.
+After each write, read back the resulting state and summarize the project slug, active version, relevant repository files, and any task-level recovery task.
 ```
 
 初始化完成后，目标项目应该至少有：
 
 - 一个可复用的 Agenta project。
 - 一个 active/default version。
-- 一个 context 或 index task，作为未来恢复上下文的入口。
+- 一个 context 或 index task（仅当某个任务泳道确实需要稳定恢复入口）。
 - 一条 conclusion 或 finding note，说明初始化结果和后续入口。
 
 ## 5. 安装验收清单
