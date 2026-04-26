@@ -44,7 +44,8 @@ function createRuntimeConsoleModel() {
     | "start"
     | "stop"
     | "refreshLogs"
-    | "openLogDirectory";
+    | "openLogDirectory"
+    | "openErrorLogDirectory";
   type SyncAction =
     | "refresh"
     | "backfill"
@@ -113,6 +114,7 @@ function createRuntimeConsoleModel() {
       Boolean(mcp.value?.log_file_path) &&
       (mcp.value?.log_destinations ?? []).includes("file"),
   );
+  const canOpenErrorLogDirectory = computed(() => Boolean(runtime.value?.error_log_path));
   const syncPendingCount = computed(() => syncStatus.value?.pending_outbox_count ?? 0);
   const syncRemoteHost = computed(
     () => syncStatus.value?.remote?.postgres?.host ?? t("common.na"),
@@ -536,6 +538,20 @@ function createRuntimeConsoleModel() {
     });
   }
 
+  async function openErrorLogDirectory() {
+    const errorLogPath = runtime.value?.error_log_path;
+    if (!errorLogPath) {
+      return;
+    }
+    await withRuntimeAction("openErrorLogDirectory", async () => {
+      try {
+        await desktopBridge.revealItemInDir(errorLogPath);
+      } catch (error) {
+        shell.pushNotice("error", formatDesktopError(error, t));
+      }
+    });
+  }
+
   async function runSyncBackfill() {
     await withSyncAction("backfill", async () => {
       try {
@@ -676,6 +692,7 @@ function createRuntimeConsoleModel() {
   return {
     busy,
     canOpenLogDirectory,
+    canOpenErrorLogDirectory,
     canSaveDefaults,
     endpointLabel,
     form,
@@ -703,6 +720,7 @@ function createRuntimeConsoleModel() {
     mcp,
     normalizeSearchBackfillForm,
     openLogDirectory,
+    openErrorLogDirectory,
     refreshLogs,
     runSearchBackfill,
     runSearchRecoverStale,

@@ -267,6 +267,16 @@ function formatLogLevelOption(level: string) {
                 <p class="section-label">{{ t("runtime.host.sections.paths") }}</p>
                 <h2 class="runtime-block-title">{{ t("runtime.paths") }}</h2>
               </div>
+              <button
+                class="secondary-action spotlight-surface"
+                :aria-busy="runtimeConsole.isRuntimeActionPending('openErrorLogDirectory') ? 'true' : undefined"
+                :data-pending="runtimeConsole.isRuntimeActionPending('openErrorLogDirectory') ? 'true' : undefined"
+                :disabled="runtimeConsole.busy.value || !runtimeConsole.canOpenErrorLogDirectory.value"
+                @click="runtimeConsole.openErrorLogDirectory"
+              >
+                <FileText :size="14" />
+                {{ t("runtime.actions.openErrorLogDirectory") }}
+              </button>
             </div>
             <dl class="runtime-definition-list">
               <div>
@@ -280,6 +290,10 @@ function formatLogLevelOption(level: string) {
               <div>
                 <dt>{{ t("runtime.attachments") }}</dt>
                 <dd class="runtime-field-mono">{{ runtimeConsole.runtime.value.attachments_dir }}</dd>
+              </div>
+              <div>
+                <dt>{{ t("runtime.errorLog") }}</dt>
+                <dd class="runtime-field-mono">{{ runtimeConsole.runtime.value.error_log_path }}</dd>
               </div>
             </dl>
           </section>

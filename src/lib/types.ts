@@ -249,6 +249,7 @@ export interface RuntimeStatus {
   data_dir: string;
   database_path: string;
   attachments_dir: string;
+  error_log_path: string;
   loaded_config_path: string | null;
   mcp_bind: string;
   mcp_path: string;

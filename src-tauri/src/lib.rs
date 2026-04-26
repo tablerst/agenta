@@ -20,10 +20,23 @@ pub mod tauri_app;
 #[cfg(not(test))]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let error_log_path = app::resolve_error_log_path(None);
+    app::install_panic_hook(error_log_path.clone(), "desktop");
     app::init_tracing();
-    let runtime = tauri::async_runtime::block_on(app::AppRuntime::bootstrap(
+    let runtime = match tauri::async_runtime::block_on(app::AppRuntime::bootstrap(
         app::BootstrapOptions::default(),
-    ))
-    .expect("failed to bootstrap Agenta runtime");
+    )) {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            let _ = app::record_app_error(
+                &error_log_path,
+                "desktop",
+                "bootstrap",
+                "desktop.bootstrap",
+                &error,
+            );
+            return;
+        }
+    };
     tauri_app::run(Arc::new(runtime));
 }

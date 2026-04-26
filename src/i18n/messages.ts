@@ -946,6 +946,7 @@ const localeOverrides = {
     runtime: {
       actions: {
         backfill: "Backfill local data",
+        openErrorLogDirectory: "Open error log directory",
         openLogDirectory: "Open log directory",
         pull: "Pull now",
         push: "Push now",
@@ -979,6 +980,7 @@ const localeOverrides = {
       },
       emptyLogs: "No runtime logs yet.",
       endpoint: "Endpoint",
+      errorLog: "Error log",
       failedSummary: "The desktop-managed MCP host needs attention.",
       fields: {
         autostart: "Auto-start on Desktop launch",
@@ -1188,6 +1190,7 @@ const localeOverrides = {
     runtime: {
       actions: {
         backfill: "回填本地数据",
+        openErrorLogDirectory: "打开错误日志目录",
         openLogDirectory: "打开日志目录",
         pull: "立即拉取",
         push: "立即推送",
@@ -1220,6 +1223,7 @@ const localeOverrides = {
       },
       emptyLogs: "暂无运行时日志。",
       endpoint: "端点",
+      errorLog: "错误日志",
       failedSummary: "桌面托管的 MCP 主机需要处理。",
       fields: {
         autostart: "Desktop 启动时自动拉起",

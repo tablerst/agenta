@@ -1,8 +1,13 @@
+use std::path::PathBuf;
 use std::str::FromStr;
 
 use clap::{Args, Parser, Subcommand};
+use serde_json::json;
 
 use crate::app::runtime::{init_tracing, AgentaApp, BootstrapOptions};
+use crate::app::{
+    install_panic_hook, record_app_error, record_error_message, resolve_error_log_path,
+};
 use crate::error::{AppError, AppResult};
 use crate::interface::response::{error, success, SuccessEnvelope};
 use crate::service::{
@@ -458,8 +463,27 @@ pub async fn run() -> i32 {
         return 0;
     }
 
+    let error_log_path = resolve_error_log_path(config_path_from_args());
+    install_panic_hook(error_log_path.clone(), "cli");
     init_tracing();
-    let cli = Cli::parse();
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(error) => {
+            let _ = record_error_message(
+                &error_log_path,
+                "cli",
+                "parser",
+                "cli.parse",
+                "invalid_arguments",
+                error.to_string(),
+                json!({ "kind": format!("{:?}", error.kind()) }),
+            );
+            let _ = error.print();
+            return error.exit_code();
+        }
+    };
+    let error_log_path = resolve_error_log_path(cli.config.clone());
+    let action = cli_action(&cli.command);
 
     let result = async {
         let app = AgentaApp::bootstrap(BootstrapOptions {
@@ -476,8 +500,73 @@ pub async fn run() -> i32 {
             0
         }
         Err(app_error) => {
+            let _ = record_app_error(&error_log_path, "cli", "command", action, &app_error);
             print_error(&app_error, cli.human);
             1
+        }
+    }
+}
+
+fn config_path_from_args() -> Option<PathBuf> {
+    let mut args = std::env::args_os().skip(1);
+    while let Some(arg) = args.next() {
+        if arg.to_str() == Some("--") {
+            break;
+        }
+
+        if arg.to_str() == Some("--config") {
+            return args.next().map(PathBuf::from);
+        }
+
+        if let Some(value) = arg
+            .to_str()
+            .and_then(|value| value.strip_prefix("--config="))
+        {
+            return Some(PathBuf::from(value));
+        }
+    }
+
+    None
+}
+
+fn cli_action(command: &TopLevelCommand) -> &'static str {
+    match command {
+        TopLevelCommand::Context(ContextCommand::Init(_)) => "context.init",
+        TopLevelCommand::Project(ProjectCommand::Create(_)) => "project.create",
+        TopLevelCommand::Project(ProjectCommand::Get(_)) => "project.get",
+        TopLevelCommand::Project(ProjectCommand::List) => "project.list",
+        TopLevelCommand::Project(ProjectCommand::Update(_)) => "project.update",
+        TopLevelCommand::Version(VersionCommand::Create(_)) => "version.create",
+        TopLevelCommand::Version(VersionCommand::Get(_)) => "version.get",
+        TopLevelCommand::Version(VersionCommand::List(_)) => "version.list",
+        TopLevelCommand::Version(VersionCommand::Update(_)) => "version.update",
+        TopLevelCommand::Task(TaskCommand::Create(_)) => "task.create",
+        TopLevelCommand::Task(TaskCommand::CreateChild(_)) => "task.create_child",
+        TopLevelCommand::Task(TaskCommand::Get(_)) => "task.get",
+        TopLevelCommand::Task(TaskCommand::Context(_)) => "task.context",
+        TopLevelCommand::Task(TaskCommand::List(_)) => "task.list",
+        TopLevelCommand::Task(TaskCommand::Update(_)) => "task.update",
+        TopLevelCommand::Task(TaskCommand::AttachChild(_)) => "task.attach_child",
+        TopLevelCommand::Task(TaskCommand::DetachChild(_)) => "task.detach_child",
+        TopLevelCommand::Task(TaskCommand::AddBlocker(_)) => "task.add_blocker",
+        TopLevelCommand::Task(TaskCommand::ResolveBlocker(_)) => "task.resolve_blocker",
+        TopLevelCommand::Note(NoteCommand::Create(_)) => "note.create",
+        TopLevelCommand::Note(NoteCommand::List(_)) => "note.list",
+        TopLevelCommand::Attachment(AttachmentCommand::Create(_)) => "attachment.create",
+        TopLevelCommand::Attachment(AttachmentCommand::Get(_)) => "attachment.get",
+        TopLevelCommand::Attachment(AttachmentCommand::List(_)) => "attachment.list",
+        TopLevelCommand::Search(SearchCommand::Query(_)) => "search.query",
+        TopLevelCommand::Search(SearchCommand::Status) => "search.status",
+        TopLevelCommand::Search(SearchCommand::Evidence(_)) => "search.evidence",
+        TopLevelCommand::Search(SearchCommand::Backfill(_)) => "search.backfill",
+        TopLevelCommand::Search(SearchCommand::RetryFailed(_)) => "search.retry_failed",
+        TopLevelCommand::Search(SearchCommand::RecoverStale(_)) => "search.recover_stale",
+        TopLevelCommand::Sync(SyncCommand::Status) => "sync.status",
+        TopLevelCommand::Sync(SyncCommand::Backfill(_)) => "sync.backfill",
+        TopLevelCommand::Sync(SyncCommand::Push(_)) => "sync.push",
+        TopLevelCommand::Sync(SyncCommand::Pull(_)) => "sync.pull",
+        TopLevelCommand::Sync(SyncCommand::Outbox(SyncOutboxCommand::List(_))) => {
+            "sync.outbox.list"
         }
     }
 }

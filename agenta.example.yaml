@@ -2,6 +2,7 @@ paths:
   data_dir: ./local-data
   database_path: ./local-data/agenta.sqlite3
   attachments_dir: ./local-data/attachments
+  error_log: ./local-data/logs/error.log
 
 project_context:
   paths:

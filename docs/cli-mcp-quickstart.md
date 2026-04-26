@@ -17,6 +17,16 @@ Agenta 采用 YAML-first 配置：
 - 模板：`agenta.example.yaml`
 - 本地覆盖：`agenta.local.yaml`
 
+运行时路径配置如下：
+
+```yaml
+paths:
+  data_dir: ./local-data
+  database_path: ./local-data/agenta.sqlite3
+  attachments_dir: ./local-data/attachments
+  error_log: ./local-data/logs/error.log
+```
+
 项目上下文目录配置如下：
 
 ```yaml
@@ -55,7 +65,7 @@ mcp:
       buffer_lines: 1000
 ```
 
-当未提供 `--config` 且当前目录不存在 `agenta.local.yaml` 时，数据库、附件和 MCP 文件日志默认落到系统应用数据目录。
+当未提供 `--config` 且当前目录不存在 `agenta.local.yaml` 时，数据库、附件、应用错误日志和 MCP 文件日志默认落到系统应用数据目录。`paths.error_log` 是应用级 JSONL 错误日志，覆盖 Desktop release 启动失败、Tauri command 错误、CLI 错误、Standalone MCP 启动失败和 panic hook 事件；它不替代 `mcp.log.*` 的 MCP session 日志。
 
 `mcp.autostart` 的当前口径如下：
 

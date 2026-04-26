@@ -52,6 +52,7 @@ Use `agenta.example.yaml` as the committed template. The MCP section now support
 - `mcp.log.destinations`
 - `mcp.log.file.path`
 - `mcp.log.ui.buffer_lines`
+- `paths.error_log`
 
 The project context section now supports:
 
@@ -75,6 +76,12 @@ When `mcp.log.destinations` is omitted, defaults depend on the host:
 
 - Desktop-managed MCP: `ui + file`
 - Standalone `agenta-mcp`: `stdout`
+
+Application boundary errors are written as JSONL to `paths.error_log`, defaulting to
+`<data_dir>/logs/error.log`. This app-level file covers Desktop release startup
+failures, Tauri command errors, CLI errors, standalone MCP startup failures, and
+panic hook events. It does not replace the MCP session log configured under
+`mcp.log.*`.
 
 Current sync defaults stay intentionally conservative:
 

@@ -4,11 +4,13 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use tauri::{Emitter, State};
 
 use crate::app::{
-    save_mcp_config_defaults, AppRuntime, McpLaunchOverrides, McpLogDestination, McpLogLevel,
-    McpLogSnapshot, McpRuntimeStatus, McpSupervisor, MCP_LOG_EVENT, MCP_STATUS_EVENT,
+    record_app_error, record_error_message, save_mcp_config_defaults, AppRuntime,
+    McpLaunchOverrides, McpLogDestination, McpLogLevel, McpLogSnapshot, McpRuntimeStatus,
+    McpSupervisor, MCP_LOG_EVENT, MCP_STATUS_EVENT,
 };
 use crate::build_info::{self, BuildInfo};
 use crate::domain::ApprovalStatus;
@@ -29,6 +31,7 @@ struct DesktopRuntimeStatus {
     data_dir: String,
     database_path: String,
     attachments_dir: String,
+    error_log_path: String,
     loaded_config_path: Option<String>,
     mcp_bind: String,
     mcp_path: String,
@@ -69,7 +72,15 @@ impl DesktopAppState {
         }
 
         tauri::async_runtime::spawn(async move {
-            let _ = self.autostart_mcp_if_configured().await;
+            if let Err(error) = self.autostart_mcp_if_configured().await {
+                let _ = record_app_error(
+                    &self.config.paths.error_log_path,
+                    "desktop",
+                    "background",
+                    "desktop.mcp_autostart",
+                    &error,
+                );
+            }
         });
     }
 
@@ -79,8 +90,27 @@ impl DesktopAppState {
         }
 
         tauri::async_runtime::spawn(async move {
-            let _ = self.service.start_search_sidecar().await;
+            if let Err(error) = self.service.start_search_sidecar().await {
+                let _ = record_app_error(
+                    &self.config.paths.error_log_path,
+                    "desktop",
+                    "background",
+                    "desktop.search_sidecar_autostart",
+                    &error,
+                );
+            }
         });
+    }
+
+    fn error_envelope(&self, action: &str, app_error: AppError) -> ErrorEnvelope {
+        let _ = record_app_error(
+            &self.config.paths.error_log_path,
+            "desktop",
+            "tauri_command",
+            action,
+            &app_error,
+        );
+        error(&app_error)
     }
 }
 
@@ -269,7 +299,7 @@ async fn desktop_status(
         .service
         .service_overview()
         .await
-        .map_err(|app_error| error(&app_error))?;
+        .map_err(|app_error| state.error_envelope("desktop.status", app_error))?;
     let pending = state
         .service
         .list_approval_requests(ApprovalQuery {
@@ -278,7 +308,7 @@ async fn desktop_status(
             all_projects: true,
         })
         .await
-        .map_err(|app_error| error(&app_error))?;
+        .map_err(|app_error| state.error_envelope("desktop.status", app_error))?;
     let default_mcp_config = state.mcp_supervisor.default_config();
 
     success(
@@ -288,6 +318,7 @@ async fn desktop_status(
             data_dir: state.config.paths.data_dir.display().to_string(),
             database_path: state.config.paths.database_path.display().to_string(),
             attachments_dir: state.config.paths.attachments_dir.display().to_string(),
+            error_log_path: state.config.paths.error_log_path.display().to_string(),
             loaded_config_path: state
                 .config
                 .paths
@@ -302,7 +333,7 @@ async fn desktop_status(
         },
         "Loaded desktop runtime status",
     )
-    .map_err(|app_error| error(&app_error))
+    .map_err(|app_error| state.error_envelope("desktop.status", app_error))
 }
 
 #[tauri::command]
@@ -366,7 +397,7 @@ async fn desktop_project(
     }
     .await;
 
-    result.map_err(|app_error| error(&app_error))
+    result.map_err(|app_error| state.error_envelope("desktop.project", app_error))
 }
 
 #[tauri::command]
@@ -400,7 +431,7 @@ async fn desktop_context(
     }
     .await;
 
-    result.map_err(|app_error| error(&app_error))
+    result.map_err(|app_error| state.error_envelope("desktop.context", app_error))
 }
 
 #[tauri::command]
@@ -463,7 +494,7 @@ async fn desktop_version(
     }
     .await;
 
-    result.map_err(|app_error| error(&app_error))
+    result.map_err(|app_error| state.error_envelope("desktop.version", app_error))
 }
 
 #[tauri::command]
@@ -677,7 +708,7 @@ async fn desktop_task(
     }
     .await;
 
-    result.map_err(|app_error| error(&app_error))
+    result.map_err(|app_error| state.error_envelope("desktop.task", app_error))
 }
 
 #[tauri::command]
@@ -718,7 +749,7 @@ async fn desktop_note(
     }
     .await;
 
-    result.map_err(|app_error| error(&app_error))
+    result.map_err(|app_error| state.error_envelope("desktop.note", app_error))
 }
 
 #[tauri::command]
@@ -769,7 +800,7 @@ async fn desktop_attachment(
     }
     .await;
 
-    result.map_err(|app_error| error(&app_error))
+    result.map_err(|app_error| state.error_envelope("desktop.attachment", app_error))
 }
 
 #[tauri::command]
@@ -846,7 +877,7 @@ async fn desktop_search(
     }
     .await;
 
-    result.map_err(|app_error| error(&app_error))
+    result.map_err(|app_error| state.error_envelope("desktop.search", app_error))
 }
 
 #[tauri::command]
@@ -915,7 +946,7 @@ async fn desktop_approval(
     }
     .await;
 
-    result.map_err(|app_error| error(&app_error))
+    result.map_err(|app_error| state.error_envelope("desktop.approval", app_error))
 }
 
 #[tauri::command]
@@ -927,7 +958,7 @@ async fn desktop_mcp_status(
         state.mcp_supervisor.status_snapshot(),
         "Loaded MCP runtime status",
     )
-    .map_err(|app_error| error(&app_error))
+    .map_err(|app_error| state.error_envelope("desktop.mcp_status", app_error))
 }
 
 #[tauri::command]
@@ -945,13 +976,16 @@ async fn desktop_mcp_start(
                 .loaded_config_path
                 .clone()
                 .ok_or_else(|| {
-                    error(&AppError::InvalidArguments(
-                        "cannot save MCP defaults without a loaded config file".to_string(),
-                    ))
+                    state.error_envelope(
+                        "desktop.mcp_start",
+                        AppError::InvalidArguments(
+                            "cannot save MCP defaults without a loaded config file".to_string(),
+                        ),
+                    )
                 })?;
         let next_defaults = state.mcp_supervisor.resolve_default_config(&overrides);
         save_mcp_config_defaults(&loaded_config_path, &next_defaults)
-            .map_err(|app_error| error(&app_error))?;
+            .map_err(|app_error| state.error_envelope("desktop.mcp_start", app_error))?;
         state.mcp_supervisor.replace_default_config(next_defaults);
     }
 
@@ -959,13 +993,13 @@ async fn desktop_mcp_start(
         .mcp_supervisor
         .start(overrides)
         .await
-        .map_err(|app_error| error(&app_error))?;
+        .map_err(|app_error| state.error_envelope("desktop.mcp_start", app_error))?;
     success(
         "desktop.mcp_start",
         status,
         "Started desktop-managed MCP host",
     )
-    .map_err(|app_error| error(&app_error))
+    .map_err(|app_error| state.error_envelope("desktop.mcp_start", app_error))
 }
 
 #[tauri::command]
@@ -976,13 +1010,13 @@ async fn desktop_mcp_stop(
         .mcp_supervisor
         .stop()
         .await
-        .map_err(|app_error| error(&app_error))?;
+        .map_err(|app_error| state.error_envelope("desktop.mcp_stop", app_error))?;
     success(
         "desktop.mcp_stop",
         status,
         "Stopped desktop-managed MCP host",
     )
-    .map_err(|app_error| error(&app_error))
+    .map_err(|app_error| state.error_envelope("desktop.mcp_stop", app_error))
 }
 
 #[tauri::command]
@@ -996,7 +1030,7 @@ async fn desktop_mcp_logs_snapshot(
         snapshot,
         "Loaded MCP log snapshot",
     )
-    .map_err(|app_error| error(&app_error))
+    .map_err(|app_error| state.error_envelope("desktop.mcp_logs_snapshot", app_error))
 }
 
 #[tauri::command]
@@ -1009,10 +1043,10 @@ async fn desktop_sync_status(
             .service
             .sync_status()
             .await
-            .map_err(|app_error| error(&app_error))?,
+            .map_err(|app_error| state.error_envelope("desktop.sync_status", app_error))?,
         "Loaded sync status",
     )
-    .map_err(|app_error| error(&app_error))
+    .map_err(|app_error| state.error_envelope("desktop.sync_status", app_error))
 }
 
 #[tauri::command]
@@ -1024,13 +1058,13 @@ async fn desktop_sync_outbox_list(
         .service
         .list_sync_outbox(input.limit)
         .await
-        .map_err(|app_error| error(&app_error))?;
+        .map_err(|app_error| state.error_envelope("desktop.sync_outbox_list", app_error))?;
     success(
         "desktop.sync_outbox_list",
         &result,
         format!("Listed {} sync outbox item(s)", result.len()),
     )
-    .map_err(|app_error| error(&app_error))
+    .map_err(|app_error| state.error_envelope("desktop.sync_outbox_list", app_error))
 }
 
 #[tauri::command]
@@ -1044,10 +1078,10 @@ async fn desktop_sync_backfill(
             .service
             .sync_backfill(input.limit)
             .await
-            .map_err(|app_error| error(&app_error))?,
+            .map_err(|app_error| state.error_envelope("desktop.sync_backfill", app_error))?,
         "Completed sync backfill",
     )
-    .map_err(|app_error| error(&app_error))
+    .map_err(|app_error| state.error_envelope("desktop.sync_backfill", app_error))
 }
 
 #[tauri::command]
@@ -1061,10 +1095,10 @@ async fn desktop_sync_push(
             .service
             .sync_push(input.limit)
             .await
-            .map_err(|app_error| error(&app_error))?,
+            .map_err(|app_error| state.error_envelope("desktop.sync_push", app_error))?,
         "Completed sync push",
     )
-    .map_err(|app_error| error(&app_error))
+    .map_err(|app_error| state.error_envelope("desktop.sync_push", app_error))
 }
 
 #[tauri::command]
@@ -1078,18 +1112,19 @@ async fn desktop_sync_pull(
             .service
             .sync_pull(input.limit)
             .await
-            .map_err(|app_error| error(&app_error))?,
+            .map_err(|app_error| state.error_envelope("desktop.sync_pull", app_error))?,
         "Completed sync pull",
     )
-    .map_err(|app_error| error(&app_error))
+    .map_err(|app_error| state.error_envelope("desktop.sync_pull", app_error))
 }
 
 pub fn run(runtime: Arc<AppRuntime>) {
     let state = Arc::new(DesktopAppState::new(runtime));
+    let error_log_path = state.config.paths.error_log_path.clone();
     let state_for_setup = state.clone();
     let state_for_run = state.clone();
 
-    tauri::Builder::default()
+    let app = match tauri::Builder::default()
         .manage(state)
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -1129,13 +1164,28 @@ pub fn run(runtime: Arc<AppRuntime>) {
             desktop_approval
         ])
         .build(tauri::generate_context!())
-        .expect("error while building tauri application")
-        .run(move |_app_handle, event| {
-            if matches!(event, tauri::RunEvent::Exit) {
-                let _ = tauri::async_runtime::block_on(state_for_run.mcp_supervisor.shutdown());
-                let _ = tauri::async_runtime::block_on(state_for_run.service.stop_search_sidecar());
-            }
-        });
+    {
+        Ok(app) => app,
+        Err(error) => {
+            let _ = record_error_message(
+                &error_log_path,
+                "desktop",
+                "tauri_builder",
+                "desktop.build",
+                "internal_error",
+                error.to_string(),
+                json!({}),
+            );
+            return;
+        }
+    };
+
+    app.run(move |_app_handle, event| {
+        if matches!(event, tauri::RunEvent::Exit) {
+            let _ = tauri::async_runtime::block_on(state_for_run.mcp_supervisor.shutdown());
+            let _ = tauri::async_runtime::block_on(state_for_run.service.stop_search_sidecar());
+        }
+    });
 }
 
 fn required(value: Option<String>, field: &str) -> Result<String, AppError> {

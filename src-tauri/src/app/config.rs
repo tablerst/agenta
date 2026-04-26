@@ -13,6 +13,7 @@ use crate::error::{AppError, AppResult};
 use crate::policy::{PolicyConfig, RawPolicyConfig};
 
 const DEFAULT_DB_FILE: &str = "agenta.sqlite3";
+const DEFAULT_ERROR_LOG_FILE: &str = "logs/error.log";
 const DEFAULT_MCP_BIND: &str = "127.0.0.1:8787";
 const DEFAULT_MCP_PATH: &str = "/mcp";
 const DEFAULT_MCP_LOG_FILE: &str = "logs/mcp.jsonl";
@@ -30,6 +31,7 @@ pub struct AppPaths {
     pub data_dir: PathBuf,
     pub database_path: PathBuf,
     pub attachments_dir: PathBuf,
+    pub error_log_path: PathBuf,
     pub loaded_config_path: Option<PathBuf>,
 }
 
@@ -345,6 +347,7 @@ struct RawPaths {
     data_dir: Option<PathBuf>,
     database_path: Option<PathBuf>,
     attachments_dir: Option<PathBuf>,
+    error_log: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -429,10 +432,7 @@ struct RawSearchEmbeddingConfig {
 }
 
 pub fn load_runtime_config(explicit_config_path: Option<PathBuf>) -> AppResult<RuntimeConfig> {
-    let project_dirs = ProjectDirs::from("com", "choriko", "agenta").ok_or_else(|| {
-        AppError::Config("failed to determine system application data directory".to_string())
-    })?;
-    let default_data_dir = project_dirs.data_dir().to_path_buf();
+    let default_data_dir = default_data_dir()?;
 
     let config_path = discover_config_path(explicit_config_path)?;
     let raw_config = match config_path.as_ref() {
@@ -467,6 +467,13 @@ pub fn load_runtime_config(explicit_config_path: Option<PathBuf>) -> AppResult<R
         .map(|path| expand_path_vars(path).map(|path| resolve_path(&path, &config_base_dir)))
         .transpose()?
         .unwrap_or_else(|| data_dir.join("attachments"));
+    let error_log_path = raw_config
+        .paths
+        .as_ref()
+        .and_then(|paths| paths.error_log.as_ref())
+        .map(|path| expand_path_vars(path).map(|path| resolve_path(&path, &config_base_dir)))
+        .transpose()?
+        .unwrap_or_else(|| data_dir.join(DEFAULT_ERROR_LOG_FILE));
 
     let raw_project_context = raw_config.project_context.unwrap_or_default();
     let project_context_paths = match raw_project_context.paths {
@@ -674,6 +681,7 @@ pub fn load_runtime_config(explicit_config_path: Option<PathBuf>) -> AppResult<R
             data_dir,
             database_path,
             attachments_dir,
+            error_log_path,
             loaded_config_path: config_path,
         },
         project_context: ProjectContextConfig {
@@ -699,6 +707,51 @@ pub fn load_runtime_config(explicit_config_path: Option<PathBuf>) -> AppResult<R
         sync,
         search,
     })
+}
+
+pub fn resolve_error_log_path(explicit_config_path: Option<PathBuf>) -> PathBuf {
+    resolve_error_log_path_inner(explicit_config_path).unwrap_or_else(|_| default_error_log_path())
+}
+
+fn resolve_error_log_path_inner(explicit_config_path: Option<PathBuf>) -> AppResult<PathBuf> {
+    let default_data_dir = default_data_dir()?;
+    let Some(config_path) = discover_config_path(explicit_config_path)? else {
+        return Ok(default_data_dir.join(DEFAULT_ERROR_LOG_FILE));
+    };
+    let raw_config = load_raw_config(&config_path)?;
+    let config_base_dir = config_path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    let data_dir = raw_config
+        .paths
+        .as_ref()
+        .and_then(|paths| paths.data_dir.as_ref())
+        .map(|path| expand_path_vars(path).map(|path| resolve_path(&path, &config_base_dir)))
+        .transpose()?
+        .unwrap_or(default_data_dir);
+
+    raw_config
+        .paths
+        .as_ref()
+        .and_then(|paths| paths.error_log.as_ref())
+        .map(|path| expand_path_vars(path).map(|path| resolve_path(&path, &config_base_dir)))
+        .transpose()
+        .map(|path| path.unwrap_or_else(|| data_dir.join(DEFAULT_ERROR_LOG_FILE)))
+}
+
+fn default_data_dir() -> AppResult<PathBuf> {
+    ProjectDirs::from("com", "choriko", "agenta")
+        .map(|project_dirs| project_dirs.data_dir().to_path_buf())
+        .ok_or_else(|| {
+            AppError::Config("failed to determine system application data directory".to_string())
+        })
+}
+
+fn default_error_log_path() -> PathBuf {
+    default_data_dir()
+        .map(|data_dir| data_dir.join(DEFAULT_ERROR_LOG_FILE))
+        .unwrap_or_else(|_| PathBuf::from(DEFAULT_ERROR_LOG_FILE))
 }
 
 pub fn save_mcp_config_defaults(config_path: &Path, mcp: &McpConfig) -> AppResult<()> {
@@ -917,7 +970,7 @@ mod tests {
         let config_path = tempdir.path().join("agenta.local.yaml");
         std::fs::write(
             &config_path,
-            "paths:\n  data_dir: data\n  database_path: data/custom.sqlite3\n  attachments_dir: files\n",
+            "paths:\n  data_dir: data\n  database_path: data/custom.sqlite3\n  attachments_dir: files\n  error_log: logs/custom-error.log\n",
         )
         .expect("write config");
 
@@ -928,6 +981,23 @@ mod tests {
             tempdir.path().join("data").join("custom.sqlite3")
         );
         assert_eq!(config.paths.attachments_dir, tempdir.path().join("files"));
+        assert_eq!(
+            config.paths.error_log_path,
+            tempdir.path().join("logs").join("custom-error.log")
+        );
+    }
+
+    #[test]
+    fn error_log_defaults_under_data_dir() {
+        let tempdir = tempdir().expect("tempdir");
+        let config_path = tempdir.path().join("agenta.local.yaml");
+        std::fs::write(&config_path, "paths:\n  data_dir: ./data\n").expect("write config");
+
+        let config = load_runtime_config(Some(config_path)).expect("load config");
+        assert_eq!(
+            config.paths.error_log_path,
+            tempdir.path().join("data").join("logs").join("error.log")
+        );
     }
 
     #[test]
@@ -974,13 +1044,26 @@ mod tests {
 
     #[test]
     fn expands_environment_variables() {
+        let _guard = environment_lock().lock().expect("lock test environment");
         let tempdir = tempdir().expect("tempdir");
         let config_path = tempdir.path().join("agenta.local.yaml");
         std::env::set_var("AGENTA_TEST_DATA", "expanded");
-        std::fs::write(&config_path, "paths:\n  data_dir: ${AGENTA_TEST_DATA}\n").expect("write");
+        std::env::set_var("AGENTA_TEST_ERROR_LOG", "logs/from-env.log");
+        std::fs::write(
+            &config_path,
+            "paths:\n  data_dir: ${AGENTA_TEST_DATA}\n  error_log: ${AGENTA_TEST_ERROR_LOG}\n",
+        )
+        .expect("write");
 
         let config = load_runtime_config(Some(config_path)).expect("load config");
         assert_eq!(config.paths.data_dir, tempdir.path().join("expanded"));
+        assert_eq!(
+            config.paths.error_log_path,
+            tempdir.path().join("logs").join("from-env.log")
+        );
+
+        std::env::remove_var("AGENTA_TEST_DATA");
+        std::env::remove_var("AGENTA_TEST_ERROR_LOG");
     }
 
     #[test]

@@ -2066,6 +2066,7 @@ function runtimeStatus(): RuntimeStatus {
     data_dir: "D:/preview/agenta/data",
     database_path: "D:/preview/agenta/data/agenta.sqlite3",
     attachments_dir: "D:/preview/agenta/data/attachments",
+    error_log_path: "D:/preview/agenta/data/logs/error.log",
     loaded_config_path: "D:/preview/agenta/agenta.local.yaml",
     mcp_bind: "127.0.0.1:8787",
     mcp_path: "/mcp",
