@@ -1,0 +1,167 @@
+{
+  "project": {
+    "slug": "search-eval-v011",
+    "name": "Search Eval v0.1.1",
+    "description": "Deterministic SearchV2 regression fixture based on the v0.1.1 search shape."
+  },
+  "version": {
+    "name": "v0.1.1-search-usable",
+    "description": "SearchV2 regression and relevance fixture.",
+    "status": "active"
+  },
+  "tasks": [
+    {
+      "code": "SearchV2-00",
+      "kind": "index",
+      "title": "Runtime console failure recovery",
+      "summary": "Canonical phrase query fixture",
+      "description": "Runtime console recovery and SearchV2 release index.",
+      "status": "ready",
+      "priority": "normal",
+      "notes": []
+    },
+    {
+      "code": "SearchV2-04",
+      "kind": "standard",
+      "title": "Search filter design",
+      "summary": "High priority status and knowledge filters",
+      "description": "Structured search filters for task priority and knowledge status.",
+      "status": "in_progress",
+      "priority": "high",
+      "notes": []
+    },
+    {
+      "code": "InitCtx-01",
+      "kind": "context",
+      "title": "Tracing bootstrap flow",
+      "summary": "Historical note recall fixture",
+      "description": "Historical task context that should remain searchable through old notes.",
+      "status": "done",
+      "priority": "normal",
+      "notes": [
+        {
+          "kind": "scratch",
+          "content": "Historic archival-keyword-alpha note for recall."
+        },
+        {
+          "kind": "scratch",
+          "content": "Latest tracing update without archival token."
+        }
+      ]
+    },
+    {
+      "code": "Reuse-01",
+      "kind": "context",
+      "title": "Reusable conclusion lane",
+      "summary": "Knowledge status fixture",
+      "description": "Conclusion notes should roll the task into reusable knowledge.",
+      "status": "ready",
+      "priority": "normal",
+      "notes": [
+        {
+          "kind": "conclusion",
+          "content": "Reusable conclusion for search golden baseline."
+        }
+      ]
+    },
+    {
+      "code": "SearchV2-08",
+      "kind": "standard",
+      "title": "Attachment evidence ingest",
+      "summary": "Attachment body search fixture",
+      "description": "Text attachments should expose body evidence for second-hop reads.",
+      "status": "ready",
+      "priority": "normal",
+      "notes": [],
+      "attachments": [
+        {
+          "filename": "golden-attachment.md",
+          "summary": "golden-attachment.md",
+          "content": "# Attachment body\nThis file contains attachment-needle-omega for search quality.\n"
+        }
+      ]
+    },
+    {
+      "code": "CJK-01",
+      "kind": "context",
+      "title": "桌面搜索 控制台",
+      "summary": "中文搜索 fixture",
+      "description": "中文关键词应该可以通过精确词面召回。",
+      "status": "ready",
+      "priority": "normal",
+      "notes": [
+        {
+          "kind": "finding",
+          "content": "桌面搜索 可以恢复运行时控制台上下文。"
+        }
+      ]
+    },
+    {
+      "code": "Semantic-01",
+      "kind": "context",
+      "title": "MCP sidecar supervision",
+      "summary": "Semantic paraphrase fixture",
+      "description": "The launch watchdog supervises sidecar lifecycle and restart recovery.",
+      "status": "ready",
+      "priority": "normal",
+      "notes": [
+        {
+          "kind": "finding",
+          "content": "The watchdog observes sidecar startup, restart recovery, and stale process cleanup."
+        }
+      ]
+    }
+  ],
+  "queries": [
+    {
+      "id": "identifier_task_code",
+      "text": "SearchV2-04",
+      "expected_task_codes": ["SearchV2-04"],
+      "expected_evidence_sources": ["task_code"],
+      "require_evidence_id": false
+    },
+    {
+      "id": "exact_phrase_title",
+      "text": "\"runtime console failure recovery\"",
+      "expected_task_codes": ["SearchV2-00"],
+      "expected_evidence_sources": ["title"],
+      "require_evidence_id": false
+    },
+    {
+      "id": "historical_note_body",
+      "text": "archival-keyword-alpha",
+      "expected_task_codes": ["InitCtx-01"],
+      "expected_evidence_sources": ["activity_search_text"],
+      "require_evidence_id": true
+    },
+    {
+      "id": "attachment_body",
+      "text": "attachment-needle-omega",
+      "expected_task_codes": ["SearchV2-08"],
+      "expected_evidence_sources": ["activity_search_text"],
+      "require_evidence_id": true
+    },
+    {
+      "id": "structured_reusable",
+      "text": null,
+      "knowledge_status": "reusable",
+      "expected_task_codes": ["Reuse-01"],
+      "expected_evidence_sources": [],
+      "require_evidence_id": false
+    },
+    {
+      "id": "cjk_exact",
+      "text": "桌面搜索",
+      "expected_task_codes": ["CJK-01"],
+      "expected_evidence_sources": ["title", "activity_search_text"],
+      "require_evidence_id": false
+    },
+    {
+      "id": "semantic_paraphrase",
+      "text": "guardian",
+      "expected_task_codes": ["Semantic-01"],
+      "expected_evidence_sources": ["semantic_activity_chunk", "semantic_task_document"],
+      "require_evidence_id": true
+    }
+  ]
+}

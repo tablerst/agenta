@@ -94,6 +94,23 @@ cargo run --manifest-path src-tauri/Cargo.toml --bin agenta -- search status
 - `meta.retrieval_mode` 只描述 task bucket：`structured_only | lexical_only | hybrid`；activity bucket 当前为 lexical-only。
 - 语义失败或超时时，`semantic_error` 必须说明 fallback 原因，不能静默降级。
 
+最小程序化评测入口：
+
+```powershell
+cargo test --manifest-path src-tauri/Cargo.toml search_eval_v011_reports_relevance_and_performance_metrics -- --nocapture
+```
+
+该测试会把 `src-tauri/tests/fixtures/search_eval_v011.json` 写入临时 SQLite runtime，不依赖本机 live DB。`lexical` profile 关闭向量检索；`hybrid_mock` profile 启动进程内 mock Chroma/embedding 服务，执行回填后再检索。测试输出以 `SEARCH_EVAL_REPORT=` 开头的 JSON，包含 `accuracy_at_1`、`recall_at_5`、`recall_at_10`、`mrr`、`relevance_correctness`、`evidence_coverage`、语义尝试/使用/错误计数、平均/p95/max 耗时和 `performance_score`，并给出 hybrid 相对 lexical 的 delta。
+
+当前门槛覆盖：
+
+- lexical `accuracy_at_1 >= 0.75` 且 `evidence_coverage >= 0.70`。
+- hybrid 不低于 lexical 的 `accuracy_at_1`、`recall_at_10`、`mrr` 和 `evidence_coverage`。
+- semantic paraphrase 查询必须在 hybrid 下 top-1 命中并带正确证据。
+- hybrid 语义链路必须被尝试并实际使用，`semantic_error_count` 必须为 0，平均耗时必须小于 250ms。
+
+注意：`hybrid_mock` 是确定性管线回归，用来证明 chunk 向量、回填、检索 meta、rerank 和证据覆盖没有退化；真实 embedding provider 的质量评测应作为后续 opt-in 套件补充。
+
 ## 回填与运维
 
 常用命令：
