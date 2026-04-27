@@ -10,7 +10,10 @@ pub use config::{
     SearchConfig, SearchEmbeddingConfig, SearchEmbeddingProvider, SearchVectorBackend,
     SearchVectorConfig, SyncConfig, SyncRemoteConfig, SyncRemoteKind, SyncRemotePostgresConfig,
 };
-pub use error_log::{install_panic_hook, record_app_error, record_error_message};
+pub use error_log::{
+    install_panic_hook, record_app_error, record_error_message,
+    record_search_index_processing_error,
+};
 pub use mcp::{
     build_mcp_router, start_mcp_host, McpLifecycleState, McpLogEntry, McpLogSnapshot,
     McpRuntimeStatus, McpSessionLogger, McpSupervisor, RunningMcpHost, MCP_LOG_EVENT,

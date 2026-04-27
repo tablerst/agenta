@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
@@ -10,13 +11,14 @@ use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use crate::app::{SearchConfig, SearchEmbeddingProvider, SearchVectorBackend};
+use crate::app::{record_app_error, SearchConfig, SearchEmbeddingProvider, SearchVectorBackend};
 use crate::error::{AppError, AppResult};
 use crate::search::TaskVectorDocument;
 use crate::storage::{SqliteStore, TaskListFilter};
 
 const INDEX_JOB_BATCH_SIZE: usize = 10;
 const MAX_INDEX_JOB_BATCH_SIZE: usize = 200;
+const HTTP_ERROR_BODY_LIMIT: usize = 2_048;
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
@@ -62,6 +64,7 @@ struct SearchRuntimeInner {
     worker_lock: Mutex<()>,
     collection_id: Mutex<Option<String>>,
     sidecar: Mutex<Option<Child>>,
+    error_log_path: Option<PathBuf>,
 }
 
 #[derive(Deserialize)]
@@ -87,6 +90,20 @@ struct OpenAiEmbeddingItem {
     embedding: Vec<f32>,
 }
 
+#[derive(Deserialize)]
+struct OpenAiErrorEnvelope {
+    error: OpenAiErrorBody,
+}
+
+#[derive(Deserialize)]
+struct OpenAiErrorBody {
+    message: Option<String>,
+    #[serde(rename = "type")]
+    error_type: Option<String>,
+    code: Option<Value>,
+    param: Option<Value>,
+}
+
 fn configure_sidecar_command(command: &mut Command) -> &mut Command {
     #[cfg(windows)]
     {
@@ -96,8 +113,114 @@ fn configure_sidecar_command(command: &mut Command) -> &mut Command {
     command
 }
 
+async fn http_status_error(response: reqwest::Response, context: &str) -> AppError {
+    let status = response.status();
+    let body = match response.text().await {
+        Ok(body) => body,
+        Err(error) => {
+            return AppError::Io(format!(
+                "{context} failed with status {status}; failed to read error body: {error}"
+            ));
+        }
+    };
+
+    match summarize_http_error_body(&body) {
+        Some(summary) => AppError::Io(format!("{context} failed with status {status}: {summary}")),
+        None => AppError::Io(format!("{context} failed with status {status}")),
+    }
+}
+
+fn summarize_http_error_body(body: &str) -> Option<String> {
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if let Ok(envelope) = serde_json::from_str::<OpenAiErrorEnvelope>(trimmed) {
+        let mut parts = Vec::new();
+        if let Some(message) = envelope.error.message.as_deref().and_then(non_empty) {
+            parts.push(format!("provider message: {message}"));
+        }
+        if let Some(error_type) = envelope.error.error_type.as_deref().and_then(non_empty) {
+            parts.push(format!("type: {error_type}"));
+        }
+        if let Some(code) = error_value_part(envelope.error.code.as_ref()) {
+            parts.push(format!("code: {code}"));
+        }
+        if let Some(param) = error_value_part(envelope.error.param.as_ref()) {
+            parts.push(format!("param: {param}"));
+        }
+        if !parts.is_empty() {
+            return Some(parts.join("; "));
+        }
+    }
+
+    if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+        if let Some(summary) = summarize_json_error_value(&value) {
+            return Some(summary);
+        }
+        return Some(format!(
+            "body: {}",
+            truncate_error_body(&compact_json(&value))
+        ));
+    }
+
+    Some(format!("body: {}", truncate_error_body(trimmed)))
+}
+
+fn summarize_json_error_value(value: &Value) -> Option<String> {
+    for key in ["message", "detail", "error"] {
+        if let Some(message) = value.get(key).and_then(Value::as_str).and_then(non_empty) {
+            return Some(format!("{key}: {}", truncate_error_body(message)));
+        }
+    }
+
+    if let Some(error) = value.get("error").and_then(Value::as_object) {
+        if let Some(message) = error
+            .get("message")
+            .and_then(Value::as_str)
+            .and_then(non_empty)
+        {
+            return Some(format!(
+                "provider message: {}",
+                truncate_error_body(message)
+            ));
+        }
+    }
+
+    None
+}
+
+fn error_value_part(value: Option<&Value>) -> Option<String> {
+    match value {
+        Some(Value::String(text)) => non_empty(text).map(str::to_string),
+        Some(Value::Null) | None => None,
+        Some(value) => Some(truncate_error_body(&compact_json(value))),
+    }
+}
+
+fn non_empty(value: &str) -> Option<&str> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then_some(trimmed)
+}
+
+fn compact_json(value: &Value) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| value.to_string())
+}
+
+fn truncate_error_body(value: &str) -> String {
+    let mut truncated = value
+        .chars()
+        .take(HTTP_ERROR_BODY_LIMIT)
+        .collect::<String>();
+    if value.chars().count() > HTTP_ERROR_BODY_LIMIT {
+        truncated.push_str("...");
+    }
+    truncated
+}
+
 impl SearchRuntime {
-    pub fn new(config: SearchConfig) -> AppResult<Self> {
+    pub fn new(config: SearchConfig, error_log_path: Option<PathBuf>) -> AppResult<Self> {
         let http = reqwest::Client::builder().build().map_err(|error| {
             AppError::Io(format!("failed to build search http client: {error}"))
         })?;
@@ -108,6 +231,7 @@ impl SearchRuntime {
                 worker_lock: Mutex::new(()),
                 collection_id: Mutex::new(None),
                 sidecar: Mutex::new(None),
+                error_log_path,
             }),
         })
     }
@@ -135,9 +259,20 @@ impl SearchRuntime {
         }
 
         let runtime = self.clone();
+        let error_log_path = self.inner.error_log_path.clone();
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(200)).await;
-            let _ = runtime.process_pending_jobs(store).await;
+            if let Err(error) = runtime.process_pending_jobs(store).await {
+                if let Some(path) = error_log_path {
+                    let _ = record_app_error(
+                        &path,
+                        "runtime",
+                        "search_index_worker",
+                        "search.index_worker",
+                        &error,
+                    );
+                }
+            }
         });
     }
 
@@ -353,10 +488,7 @@ impl SearchRuntime {
             .await
             .map_err(|error| AppError::Io(format!("chroma query request failed: {error}")))?;
         if !response.status().is_success() {
-            return Err(AppError::Io(format!(
-                "chroma query failed with status {}",
-                response.status()
-            )));
+            return Err(http_status_error(response, "chroma query").await);
         }
 
         let payload = response
@@ -514,10 +646,7 @@ impl SearchRuntime {
             return Ok(());
         }
 
-        Err(AppError::Io(format!(
-            "chroma upsert failed with status {}",
-            response.status()
-        )))
+        Err(http_status_error(response, "chroma upsert").await)
     }
 
     async fn ensure_collection_id(&self) -> AppResult<String> {
@@ -539,10 +668,7 @@ impl SearchRuntime {
                 AppError::Io(format!("failed to create chroma collection: {error}"))
             })?;
         if !response.status().is_success() {
-            return Err(AppError::Io(format!(
-                "failed to create chroma collection: {}",
-                response.status()
-            )));
+            return Err(http_status_error(response, "chroma collection create").await);
         }
 
         let collection = response
@@ -591,10 +717,7 @@ impl SearchRuntime {
             .await
             .map_err(|error| AppError::Io(format!("embedding request failed: {error}")))?;
         if !response.status().is_success() {
-            return Err(AppError::Io(format!(
-                "embedding request failed with status {}",
-                response.status()
-            )));
+            return Err(http_status_error(response, "embedding request").await);
         }
 
         let payload = response

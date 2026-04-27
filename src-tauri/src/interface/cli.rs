@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use clap::{Args, Parser, Subcommand};
@@ -6,7 +6,8 @@ use serde_json::json;
 
 use crate::app::runtime::{init_tracing, AgentaApp, BootstrapOptions};
 use crate::app::{
-    install_panic_hook, record_app_error, record_error_message, resolve_error_log_path,
+    install_panic_hook, record_app_error, record_error_message,
+    record_search_index_processing_error, resolve_error_log_path,
 };
 use crate::error::{AppError, AppResult};
 use crate::interface::response::{error, success, SuccessEnvelope};
@@ -14,8 +15,9 @@ use crate::service::{
     AddTaskBlockerInput, AttachChildTaskInput, ContextInitInput, ContextInitResult,
     CreateAttachmentInput, CreateChildTaskInput, CreateNoteInput, CreateProjectInput,
     CreateTaskInput, CreateVersionInput, DetachChildTaskInput, RequestOrigin,
-    ResolveTaskBlockerInput, SearchEvidenceInput, SearchInput, TaskContextOptions, TaskQuery,
-    UpdateProjectInput, UpdateTaskInput, UpdateVersionInput,
+    ResolveTaskBlockerInput, SearchBackfillSummary, SearchEvidenceInput, SearchInput,
+    SearchQueueRecoverySummary, TaskContextOptions, TaskQuery, UpdateProjectInput, UpdateTaskInput,
+    UpdateVersionInput,
 };
 
 #[derive(Debug, Parser)]
@@ -490,7 +492,7 @@ pub async fn run() -> i32 {
             config_path: cli.config.clone(),
         })
         .await?;
-        execute(app, cli.command).await
+        execute(app, cli.command, &error_log_path).await
     }
     .await;
 
@@ -584,7 +586,11 @@ fn cli_binary_name() -> String {
         .unwrap_or_else(|| "agenta".to_string())
 }
 
-async fn execute(app: AgentaApp, command: TopLevelCommand) -> AppResult<SuccessEnvelope> {
+async fn execute(
+    app: AgentaApp,
+    command: TopLevelCommand,
+    error_log_path: &Path,
+) -> AppResult<SuccessEnvelope> {
     match command {
         TopLevelCommand::Context(command) => execute_context(app, command).await,
         TopLevelCommand::Project(command) => execute_project(app, command).await,
@@ -592,7 +598,7 @@ async fn execute(app: AgentaApp, command: TopLevelCommand) -> AppResult<SuccessE
         TopLevelCommand::Task(command) => execute_task(app, command).await,
         TopLevelCommand::Note(command) => execute_note(app, command).await,
         TopLevelCommand::Attachment(command) => execute_attachment(app, command).await,
-        TopLevelCommand::Search(command) => execute_search(app, command).await,
+        TopLevelCommand::Search(command) => execute_search(app, command, error_log_path).await,
         TopLevelCommand::Sync(command) => execute_sync(app, command).await,
     }
 }
@@ -956,7 +962,11 @@ async fn execute_attachment(
     }
 }
 
-async fn execute_search(app: AgentaApp, command: SearchCommand) -> AppResult<SuccessEnvelope> {
+async fn execute_search(
+    app: AgentaApp,
+    command: SearchCommand,
+    error_log_path: &Path,
+) -> AppResult<SuccessEnvelope> {
     match command {
         SearchCommand::Status => {
             let result = app.service.search_index_status().await?;
@@ -996,6 +1006,7 @@ async fn execute_search(app: AgentaApp, command: SearchCommand) -> AppResult<Suc
                 .service
                 .search_backfill(args.limit, args.batch_size)
                 .await?;
+            record_cli_search_backfill_processing_error(error_log_path, "search.backfill", &result);
             success("search.backfill", result, "Completed search backfill")
         }
         SearchCommand::RetryFailed(args) => {
@@ -1003,6 +1014,11 @@ async fn execute_search(app: AgentaApp, command: SearchCommand) -> AppResult<Suc
                 .service
                 .retry_failed_search_index_jobs(args.limit, args.batch_size)
                 .await?;
+            record_cli_search_recovery_processing_error(
+                error_log_path,
+                "search.retry_failed",
+                &result,
+            );
             success(
                 "search.retry_failed",
                 result,
@@ -1014,6 +1030,11 @@ async fn execute_search(app: AgentaApp, command: SearchCommand) -> AppResult<Suc
                 .service
                 .recover_stale_search_index_jobs(args.limit, args.batch_size)
                 .await?;
+            record_cli_search_recovery_processing_error(
+                error_log_path,
+                "search.recover_stale",
+                &result,
+            );
             success(
                 "search.recover_stale",
                 result,
@@ -1021,6 +1042,63 @@ async fn execute_search(app: AgentaApp, command: SearchCommand) -> AppResult<Suc
             )
         }
     }
+}
+
+fn record_cli_search_backfill_processing_error(
+    error_log_path: &Path,
+    action: &str,
+    summary: &SearchBackfillSummary,
+) {
+    let Some(processing_error) = summary.processing_error.as_deref() else {
+        return;
+    };
+
+    let _ = record_search_index_processing_error(
+        error_log_path,
+        "cli",
+        action,
+        processing_error,
+        json!({
+            "run_id": summary.run_id.to_string(),
+            "status": &summary.status,
+            "operation_kind": &summary.operation_kind,
+            "scanned": summary.scanned,
+            "queued": summary.queued,
+            "skipped": summary.skipped,
+            "processed": summary.processed,
+            "succeeded": summary.succeeded,
+            "failed": summary.failed,
+            "pending_after": summary.pending_after,
+        }),
+    );
+}
+
+fn record_cli_search_recovery_processing_error(
+    error_log_path: &Path,
+    action: &str,
+    summary: &SearchQueueRecoverySummary,
+) {
+    let Some(processing_error) = summary.processing_error.as_deref() else {
+        return;
+    };
+
+    let _ = record_search_index_processing_error(
+        error_log_path,
+        "cli",
+        action,
+        processing_error,
+        json!({
+            "run_id": summary.run_id.to_string(),
+            "status": &summary.status,
+            "trigger_kind": &summary.trigger_kind,
+            "operation_kind": &summary.operation_kind,
+            "queued": summary.queued,
+            "processed": summary.processed,
+            "succeeded": summary.succeeded,
+            "failed": summary.failed,
+            "pending_after": summary.pending_after,
+        }),
+    );
 }
 
 async fn execute_sync(app: AgentaApp, command: SyncCommand) -> AppResult<SuccessEnvelope> {

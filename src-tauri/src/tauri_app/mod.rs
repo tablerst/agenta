@@ -1,5 +1,5 @@
 use std::ops::Deref;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -8,9 +8,9 @@ use serde_json::json;
 use tauri::{Emitter, State};
 
 use crate::app::{
-    record_app_error, record_error_message, save_mcp_config_defaults, AppRuntime,
-    McpLaunchOverrides, McpLogDestination, McpLogLevel, McpLogSnapshot, McpRuntimeStatus,
-    McpSupervisor, MCP_LOG_EVENT, MCP_STATUS_EVENT,
+    record_app_error, record_error_message, record_search_index_processing_error,
+    save_mcp_config_defaults, AppRuntime, McpLaunchOverrides, McpLogDestination, McpLogLevel,
+    McpLogSnapshot, McpRuntimeStatus, McpSupervisor, MCP_LOG_EVENT, MCP_STATUS_EVENT,
 };
 use crate::build_info::{self, BuildInfo};
 use crate::domain::ApprovalStatus;
@@ -20,9 +20,9 @@ use crate::service::{
     AddTaskBlockerInput, ApprovalQuery, AttachChildTaskInput, ContextInitInput, ContextInitResult,
     CreateAttachmentInput, CreateChildTaskInput, CreateNoteInput, CreateProjectInput,
     CreateTaskInput, CreateVersionInput, DetachChildTaskInput, PageRequest, RequestOrigin,
-    ResolveTaskBlockerInput, ReviewApprovalInput, SearchEvidenceInput, SearchInput, SortOrder,
-    TaskContextOptions, TaskQuery, TaskSortBy, UpdateProjectInput, UpdateTaskInput,
-    UpdateVersionInput,
+    ResolveTaskBlockerInput, ReviewApprovalInput, SearchBackfillSummary, SearchEvidenceInput,
+    SearchInput, SearchQueueRecoverySummary, SortOrder, TaskContextOptions, TaskQuery, TaskSortBy,
+    UpdateProjectInput, UpdateTaskInput, UpdateVersionInput,
 };
 
 #[derive(Debug, Serialize)]
@@ -846,30 +846,50 @@ async fn desktop_search(
                     .await?,
                 "Loaded search evidence",
             ),
-            "backfill" => success(
-                "search.backfill",
-                state
+            "backfill" => {
+                let result = state
                     .service
                     .search_backfill(input.limit, input.batch_size)
-                    .await?,
-                "Completed search backfill",
-            ),
-            "retry_failed" => success(
-                "search.retry_failed",
-                state
+                    .await?;
+                record_desktop_search_backfill_processing_error(
+                    &state.config.paths.error_log_path,
+                    "desktop.search_backfill",
+                    &result,
+                );
+                success("search.backfill", result, "Completed search backfill")
+            }
+            "retry_failed" => {
+                let result = state
                     .service
                     .retry_failed_search_index_jobs(input.limit, input.batch_size)
-                    .await?,
-                "Retried failed search index jobs",
-            ),
-            "recover_stale" => success(
-                "search.recover_stale",
-                state
+                    .await?;
+                record_desktop_search_recovery_processing_error(
+                    &state.config.paths.error_log_path,
+                    "desktop.search_retry_failed",
+                    &result,
+                );
+                success(
+                    "search.retry_failed",
+                    result,
+                    "Retried failed search index jobs",
+                )
+            }
+            "recover_stale" => {
+                let result = state
                     .service
                     .recover_stale_search_index_jobs(input.limit, input.batch_size)
-                    .await?,
-                "Recovered stale search index jobs",
-            ),
+                    .await?;
+                record_desktop_search_recovery_processing_error(
+                    &state.config.paths.error_log_path,
+                    "desktop.search_recover_stale",
+                    &result,
+                );
+                success(
+                    "search.recover_stale",
+                    result,
+                    "Recovered stale search index jobs",
+                )
+            }
             other => Err(AppError::InvalidAction(format!(
                 "unsupported search action: {other}"
             ))),
@@ -878,6 +898,63 @@ async fn desktop_search(
     .await;
 
     result.map_err(|app_error| state.error_envelope("desktop.search", app_error))
+}
+
+fn record_desktop_search_backfill_processing_error(
+    error_log_path: &Path,
+    action: &str,
+    summary: &SearchBackfillSummary,
+) {
+    let Some(processing_error) = summary.processing_error.as_deref() else {
+        return;
+    };
+
+    let _ = record_search_index_processing_error(
+        error_log_path,
+        "desktop",
+        action,
+        processing_error,
+        json!({
+            "run_id": summary.run_id.to_string(),
+            "status": &summary.status,
+            "operation_kind": &summary.operation_kind,
+            "scanned": summary.scanned,
+            "queued": summary.queued,
+            "skipped": summary.skipped,
+            "processed": summary.processed,
+            "succeeded": summary.succeeded,
+            "failed": summary.failed,
+            "pending_after": summary.pending_after,
+        }),
+    );
+}
+
+fn record_desktop_search_recovery_processing_error(
+    error_log_path: &Path,
+    action: &str,
+    summary: &SearchQueueRecoverySummary,
+) {
+    let Some(processing_error) = summary.processing_error.as_deref() else {
+        return;
+    };
+
+    let _ = record_search_index_processing_error(
+        error_log_path,
+        "desktop",
+        action,
+        processing_error,
+        json!({
+            "run_id": summary.run_id.to_string(),
+            "status": &summary.status,
+            "trigger_kind": &summary.trigger_kind,
+            "operation_kind": &summary.operation_kind,
+            "queued": summary.queued,
+            "processed": summary.processed,
+            "succeeded": summary.succeeded,
+            "failed": summary.failed,
+            "pending_after": summary.pending_after,
+        }),
+    );
 }
 
 #[tauri::command]

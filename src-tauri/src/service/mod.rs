@@ -83,9 +83,9 @@ impl AgentaService {
         sync: SyncConfig,
         search_config: SearchConfig,
         project_context: ProjectContextConfig,
-        _data_dir: PathBuf,
+        error_log_path: PathBuf,
     ) -> AppResult<Self> {
-        let search = SearchRuntime::new(search_config)?;
+        let search = SearchRuntime::new(search_config, Some(error_log_path))?;
         search.trigger_index_worker(store.clone());
         Ok(Self {
             store,

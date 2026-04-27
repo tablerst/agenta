@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use assert_cmd::Command;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
@@ -430,6 +431,24 @@ fn write_vector_test_config(
     Ok(config_path)
 }
 
+fn write_vector_test_config_with_error_log(
+    tempdir: &TempDir,
+    endpoint: &str,
+    error_log_path: &std::path::Path,
+) -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
+    let config_path = tempdir.path().join("agenta.local.yaml");
+    let data_dir = tempdir.path().join("data");
+    let yaml = format!(
+        "paths:\n  data_dir: {}\n  error_log: {}\nsearch:\n  vector:\n    enabled: true\n    endpoint: {}\n    autostart_sidecar: false\n  embedding:\n    provider: openai_compatible\n    base_url: {}\n    api_key: inline-search-key\n    model: test-embedding\n",
+        normalize_path_for_yaml(&data_dir),
+        normalize_path_for_yaml(error_log_path),
+        endpoint,
+        endpoint,
+    );
+    std::fs::write(&config_path, yaml)?;
+    Ok(config_path)
+}
+
 #[derive(Clone, Default)]
 struct MockSearchServerState {
     embedding_batch_sizes: Arc<Mutex<Vec<usize>>>,
@@ -573,6 +592,114 @@ async fn spawn_mock_search_server(
             .expect("search mock server");
     });
     Ok((address, state, server))
+}
+
+async fn failing_json_embeddings(
+    State(_state): State<MockSearchServerState>,
+    Json(_payload): Json<Value>,
+) -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({
+            "error": {
+                "message": "invalid model for test embeddings",
+                "type": "invalid_request_error",
+                "code": "model_not_found",
+                "param": "model"
+            }
+        })),
+    )
+}
+
+async fn failing_text_embeddings(
+    State(_state): State<MockSearchServerState>,
+    Json(_payload): Json<Value>,
+) -> (StatusCode, String) {
+    (
+        StatusCode::BAD_REQUEST,
+        "plain provider failure: unsupported embedding request".to_string(),
+    )
+}
+
+async fn spawn_failing_embedding_server(
+    text_body: bool,
+) -> Result<(String, tokio::task::JoinHandle<()>), Box<dyn std::error::Error>> {
+    let state = MockSearchServerState::default();
+    let app = Router::new()
+        .route("/api/v2/heartbeat", get(search_heartbeat))
+        .route(
+            "/api/v2/tenants/default_tenant/databases/default_database/collections",
+            post(search_collections),
+        )
+        .route(
+            "/api/v2/tenants/default_tenant/databases/default_database/collections/{collection_id}/upsert",
+            post(search_upsert),
+        )
+        .route(
+            "/api/v2/tenants/default_tenant/databases/default_database/collections/{collection_id}/query",
+            post(search_vector_query),
+        );
+    let app = if text_body {
+        app.route("/v1/embeddings", post(failing_text_embeddings))
+    } else {
+        app.route("/v1/embeddings", post(failing_json_embeddings))
+    }
+    .with_state(state);
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let address = format!("http://{}", listener.local_addr()?);
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("failing search mock server");
+    });
+    Ok((address, server))
+}
+
+async fn seed_single_search_backfill_task(
+    tempdir: &TempDir,
+    slug: &str,
+    title: &str,
+    description: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let disabled_config = write_test_config(tempdir)?;
+    let runtime = AppRuntime::bootstrap(BootstrapOptions {
+        config_path: Some(disabled_config),
+    })
+    .await?;
+    let project = runtime
+        .service
+        .create_project(CreateProjectInput {
+            slug: slug.to_string(),
+            name: format!("{title} Project"),
+            description: None,
+        })
+        .await?;
+    let version = runtime
+        .service
+        .create_version(CreateVersionInput {
+            project: project.slug.clone(),
+            name: "v1".to_string(),
+            description: None,
+            status: Some(VersionStatus::Active),
+        })
+        .await?;
+    runtime
+        .service
+        .create_task(CreateTaskInput {
+            project: project.slug,
+            version: Some(version.version_id.to_string()),
+            task_code: Some(format!("{}-Task", slug)),
+            task_kind: Some(TaskKind::Context),
+            title: title.to_string(),
+            summary: Some("Search index diagnostic fixture".to_string()),
+            description: Some(description.to_string()),
+            status: Some(TaskStatus::Ready),
+            priority: Some(TaskPriority::Normal),
+            created_by: Some("search-error-test".to_string()),
+        })
+        .await?;
+    drop(runtime);
+    Ok(())
 }
 
 #[tokio::test]
@@ -1539,6 +1666,145 @@ async fn search_backfill_batches_embeddings_and_upserts_task_documents(
             && hit.evidence_source.as_deref() == Some("semantic_activity_chunk")
             && hit.evidence_chunk_id.is_some()
     }));
+
+    server.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn search_backfill_preserves_embedding_provider_json_error_body(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let tempdir = TempDir::new()?;
+    seed_single_search_backfill_task(
+        &tempdir,
+        "embedding-json-error",
+        "Embedding JSON Error",
+        "Provider JSON errors should be visible without logging this task body.",
+    )
+    .await?;
+
+    let (endpoint, server) = spawn_failing_embedding_server(false).await?;
+    let enabled_config = write_vector_test_config(&tempdir, &endpoint)?;
+    let runtime = AppRuntime::bootstrap(BootstrapOptions {
+        config_path: Some(enabled_config),
+    })
+    .await?;
+
+    let summary = runtime.service.search_backfill(Some(10), Some(1)).await?;
+    let processing_error = summary
+        .processing_error
+        .as_deref()
+        .expect("processing error");
+    assert!(processing_error.contains("embedding request failed with status 400 Bad Request"));
+    assert!(processing_error.contains("provider message: invalid model for test embeddings"));
+    assert!(processing_error.contains("type: invalid_request_error"));
+    assert!(processing_error.contains("code: model_not_found"));
+    assert!(processing_error.contains("param: model"));
+
+    let status = runtime.service.search_index_status().await?;
+    let latest_error = status
+        .latest_run
+        .as_ref()
+        .and_then(|run| run.last_error.as_deref())
+        .expect("latest run error");
+    assert!(latest_error.contains("invalid model for test embeddings"));
+    let failed_error = status
+        .failed_jobs
+        .first()
+        .and_then(|job| job.last_error.as_deref())
+        .expect("failed job error");
+    assert!(failed_error.contains("invalid_request_error"));
+    assert!(failed_error.contains("model_not_found"));
+
+    server.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn search_backfill_preserves_embedding_provider_text_error_body(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let tempdir = TempDir::new()?;
+    seed_single_search_backfill_task(
+        &tempdir,
+        "embedding-text-error",
+        "Embedding Text Error",
+        "Provider text errors should be visible without logging this task body.",
+    )
+    .await?;
+
+    let (endpoint, server) = spawn_failing_embedding_server(true).await?;
+    let enabled_config = write_vector_test_config(&tempdir, &endpoint)?;
+    let runtime = AppRuntime::bootstrap(BootstrapOptions {
+        config_path: Some(enabled_config),
+    })
+    .await?;
+
+    let summary = runtime.service.search_backfill(Some(10), Some(1)).await?;
+    let processing_error = summary
+        .processing_error
+        .as_deref()
+        .expect("processing error");
+    assert!(processing_error.contains("embedding request failed with status 400 Bad Request"));
+    assert!(
+        processing_error.contains("body: plain provider failure: unsupported embedding request")
+    );
+
+    let status = runtime.service.search_index_status().await?;
+    let failed_error = status
+        .failed_jobs
+        .first()
+        .and_then(|job| job.last_error.as_deref())
+        .expect("failed job error");
+    assert!(failed_error.contains("plain provider failure"));
+
+    server.abort();
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cli_search_backfill_processing_error_is_written_to_error_log(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let tempdir = TempDir::new()?;
+    let sensitive_task_body = "SECRET_EMBEDDING_INPUT_SHOULD_NOT_LOG";
+    seed_single_search_backfill_task(
+        &tempdir,
+        "embedding-cli-error",
+        "Embedding CLI Error",
+        sensitive_task_body,
+    )
+    .await?;
+
+    let (endpoint, server) = spawn_failing_embedding_server(false).await?;
+    let error_log_path = tempdir.path().join("logs").join("search-error.log");
+    let enabled_config =
+        write_vector_test_config_with_error_log(&tempdir, &endpoint, &error_log_path)?;
+
+    Command::cargo_bin("agenta")?
+        .arg("--config")
+        .arg(&enabled_config)
+        .args(["search", "backfill", "--limit", "1", "--batch-size", "1"])
+        .assert()
+        .success();
+
+    let content = std::fs::read_to_string(&error_log_path)?;
+    let line = content
+        .lines()
+        .find(|line| line.contains("\"action\":\"search.backfill\""))
+        .expect("search backfill error log line");
+    let event: Value = serde_json::from_str(line)?;
+    assert_eq!(event["surface"], "cli");
+    assert_eq!(event["component"], "search_index");
+    assert_eq!(event["action"], "search.backfill");
+    assert_eq!(event["error_code"], "internal_error");
+    assert!(event["message"]
+        .as_str()
+        .is_some_and(|message| message.contains("invalid model for test embeddings")));
+    assert_eq!(event["details"]["status"], "failed");
+    assert_eq!(event["details"]["operation_kind"], "manual_rebuild");
+    assert_eq!(event["details"]["failed"], 1);
+    assert!(!content.contains("inline-search-key"));
+    assert!(!content.to_ascii_lowercase().contains("authorization"));
+    assert!(!content.contains(sensitive_task_body));
 
     server.abort();
     Ok(())

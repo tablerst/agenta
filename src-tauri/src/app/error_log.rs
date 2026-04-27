@@ -133,6 +133,24 @@ pub fn record_error_message(
     )
 }
 
+pub fn record_search_index_processing_error(
+    path: &Path,
+    surface: impl Into<String>,
+    action: impl Into<String>,
+    message: impl Into<String>,
+    details: Value,
+) -> io::Result<()> {
+    record_error_message(
+        path,
+        surface,
+        "search_index",
+        action,
+        "internal_error",
+        message,
+        details,
+    )
+}
+
 pub fn install_panic_hook(path: PathBuf, surface: &'static str) {
     let previous_hook = panic::take_hook();
     panic::set_hook(Box::new(move |info| {

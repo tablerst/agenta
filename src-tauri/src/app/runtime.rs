@@ -37,7 +37,7 @@ impl AgentaApp {
             config.sync.clone(),
             config.search.clone(),
             config.project_context.clone(),
-            config.paths.data_dir.clone(),
+            config.paths.error_log_path.clone(),
         )?;
 
         Ok(Self { config, service })
