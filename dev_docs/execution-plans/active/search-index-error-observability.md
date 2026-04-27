@@ -16,6 +16,7 @@
 - 将增强后的错误写入索引 run/job 的现有错误字段，前端继续通过 `processing_error`、`last_error` 展示。
 - 手动重建、失败重试、过期任务恢复即使返回成功 envelope，只要包含 `processing_error` 就额外写入 errorlog。
 - 后台增量 worker 出错时写入 runtime 级 errorlog，避免静默吞错。
+- 手动维护的批次大小同时约束任务 claim 数和单次 Embedding/Chroma upsert 的文档数，避免一个任务展开多个 activity chunks 后突破 provider 的 input batch 限制。
 - errorlog 只记录错误摘要和运行元信息，不记录请求 payload、任务正文、Embedding 输入、API key 或 Authorization。
 
 ## 执行步骤
@@ -51,6 +52,7 @@
 | [x] | 增加 provider JSON 错误测试 | 已覆盖 run/job/summary |
 | [x] | 增加 provider 文本错误测试 | 已覆盖截断文本摘要 |
 | [x] | 增加 errorlog 落盘和脱敏测试 | 已验证不记录 payload、正文或密钥 |
+| [x] | 修复任务 fan-out 导致 Embedding input 超批次 | 已按 `min(用户批次, 10)` 切分文档请求 |
 | [x] | 运行验证命令 | `cargo check`、搜索回归测试、`bun run build` 已通过 |
 
 ## 后续讨论

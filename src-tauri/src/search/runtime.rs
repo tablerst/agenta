@@ -18,6 +18,7 @@ use crate::storage::{SqliteStore, TaskListFilter};
 
 const INDEX_JOB_BATCH_SIZE: usize = 10;
 const MAX_INDEX_JOB_BATCH_SIZE: usize = 200;
+const MAX_EMBEDDING_INPUT_BATCH_SIZE: usize = 10;
 const HTTP_ERROR_BODY_LIMIT: usize = 2_048;
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -219,6 +220,16 @@ fn truncate_error_body(value: &str) -> String {
     truncated
 }
 
+fn search_index_error_message(error: &AppError) -> String {
+    match error {
+        AppError::Io(message)
+        | AppError::Storage(message)
+        | AppError::StorageBusy(message)
+        | AppError::Internal(message) => message.clone(),
+        _ => error.to_string(),
+    }
+}
+
 impl SearchRuntime {
     pub fn new(config: SearchConfig, error_log_path: Option<PathBuf>) -> AppResult<Self> {
         let http = reqwest::Client::builder().build().map_err(|error| {
@@ -322,14 +333,18 @@ impl SearchRuntime {
                 continue;
             }
 
-            match self.process_job_batch(&documents).await {
+            let document_batch_size = batch_size.min(MAX_EMBEDDING_INPUT_BATCH_SIZE);
+            match self
+                .process_job_batch(&documents, document_batch_size)
+                .await
+            {
                 Ok(()) => {
                     for task_id in queued_task_ids {
                         store.complete_search_index_job(task_id).await?;
                     }
                 }
                 Err(error) => {
-                    let error_message = error.to_string();
+                    let error_message = search_index_error_message(&error);
                     if first_error.is_none() {
                         first_error = Some(error_message.clone());
                     }
@@ -558,9 +573,17 @@ impl SearchRuntime {
             .collect())
     }
 
-    async fn process_job_batch(&self, documents: &[TaskVectorDocument]) -> AppResult<()> {
+    async fn process_job_batch(
+        &self,
+        documents: &[TaskVectorDocument],
+        document_batch_size: usize,
+    ) -> AppResult<()> {
         self.ensure_vector_ready().await?;
-        self.upsert_documents(documents).await
+        let document_batch_size = document_batch_size.clamp(1, MAX_EMBEDDING_INPUT_BATCH_SIZE);
+        for chunk in documents.chunks(document_batch_size) {
+            self.upsert_documents(chunk).await?;
+        }
+        Ok(())
     }
 
     async fn ensure_vector_ready(&self) -> AppResult<()> {

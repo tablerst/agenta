@@ -1600,8 +1600,8 @@ async fn search_backfill_batches_embeddings_and_upserts_task_documents(
         Some((summary.run_id, "completed", 2))
     );
 
-    assert_eq!(*state.embedding_batch_sizes.lock().await, vec![2, 2]);
-    assert_eq!(*state.upsert_batch_sizes.lock().await, vec![2, 2]);
+    assert_eq!(*state.embedding_batch_sizes.lock().await, vec![1, 1, 1, 1]);
+    assert_eq!(*state.upsert_batch_sizes.lock().await, vec![1, 1, 1, 1]);
     let upsert_ids = state.upsert_ids.lock().await.clone();
     let flattened_ids = upsert_ids.into_iter().flatten().collect::<Vec<_>>();
     assert!(flattened_ids.contains(&task_a.task_id.to_string()));
@@ -1666,6 +1666,79 @@ async fn search_backfill_batches_embeddings_and_upserts_task_documents(
             && hit.evidence_source.as_deref() == Some("semantic_activity_chunk")
             && hit.evidence_chunk_id.is_some()
     }));
+
+    server.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn search_backfill_splits_task_document_fanout_by_requested_batch_size(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let tempdir = TempDir::new()?;
+    let disabled_config = write_test_config(&tempdir)?;
+    let disabled_runtime = AppRuntime::bootstrap(BootstrapOptions {
+        config_path: Some(disabled_config),
+    })
+    .await?;
+
+    let project = disabled_runtime
+        .service
+        .create_project(CreateProjectInput {
+            slug: "search-fanout-batch".to_string(),
+            name: "Search Fanout Batch".to_string(),
+            description: None,
+        })
+        .await?;
+    let task = disabled_runtime
+        .service
+        .create_task(CreateTaskInput {
+            project: project.slug,
+            version: None,
+            task_code: Some("SearchFanout-01".to_string()),
+            task_kind: Some(TaskKind::Context),
+            title: "Fanout batch source".to_string(),
+            summary: Some("A task with many activity chunks".to_string()),
+            description: Some("The embedding request batch should stay bounded.".to_string()),
+            status: Some(TaskStatus::Ready),
+            priority: Some(TaskPriority::Normal),
+            created_by: Some("search-fanout".to_string()),
+        })
+        .await?;
+    for index in 0..12 {
+        disabled_runtime
+            .service
+            .create_note(CreateNoteInput {
+                task: task.task_id.to_string(),
+                content: format!("Fanout note {index} should create an activity chunk."),
+                note_kind: Some(NoteKind::Conclusion),
+                created_by: Some("search-fanout".to_string()),
+            })
+            .await?;
+    }
+    drop(disabled_runtime);
+
+    let (endpoint, state, server) = spawn_mock_search_server().await?;
+    let enabled_config = write_vector_test_config(&tempdir, &endpoint)?;
+    let runtime = AppRuntime::bootstrap(BootstrapOptions {
+        config_path: Some(enabled_config),
+    })
+    .await?;
+
+    let summary = runtime.service.search_backfill(Some(10), Some(5)).await?;
+    assert_eq!(summary.status, "completed");
+    assert_eq!(summary.queued, 1);
+    assert_eq!(summary.succeeded, 1);
+    assert!(summary.processing_error.is_none());
+
+    let embedding_batch_sizes = state.embedding_batch_sizes.lock().await.clone();
+    assert_eq!(embedding_batch_sizes.iter().sum::<usize>(), 13);
+    assert!(embedding_batch_sizes.iter().all(|size| *size <= 5));
+    assert!(embedding_batch_sizes.len() > 1);
+    assert_eq!(embedding_batch_sizes, vec![5, 5, 3]);
+    assert_eq!(
+        *state.upsert_batch_sizes.lock().await,
+        embedding_batch_sizes
+    );
 
     server.abort();
     Ok(())
