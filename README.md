@@ -121,7 +121,7 @@ Vector search and `回填搜索索引` depend on a reachable Chroma backend when
 - Search query meta uses `retrieval_mode=structured_only|lexical_only|hybrid`; that mode describes the task bucket, while activity hits are currently lexical-only. Semantic fallback is explicit through `semantic_attempted`, `semantic_used`, `semantic_error`, and `semantic_candidate_count`.
 - Search hits can expose `evidence_chunk_id` or `evidence_attachment_id`; use `agenta search evidence` or MCP `search_evidence_get` to read the second-hop evidence text.
 - Queue/runs/failures can be inspected locally via `agenta search status` or the Desktop Runtime search-index panel. Failed jobs can be retried with `agenta search retry-failed`, and expired processing leases can be recovered with `agenta search recover-stale`; embeddings remain local-only derived state and are not replicated through sync.
-- SearchV2 release, rollback, and verification guidance lives in [docs/search-v2-release.md](docs/search-v2-release.md).
+- Current `v0.1.2` packaging guidance lives in [docs/v0.1.2-release.md](docs/v0.1.2-release.md). The historical SearchV2 `v0.1.1` release guide remains in [docs/search-v2-release.md](docs/search-v2-release.md).
 
 Official Chroma references:
 
@@ -133,7 +133,8 @@ Official Chroma references:
 - Quickstart: [docs/cli-mcp-quickstart.md](docs/cli-mcp-quickstart.md)
 - Agent workflow installation: [docs/agent-workflow-installation.md](docs/agent-workflow-installation.md)
 - CLI reference: [docs/cli-reference.md](docs/cli-reference.md)
-- SearchV2 release guide: [docs/search-v2-release.md](docs/search-v2-release.md)
+- Current release guide: [docs/v0.1.2-release.md](docs/v0.1.2-release.md)
+- SearchV2 v0.1.1 release guide: [docs/search-v2-release.md](docs/search-v2-release.md)
 - Latest archived execution plan: [dev_docs/execution-plans/archive/fifth-milestone-remote-replica-sync-foundation.md](dev_docs/execution-plans/archive/fifth-milestone-remote-replica-sync-foundation.md)
 - Archived execution plans: [dev_docs/execution-plans/archive](dev_docs/execution-plans/archive)
 - Product baseline: [dev_docs/baseline.md](dev_docs/baseline.md)

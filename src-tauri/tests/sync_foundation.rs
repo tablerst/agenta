@@ -128,6 +128,81 @@ async fn sync_migrations_create_tables_and_cli_status_is_stable(
 }
 
 #[tokio::test]
+async fn migration_checksum_mismatch_returns_structured_error(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let tempdir = TempDir::new()?;
+    let data_dir = tempdir.path().join("data");
+    let attachments_dir = data_dir.join("attachments");
+    let database_path = data_dir.join("agenta.sqlite3");
+    std::fs::create_dir_all(&data_dir)?;
+
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            SqliteConnectOptions::new()
+                .filename(&database_path)
+                .create_if_missing(true)
+                .foreign_keys(true),
+        )
+        .await?;
+    sqlx::query(
+        r#"
+        CREATE TABLE _sqlx_migrations (
+            version BIGINT PRIMARY KEY,
+            description TEXT NOT NULL,
+            installed_on TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            success BOOLEAN NOT NULL,
+            checksum BLOB NOT NULL,
+            execution_time BIGINT NOT NULL
+        )
+        "#,
+    )
+    .execute(&pool)
+    .await?;
+    sqlx::query(
+        r#"
+        INSERT INTO _sqlx_migrations (
+            version,
+            description,
+            success,
+            checksum,
+            execution_time
+        )
+        VALUES (1, 'initial_schema', TRUE, x'00', 0)
+        "#,
+    )
+    .execute(&pool)
+    .await?;
+    pool.close().await;
+
+    let error = match SqliteStore::open(&data_dir, &database_path, &attachments_dir).await {
+        Ok(_) => panic!("checksum mismatch should fail migration validation"),
+        Err(error) => error,
+    };
+
+    match &error {
+        AppError::Migration {
+            kind,
+            version,
+            message,
+            guidance,
+        } => {
+            assert_eq!(*kind, "version_mismatch");
+            assert_eq!(*version, Some(1));
+            assert!(message.contains("migration 1 was previously applied but has been modified"));
+            assert!(guidance.contains("Back up the database before recovery"));
+        }
+        other => panic!("expected migration error, got {other:?}"),
+    }
+    assert_eq!(error.code(), "migration_error");
+    assert_eq!(error.details()["kind"], "version_mismatch");
+    assert_eq!(error.details()["version"], 1);
+    assert_eq!(error.details()["retryable"], false);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn sync_core_writes_enqueue_outbox_and_cli_lists_recent_items(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let _guard = environment_lock().lock().expect("lock environment");

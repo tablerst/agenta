@@ -185,7 +185,7 @@ impl SqliteStore {
         sqlx::migrate!("./migrations")
             .run(&pool)
             .await
-            .map_err(|error| AppError::Storage(error.to_string()))?;
+            .map_err(AppError::from)?;
 
         Ok(Self {
             pool,

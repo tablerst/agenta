@@ -7,6 +7,8 @@ use crate::policy::WriteDecision;
 
 pub type AppResult<T> = Result<T, AppError>;
 
+const MIGRATION_RECOVERY_GUIDANCE: &str = "Back up the database before recovery. Do not edit or delete _sqlx_migrations manually unless following a verified repair plan. Published migration files must remain immutable; schema changes should use a new migration version.";
+
 #[derive(Debug, Error)]
 pub enum AppError {
     #[error("configuration error: {0}")]
@@ -33,6 +35,13 @@ pub enum AppError {
     Storage(String),
     #[error("storage is busy: {0}")]
     StorageBusy(String),
+    #[error("database migration error: {message}")]
+    Migration {
+        kind: &'static str,
+        version: Option<i64>,
+        message: String,
+        guidance: &'static str,
+    },
     #[error("i/o error: {0}")]
     Io(String),
     #[error("internal error: {0}")]
@@ -53,6 +62,7 @@ impl AppError {
                 WriteDecision::RequireHuman => "requires_human_review",
                 WriteDecision::Deny => "policy_blocked",
             },
+            Self::Migration { .. } => "migration_error",
             Self::StorageBusy(_) => "storage_busy",
             Self::Storage(_) | Self::Io(_) | Self::Internal(_) => "internal_error",
         }
@@ -72,6 +82,18 @@ impl AppError {
             | Self::Storage(message)
             | Self::Io(message)
             | Self::Internal(message) => json!({ "message": message }),
+            Self::Migration {
+                kind,
+                version,
+                message,
+                guidance,
+            } => json!({
+                "message": message,
+                "kind": kind,
+                "version": version,
+                "guidance": guidance,
+                "retryable": false,
+            }),
             Self::StorageBusy(message) => json!({
                 "message": message,
                 "retryable": true,
@@ -100,6 +122,15 @@ impl AppError {
     pub fn internal(message: impl Into<String>) -> Self {
         Self::Internal(message.into())
     }
+
+    fn migration(kind: &'static str, version: Option<i64>, message: impl Into<String>) -> Self {
+        Self::Migration {
+            kind,
+            version,
+            message: message.into(),
+            guidance: MIGRATION_RECOVERY_GUIDANCE,
+        }
+    }
 }
 
 impl From<std::io::Error> for AppError {
@@ -115,6 +146,52 @@ impl From<sqlx::Error> for AppError {
             Self::StorageBusy(message)
         } else {
             Self::Storage(message)
+        }
+    }
+}
+
+impl From<sqlx::migrate::MigrateError> for AppError {
+    fn from(error: sqlx::migrate::MigrateError) -> Self {
+        match &error {
+            sqlx::migrate::MigrateError::Execute(source) if is_sqlite_busy_error(source) => {
+                Self::StorageBusy(error.to_string())
+            }
+            sqlx::migrate::MigrateError::ExecuteMigration(source, _)
+                if is_sqlite_busy_error(source) =>
+            {
+                Self::StorageBusy(error.to_string())
+            }
+            sqlx::migrate::MigrateError::Execute(_) => {
+                Self::migration("execute", None, error.to_string())
+            }
+            sqlx::migrate::MigrateError::ExecuteMigration(_, version) => {
+                Self::migration("execute_migration", Some(*version), error.to_string())
+            }
+            sqlx::migrate::MigrateError::VersionMissing(version) => {
+                Self::migration("version_missing", Some(*version), error.to_string())
+            }
+            sqlx::migrate::MigrateError::VersionMismatch(version) => {
+                Self::migration("version_mismatch", Some(*version), error.to_string())
+            }
+            sqlx::migrate::MigrateError::VersionNotPresent(version) => {
+                Self::migration("version_not_present", Some(*version), error.to_string())
+            }
+            sqlx::migrate::MigrateError::VersionTooOld(version, _) => {
+                Self::migration("version_too_old", Some(*version), error.to_string())
+            }
+            sqlx::migrate::MigrateError::VersionTooNew(version, _) => {
+                Self::migration("version_too_new", Some(*version), error.to_string())
+            }
+            sqlx::migrate::MigrateError::Dirty(version) => {
+                Self::migration("dirty", Some(*version), error.to_string())
+            }
+            sqlx::migrate::MigrateError::Source(_) => {
+                Self::migration("source", None, error.to_string())
+            }
+            sqlx::migrate::MigrateError::ForceNotSupported => {
+                Self::migration("unsupported", None, error.to_string())
+            }
+            _ => Self::migration("unknown", None, error.to_string()),
         }
     }
 }
