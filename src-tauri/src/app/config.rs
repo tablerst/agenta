@@ -21,6 +21,8 @@ const DEFAULT_MCP_UI_BUFFER_LINES: usize = 1000;
 const DEFAULT_SYNC_POSTGRES_MAX_CONNS: u32 = 30;
 const DEFAULT_SYNC_POSTGRES_MIN_CONNS: u32 = 5;
 const DEFAULT_SYNC_POSTGRES_MAX_CONN_LIFETIME: &str = "1h";
+const DEFAULT_SYNC_AUTO_INTERVAL: &str = "60s";
+const DEFAULT_SYNC_AUTO_BATCH_LIMIT: u32 = 100;
 const LOCAL_CONFIG_FILE: &str = "agenta.local.yaml";
 const DEFAULT_PROJECT_CONTEXT_MANIFEST: &str = "project.yaml";
 const DEFAULT_PROJECT_CONTEXT_PATHS: [&str; 3] =
@@ -174,10 +176,19 @@ pub struct SyncRemoteConfig {
 }
 
 #[derive(Clone, Debug)]
+pub struct SyncAutoConfig {
+    pub enabled: bool,
+    pub interval: Duration,
+    pub batch_limit: usize,
+    pub startup_backfill: bool,
+}
+
+#[derive(Clone, Debug)]
 pub struct SyncConfig {
     pub enabled: bool,
     pub mode: SyncMode,
     pub remote: Option<SyncRemoteConfig>,
+    pub auto: SyncAutoConfig,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -387,6 +398,15 @@ struct RawSyncConfig {
     enabled: Option<bool>,
     mode: Option<SyncMode>,
     remote: Option<RawSyncRemoteConfig>,
+    auto: Option<RawSyncAutoConfig>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+struct RawSyncAutoConfig {
+    enabled: Option<bool>,
+    interval: Option<String>,
+    batch_limit: Option<String>,
+    startup_backfill: Option<bool>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -608,6 +628,29 @@ pub fn load_runtime_config(explicit_config_path: Option<PathBuf>) -> AppResult<R
     let raw_sync = raw_config.sync.unwrap_or_default();
     let sync_enabled = raw_sync.enabled.unwrap_or(false);
     let sync_mode = raw_sync.mode.unwrap_or_default();
+    let raw_sync_auto = raw_sync.auto.unwrap_or_default();
+    let sync_auto_interval = parse_duration_with_default(
+        raw_sync_auto.interval.as_deref(),
+        DEFAULT_SYNC_AUTO_INTERVAL,
+        "sync.auto.interval",
+    )?;
+    if sync_auto_interval.is_zero() {
+        return Err(AppError::Config(
+            "sync.auto.interval must be greater than zero".to_string(),
+        ));
+    }
+    let sync_auto_batch_limit = parse_u32_with_default(
+        raw_sync_auto.batch_limit.as_deref(),
+        DEFAULT_SYNC_AUTO_BATCH_LIMIT,
+        "sync.auto.batch_limit",
+    )?
+    .clamp(1, 10_000) as usize;
+    let sync_auto = SyncAutoConfig {
+        enabled: sync_enabled && raw_sync_auto.enabled.unwrap_or(false),
+        interval: sync_auto_interval,
+        batch_limit: sync_auto_batch_limit,
+        startup_backfill: raw_sync_auto.startup_backfill.unwrap_or(true),
+    };
     let sync = if sync_enabled {
         let raw_remote = raw_sync
             .remote
@@ -667,12 +710,14 @@ pub fn load_runtime_config(explicit_config_path: Option<PathBuf>) -> AppResult<R
             enabled: true,
             mode: sync_mode,
             remote: Some(sync_remote),
+            auto: sync_auto,
         }
     } else {
         SyncConfig {
             enabled: false,
             mode: sync_mode,
             remote: None,
+            auto: sync_auto,
         }
     };
 
@@ -950,6 +995,7 @@ fn expand_env_vars(content: &str) -> AppResult<String> {
 mod tests {
     use std::path::PathBuf;
     use std::sync::{Mutex, OnceLock};
+    use std::time::Duration;
 
     use tempfile::tempdir;
 
@@ -1222,6 +1268,10 @@ mod tests {
         assert!(!config.sync.enabled);
         assert_eq!(config.sync.mode, SyncMode::ManualBidirectional);
         assert!(config.sync.remote.is_none());
+        assert!(!config.sync.auto.enabled);
+        assert_eq!(config.sync.auto.interval, Duration::from_secs(60));
+        assert_eq!(config.sync.auto.batch_limit, 100);
+        assert!(config.sync.auto.startup_backfill);
     }
 
     #[test]
@@ -1237,6 +1287,7 @@ mod tests {
         let config = load_runtime_config(Some(config_path)).expect("load config");
         assert!(!config.sync.enabled);
         assert!(config.sync.remote.is_none());
+        assert!(!config.sync.auto.enabled);
     }
 
     #[test]
@@ -1273,6 +1324,9 @@ mod tests {
             remote.postgres.max_conn_lifetime,
             humantime::parse_duration("1h").unwrap()
         );
+        assert!(!config.sync.auto.enabled);
+        assert_eq!(config.sync.auto.batch_limit, 100);
+        assert!(config.sync.auto.startup_backfill);
 
         std::env::remove_var("POSTGRES_DSN");
         std::env::remove_var("POSTGRES_MAX_CONNS");
@@ -1299,6 +1353,52 @@ mod tests {
         assert!(error
             .to_string()
             .contains("sync.remote.id must not be empty"));
+        std::env::remove_var("POSTGRES_DSN");
+    }
+
+    #[test]
+    fn sync_auto_parses_explicit_opt_in_settings() {
+        let _guard = environment_lock().lock().expect("lock test environment");
+        let tempdir = tempdir().expect("tempdir");
+        let config_path = tempdir.path().join("agenta.local.yaml");
+        std::env::set_var(
+            "POSTGRES_DSN",
+            "postgres://sync:secret@example.invalid:5432/agenta?sslmode=disable",
+        );
+        std::fs::write(
+            &config_path,
+            "sync:\n  enabled: true\n  mode: manual_bidirectional\n  auto:\n    enabled: true\n    interval: 5m\n    batch_limit: 250\n    startup_backfill: false\n  remote:\n    id: primary\n    kind: postgres\n    postgres:\n      dsn: ${POSTGRES_DSN}\n",
+        )
+        .expect("write config");
+
+        let config = load_runtime_config(Some(config_path)).expect("load config");
+        assert!(config.sync.enabled);
+        assert!(config.sync.auto.enabled);
+        assert_eq!(config.sync.auto.interval, Duration::from_secs(300));
+        assert_eq!(config.sync.auto.batch_limit, 250);
+        assert!(!config.sync.auto.startup_backfill);
+        std::env::remove_var("POSTGRES_DSN");
+    }
+
+    #[test]
+    fn sync_auto_requires_nonzero_interval() {
+        let _guard = environment_lock().lock().expect("lock test environment");
+        let tempdir = tempdir().expect("tempdir");
+        let config_path = tempdir.path().join("agenta.local.yaml");
+        std::env::set_var(
+            "POSTGRES_DSN",
+            "postgres://sync:secret@example.invalid:5432/agenta?sslmode=disable",
+        );
+        std::fs::write(
+            &config_path,
+            "sync:\n  enabled: true\n  auto:\n    enabled: true\n    interval: 0s\n  remote:\n    id: primary\n    kind: postgres\n    postgres:\n      dsn: ${POSTGRES_DSN}\n",
+        )
+        .expect("write config");
+
+        let error = load_runtime_config(Some(config_path)).expect_err("zero interval");
+        assert!(error
+            .to_string()
+            .contains("sync.auto.interval must be greater than zero"));
         std::env::remove_var("POSTGRES_DSN");
     }
 

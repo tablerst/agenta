@@ -22,6 +22,101 @@ const MAX_OUTBOX_LIST_LIMIT: usize = 100;
 const FAIL_SYNC_OUTBOX_WRITE_ENV: &str = "AGENTA_TEST_FAIL_SYNC_OUTBOX_WRITE";
 
 impl SqliteStore {
+    pub async fn get_or_create_sync_client_id(&self) -> AppResult<Uuid> {
+        if let Some(row) = query(
+            r#"
+            SELECT client_id
+            FROM sync_clients
+            ORDER BY created_at ASC
+            LIMIT 1
+            "#,
+        )
+        .fetch_optional(&self.pool)
+        .await?
+        {
+            let client_id = row.get::<String, _>("client_id");
+            return Uuid::parse_str(&client_id)
+                .map_err(|error| AppError::Storage(format!("invalid sync client id: {error}")));
+        }
+
+        let client_id = Uuid::new_v4();
+        query(
+            r#"
+            INSERT INTO sync_clients (client_id, created_at)
+            VALUES (?, ?)
+            "#,
+        )
+        .bind(client_id.to_string())
+        .bind(format_time(OffsetDateTime::now_utc())?)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(client_id)
+    }
+
+    pub async fn unresolved_sync_conflict_count(&self, remote_id: &str) -> AppResult<i64> {
+        let row = query(
+            r#"
+            SELECT COUNT(*) AS conflict_count
+            FROM sync_conflicts
+            WHERE remote_id = ? AND resolved_at IS NULL
+            "#,
+        )
+        .bind(remote_id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(row.get("conflict_count"))
+    }
+
+    pub async fn record_sync_conflict(
+        &self,
+        remote_id: &str,
+        entity_kind: SyncEntityKind,
+        local_id: Uuid,
+        local_version: i64,
+        remote_version: i64,
+        local_mutation_id: Option<Uuid>,
+        remote_mutation_id: Option<i64>,
+        conflict_kind: &str,
+        details_json: &Value,
+    ) -> AppResult<Uuid> {
+        let conflict_id = Uuid::new_v4();
+        query(
+            r#"
+            INSERT INTO sync_conflicts (
+                conflict_id,
+                remote_id,
+                entity_kind,
+                local_id,
+                local_version,
+                remote_version,
+                local_mutation_id,
+                remote_mutation_id,
+                conflict_kind,
+                details_json,
+                detected_at,
+                resolved_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+            "#,
+        )
+        .bind(conflict_id.to_string())
+        .bind(remote_id)
+        .bind(entity_kind.to_string())
+        .bind(local_id.to_string())
+        .bind(local_version)
+        .bind(remote_version)
+        .bind(local_mutation_id.map(|value| value.to_string()))
+        .bind(remote_mutation_id)
+        .bind(conflict_kind)
+        .bind(details_json.to_string())
+        .bind(format_time(OffsetDateTime::now_utc())?)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(conflict_id)
+    }
+
     pub async fn list_sync_outbox_for_delivery(
         &self,
         remote_id: &str,

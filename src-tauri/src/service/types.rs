@@ -27,6 +27,21 @@ pub struct SyncStatusSummary {
     pub pending_outbox_count: i64,
     pub oldest_pending_at: Option<OffsetDateTime>,
     pub checkpoints: SyncCheckpointStatus,
+    pub auto: SyncAutoStatus,
+    pub conflict_count: i64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct SyncAutoStatus {
+    pub enabled: bool,
+    pub running: bool,
+    pub interval_seconds: u64,
+    pub batch_limit: usize,
+    pub startup_backfill: bool,
+    pub last_started_at: Option<OffsetDateTime>,
+    pub last_finished_at: Option<OffsetDateTime>,
+    pub last_error: Option<String>,
+    pub paused_reason: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]

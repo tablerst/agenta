@@ -292,7 +292,7 @@ agenta sync push --limit 100
 agenta sync pull --limit 100
 ```
 
-当前同步策略仍是手动触发，不启用后台自动同步。
+CLI 同步命令仍是手动触发。Desktop 可通过 `sync.auto.enabled=true` 显式启用定时自动同步；自动同步只在 Desktop 打开期间运行，空闲时只做轻量远端游标探测，发现未解决冲突时会暂停而不是覆盖另一台客户端的改动。
 
 ## MCP
 

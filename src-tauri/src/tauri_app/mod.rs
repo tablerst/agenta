@@ -1,11 +1,12 @@
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tauri::{Emitter, State};
+use time::OffsetDateTime;
 
 use crate::app::{
     record_app_error, record_error_message, record_search_index_processing_error,
@@ -14,15 +15,16 @@ use crate::app::{
 };
 use crate::build_info::{self, BuildInfo};
 use crate::domain::ApprovalStatus;
-use crate::error::AppError;
+use crate::error::{AppError, AppResult};
 use crate::interface::response::{error, success, ErrorEnvelope, SuccessEnvelope};
 use crate::service::{
     AddTaskBlockerInput, ApprovalQuery, AttachChildTaskInput, ContextInitInput, ContextInitResult,
     CreateAttachmentInput, CreateChildTaskInput, CreateNoteInput, CreateProjectInput,
     CreateTaskInput, CreateVersionInput, DetachChildTaskInput, PageRequest, RequestOrigin,
     ResolveTaskBlockerInput, ReviewApprovalInput, SearchBackfillSummary, SearchEvidenceInput,
-    SearchInput, SearchQueueRecoverySummary, SortOrder, TaskContextOptions, TaskQuery, TaskSortBy,
-    UpdateProjectInput, UpdateTaskInput, UpdateVersionInput,
+    SearchInput, SearchQueueRecoverySummary, SortOrder, SyncAutoStatus, SyncStatusSummary,
+    TaskContextOptions, TaskQuery, TaskSortBy, UpdateProjectInput, UpdateTaskInput,
+    UpdateVersionInput,
 };
 
 #[derive(Debug, Serialize)]
@@ -43,6 +45,7 @@ struct DesktopRuntimeStatus {
 struct DesktopAppState {
     runtime: Arc<AppRuntime>,
     mcp_supervisor: Arc<McpSupervisor>,
+    sync_auto_supervisor: Arc<SyncAutoSupervisor>,
 }
 
 impl DesktopAppState {
@@ -51,6 +54,7 @@ impl DesktopAppState {
         Self {
             runtime,
             mcp_supervisor,
+            sync_auto_supervisor: Arc::new(SyncAutoSupervisor::new()),
         }
     }
 
@@ -102,6 +106,24 @@ impl DesktopAppState {
         });
     }
 
+    fn spawn_sync_auto(self: Arc<Self>) {
+        if !self.config.sync.enabled || !self.config.sync.auto.enabled {
+            return;
+        }
+
+        let supervisor = self.sync_auto_supervisor.clone();
+        let runtime = self.runtime.clone();
+        tauri::async_runtime::spawn(async move {
+            supervisor.run(runtime).await;
+        });
+    }
+
+    async fn sync_status_with_auto(&self) -> Result<SyncStatusSummary, AppError> {
+        let mut status = self.service.sync_status().await?;
+        status.auto = self.sync_auto_supervisor.status(status.auto);
+        Ok(status)
+    }
+
     fn error_envelope(&self, action: &str, app_error: AppError) -> ErrorEnvelope {
         let _ = record_app_error(
             &self.config.paths.error_log_path,
@@ -111,6 +133,159 @@ impl DesktopAppState {
             &app_error,
         );
         error(&app_error)
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct SyncAutoSupervisorState {
+    running: bool,
+    last_started_at: Option<OffsetDateTime>,
+    last_finished_at: Option<OffsetDateTime>,
+    last_error: Option<String>,
+    paused_reason: Option<String>,
+}
+
+struct SyncAutoSupervisor {
+    state: StdMutex<SyncAutoSupervisorState>,
+}
+
+impl SyncAutoSupervisor {
+    fn new() -> Self {
+        Self {
+            state: StdMutex::new(SyncAutoSupervisorState::default()),
+        }
+    }
+
+    fn status(&self, mut base: SyncAutoStatus) -> SyncAutoStatus {
+        if let Ok(state) = self.state.lock() {
+            base.running = state.running;
+            base.last_started_at = state.last_started_at;
+            base.last_finished_at = state.last_finished_at;
+            base.last_error = state.last_error.clone();
+            base.paused_reason = state.paused_reason.clone();
+        }
+        base
+    }
+
+    fn mark_started(&self, started_at: OffsetDateTime) {
+        if let Ok(mut state) = self.state.lock() {
+            state.running = true;
+            state.last_started_at = Some(started_at);
+            state.last_error = None;
+        }
+    }
+
+    fn mark_finished(&self, finished_at: OffsetDateTime, error: Option<String>) {
+        if let Ok(mut state) = self.state.lock() {
+            state.running = false;
+            state.last_finished_at = Some(finished_at);
+            state.last_error = error;
+        }
+    }
+
+    fn mark_paused(&self, reason: &str) {
+        if let Ok(mut state) = self.state.lock() {
+            state.running = false;
+            state.paused_reason = Some(reason.to_string());
+        }
+    }
+
+    async fn run(self: Arc<Self>, runtime: Arc<AppRuntime>) {
+        let auto = runtime.config.sync.auto.clone();
+        let mut startup_backfill = auto.startup_backfill;
+        loop {
+            let result = self.run_once(runtime.clone(), startup_backfill).await;
+            startup_backfill = false;
+            if let Err(error) = result {
+                let _ = record_app_error(
+                    &runtime.config.paths.error_log_path,
+                    "desktop",
+                    "background",
+                    "desktop.sync_auto",
+                    &error,
+                );
+                if matches!(error, AppError::Conflict(_)) {
+                    self.mark_paused("sync_conflict");
+                    break;
+                }
+            }
+
+            tokio::time::sleep(auto.interval).await;
+        }
+    }
+
+    async fn run_once(&self, runtime: Arc<AppRuntime>, startup_backfill: bool) -> AppResult<()> {
+        self.mark_started(OffsetDateTime::now_utc());
+        let result = self.run_once_inner(runtime, startup_backfill).await;
+        self.mark_finished(
+            OffsetDateTime::now_utc(),
+            result.as_ref().err().map(ToString::to_string),
+        );
+        result
+    }
+
+    async fn run_once_inner(
+        &self,
+        runtime: Arc<AppRuntime>,
+        startup_backfill: bool,
+    ) -> AppResult<()> {
+        let batch_limit = Some(runtime.config.sync.auto.batch_limit);
+        self.ensure_no_sync_conflicts(&runtime).await?;
+
+        if startup_backfill {
+            let backfill = runtime.service.sync_backfill(batch_limit).await?;
+            if backfill.queued > 0 {
+                let push = runtime.service.sync_push(batch_limit).await?;
+                self.ensure_no_sync_conflicts(&runtime).await?;
+                if push.failed > 0 {
+                    return Err(AppError::Io(format!(
+                        "sync auto push failed for {} of {} mutation(s)",
+                        push.failed, push.attempted
+                    )));
+                }
+            }
+        }
+
+        let status = runtime.service.sync_status().await?;
+        if status.pending_outbox_count > 0 {
+            let push = runtime.service.sync_push(batch_limit).await?;
+            self.ensure_no_sync_conflicts(&runtime).await?;
+            if push.failed > 0 {
+                return Err(AppError::Io(format!(
+                    "sync auto push failed for {} of {} mutation(s)",
+                    push.failed, push.attempted
+                )));
+            }
+        }
+
+        let status = runtime.service.sync_status().await?;
+        let local_pull_cursor = status
+            .checkpoints
+            .pull
+            .as_ref()
+            .and_then(|value| value.parse::<i64>().ok())
+            .unwrap_or(0);
+        let remote_cursor = runtime
+            .service
+            .sync_latest_remote_mutation_id()
+            .await?
+            .unwrap_or(0);
+        if remote_cursor > local_pull_cursor {
+            runtime.service.sync_pull(batch_limit).await?;
+            self.ensure_no_sync_conflicts(&runtime).await?;
+        }
+
+        Ok(())
+    }
+
+    async fn ensure_no_sync_conflicts(&self, runtime: &AppRuntime) -> AppResult<()> {
+        let status = runtime.service.sync_status().await?;
+        if status.conflict_count > 0 {
+            return Err(AppError::Conflict(
+                "sync auto paused because unresolved sync conflicts exist".to_string(),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -1117,8 +1292,7 @@ async fn desktop_sync_status(
     success(
         "desktop.sync_status",
         state
-            .service
-            .sync_status()
+            .sync_status_with_auto()
             .await
             .map_err(|app_error| state.error_envelope("desktop.sync_status", app_error))?,
         "Loaded sync status",
@@ -1218,6 +1392,7 @@ pub fn run(runtime: Arc<AppRuntime>) {
             );
             state_for_setup.clone().spawn_mcp_autostart();
             state_for_setup.clone().spawn_search_autostart();
+            state_for_setup.clone().spawn_sync_auto();
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

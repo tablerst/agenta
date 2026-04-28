@@ -18,7 +18,7 @@
 - 单 `src-tauri` Rust crate
 - 共享业务层、SQLite migration、附件落盘
 - CLI 与 MCP `streamable_http` 入口
-- 面向 PostgreSQL 单远端的手动远程副本同步骨架
+- 面向 PostgreSQL 单远端的手动远程副本同步骨架，以及 Desktop opt-in 自动同步
 - Bun 驱动的前端开发与构建配置
 
 仓库当前仍然没有：
@@ -26,7 +26,7 @@
 - Rust workspace
 - 独立 app crate / core crate 拆分
 - 默认启用的向量后端或 sidecar
-- 后台自动同步守护进程
+- 系统后台同步服务
 - 冲突解决 UI 与多远端同步拓扑
 
 ### 2.2 目标状态

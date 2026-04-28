@@ -28,6 +28,12 @@ mcp:
 sync:
   enabled: false
   mode: manual_bidirectional
+  auto:
+    # Desktop-only automatic sync is opt-in. It does not run from CLI commands.
+    enabled: false
+    interval: 60s
+    batch_limit: 100
+    startup_backfill: true
   remote:
     id: primary
     kind: postgres

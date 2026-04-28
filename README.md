@@ -71,6 +71,10 @@ The sync foundation section now supports:
 - `sync.remote.postgres.max_conns`
 - `sync.remote.postgres.min_conns`
 - `sync.remote.postgres.max_conn_lifetime`
+- `sync.auto.enabled`
+- `sync.auto.interval`
+- `sync.auto.batch_limit`
+- `sync.auto.startup_backfill`
 
 When `mcp.log.destinations` is omitted, defaults depend on the host:
 
@@ -86,9 +90,10 @@ panic hook events. It does not replace the MCP session log configured under
 Current sync defaults stay intentionally conservative:
 
 - Only one global remote is modeled
-- Sync uses manual `status / outbox / backfill / push / pull`; background auto-sync is still disabled
+- Sync keeps manual `status / outbox / backfill / push / pull`; Desktop-only background auto-sync is available only when `sync.auto.enabled=true`
+- Auto-sync is opt-in, runs only while Desktop is open, uses lightweight remote cursor probes, and pauses on unresolved sync conflicts instead of silently overwriting another client
 - Sync delivery/apply follows dependency order: `project -> version -> task -> task_relation -> note -> attachment`; any new synced entity must define its FK/apply ordering together with schema changes
-- Status output redacts PostgreSQL credentials, and Runtime exposes the same manual sync actions inside Desktop
+- Status output redacts PostgreSQL credentials, and Runtime exposes manual sync actions plus auto-sync health inside Desktop
 
 ## Project Context Scoping
 

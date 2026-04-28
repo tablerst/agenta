@@ -20,6 +20,8 @@ CREATE TABLE IF NOT EXISTS agenta_sync_objects (
     local_id TEXT NOT NULL,
     local_version BIGINT NOT NULL,
     payload_json JSONB NOT NULL,
+    origin_client_id TEXT,
+    origin_mutation_id TEXT,
     updated_at TIMESTAMPTZ NOT NULL,
     PRIMARY KEY (remote_id, entity_kind, remote_entity_id)
 );
@@ -32,12 +34,19 @@ CREATE TABLE IF NOT EXISTS agenta_sync_mutations (
     local_id TEXT NOT NULL,
     operation TEXT NOT NULL,
     local_version BIGINT NOT NULL,
+    base_local_version BIGINT NOT NULL DEFAULT 0,
+    origin_client_id TEXT,
+    origin_mutation_id TEXT,
     payload_json JSONB NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_agenta_sync_mutations_remote_cursor
     ON agenta_sync_mutations(remote_id, remote_mutation_id ASC);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agenta_sync_mutations_origin
+    ON agenta_sync_mutations(remote_id, origin_client_id, origin_mutation_id)
+    WHERE origin_client_id IS NOT NULL AND origin_mutation_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS agenta_sync_attachment_blobs (
     remote_id TEXT NOT NULL,
@@ -59,6 +68,9 @@ pub struct RemoteMutation {
     pub local_id: Uuid,
     pub operation: SyncOperation,
     pub local_version: i64,
+    pub base_local_version: i64,
+    pub origin_client_id: Option<Uuid>,
+    pub origin_mutation_id: Option<Uuid>,
     pub payload_json: Value,
     pub created_at: OffsetDateTime,
     pub attachment_blob: Option<Vec<u8>>,
@@ -110,12 +122,33 @@ impl PostgresSyncRemote {
             .map_err(|error| {
                 AppError::Io(format!("failed to initialize remote sync schema: {error}"))
             })?;
+        raw_sql(
+            r#"
+            ALTER TABLE agenta_sync_objects
+                ADD COLUMN IF NOT EXISTS origin_client_id TEXT;
+            ALTER TABLE agenta_sync_objects
+                ADD COLUMN IF NOT EXISTS origin_mutation_id TEXT;
+            ALTER TABLE agenta_sync_mutations
+                ADD COLUMN IF NOT EXISTS base_local_version BIGINT NOT NULL DEFAULT 0;
+            ALTER TABLE agenta_sync_mutations
+                ADD COLUMN IF NOT EXISTS origin_client_id TEXT;
+            ALTER TABLE agenta_sync_mutations
+                ADD COLUMN IF NOT EXISTS origin_mutation_id TEXT;
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_agenta_sync_mutations_origin
+                ON agenta_sync_mutations(remote_id, origin_client_id, origin_mutation_id)
+                WHERE origin_client_id IS NOT NULL AND origin_mutation_id IS NOT NULL;
+            "#,
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(|error| AppError::Io(format!("failed to upgrade remote sync schema: {error}")))?;
         Ok(())
     }
 
     pub async fn push_outbox_entry(
         &self,
         remote_id: &str,
+        client_id: Uuid,
         entry: &SyncOutboxEntry,
         attachments_dir: &Path,
     ) -> AppResult<PushAck> {
@@ -125,16 +158,72 @@ impl PostgresSyncRemote {
                 "failed to begin remote postgres transaction: {error}"
             ))
         })?;
+        let origin_client_id = client_id.to_string();
+        let origin_mutation_id = entry.mutation_id.to_string();
+        let base_local_version = entry.local_version.saturating_sub(1);
+
+        if let Some(row) = query(
+            r#"
+            SELECT remote_mutation_id, created_at
+            FROM agenta_sync_mutations
+            WHERE remote_id = $1
+              AND origin_client_id = $2
+              AND origin_mutation_id = $3
+            "#,
+        )
+        .bind(remote_id)
+        .bind(&origin_client_id)
+        .bind(&origin_mutation_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|error| AppError::Io(format!("failed to check remote mutation ack: {error}")))?
+        {
+            tx.commit().await.map_err(|error| {
+                AppError::Io(format!("failed to commit remote ack check: {error}"))
+            })?;
+            return Ok(PushAck {
+                remote_entity_id,
+                remote_mutation_id: row.get("remote_mutation_id"),
+                acked_at: row.get("created_at"),
+            });
+        }
+
+        if let Some(row) = query(
+            r#"
+            SELECT local_version
+            FROM agenta_sync_objects
+            WHERE remote_id = $1 AND entity_kind = $2 AND remote_entity_id = $3
+            FOR UPDATE
+            "#,
+        )
+        .bind(remote_id)
+        .bind(entry.entity_kind.to_string())
+        .bind(&remote_entity_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|error| AppError::Io(format!("failed to inspect remote sync object: {error}")))?
+        {
+            let remote_version = row.get::<i64, _>("local_version");
+            if remote_version > base_local_version {
+                return Err(AppError::Conflict(format!(
+                    "sync conflict for {} {}: remote version {} is newer than local base {}",
+                    entry.entity_kind, entry.local_id, remote_version, base_local_version
+                )));
+            }
+        }
 
         query(
             r#"
             INSERT INTO agenta_sync_objects (
-                remote_id, entity_kind, remote_entity_id, local_id, local_version, payload_json, updated_at
-            ) VALUES ($1, $2, $3, $4, $5, $6::jsonb, NOW())
+                remote_id, entity_kind, remote_entity_id, local_id, local_version,
+                payload_json, origin_client_id, origin_mutation_id, updated_at
+            ) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, NOW())
             ON CONFLICT (remote_id, entity_kind, remote_entity_id) DO UPDATE SET
                 local_id = EXCLUDED.local_id,
                 local_version = EXCLUDED.local_version,
                 payload_json = EXCLUDED.payload_json,
+                origin_client_id = EXCLUDED.origin_client_id,
+                origin_mutation_id = EXCLUDED.origin_mutation_id,
                 updated_at = EXCLUDED.updated_at
             "#,
         )
@@ -144,6 +233,8 @@ impl PostgresSyncRemote {
         .bind(entry.local_id.to_string())
         .bind(entry.local_version)
         .bind(entry.payload_json.to_string())
+        .bind(&origin_client_id)
+        .bind(&origin_mutation_id)
         .execute(&mut *tx)
         .await
         .map_err(|error| AppError::Io(format!("failed to upsert remote sync object: {error}")))?;
@@ -218,8 +309,9 @@ impl PostgresSyncRemote {
         let row = query(
             r#"
             INSERT INTO agenta_sync_mutations (
-                remote_id, entity_kind, remote_entity_id, local_id, operation, local_version, payload_json
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
+                remote_id, entity_kind, remote_entity_id, local_id, operation,
+                local_version, base_local_version, origin_client_id, origin_mutation_id, payload_json
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)
             RETURNING remote_mutation_id, created_at
             "#,
         )
@@ -229,6 +321,9 @@ impl PostgresSyncRemote {
         .bind(entry.local_id.to_string())
         .bind(entry.operation.to_string())
         .bind(entry.local_version)
+        .bind(base_local_version)
+        .bind(&origin_client_id)
+        .bind(&origin_mutation_id)
         .bind(entry.payload_json.to_string())
         .fetch_one(&mut *tx)
         .await
@@ -260,6 +355,9 @@ impl PostgresSyncRemote {
                 m.local_id,
                 m.operation,
                 m.local_version,
+                m.base_local_version,
+                m.origin_client_id,
+                m.origin_mutation_id,
                 m.payload_json,
                 m.created_at,
                 b.content AS attachment_blob
@@ -282,6 +380,24 @@ impl PostgresSyncRemote {
         rows.into_iter().map(map_remote_mutation).collect()
     }
 
+    pub async fn latest_mutation_id(&self, remote_id: &str) -> AppResult<Option<i64>> {
+        let row = query(
+            r#"
+            SELECT MAX(remote_mutation_id) AS latest_mutation_id
+            FROM agenta_sync_mutations
+            WHERE remote_id = $1
+            "#,
+        )
+        .bind(remote_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|error| {
+            AppError::Io(format!("failed to inspect remote mutation cursor: {error}"))
+        })?;
+
+        Ok(row.get("latest_mutation_id"))
+    }
+
     pub async fn close(&self) {
         self.pool.close().await;
     }
@@ -291,6 +407,22 @@ fn map_remote_mutation(row: PgRow) -> AppResult<RemoteMutation> {
     let local_id = Uuid::parse_str(row.get::<String, _>("local_id").as_str())
         .map_err(|error| AppError::Storage(format!("invalid remote local_id uuid: {error}")))?;
     let payload_json = row.get::<Value, _>("payload_json");
+    let origin_client_id = row
+        .get::<Option<String>, _>("origin_client_id")
+        .map(|value| {
+            Uuid::parse_str(&value).map_err(|error| {
+                AppError::Storage(format!("invalid remote origin_client_id uuid: {error}"))
+            })
+        })
+        .transpose()?;
+    let origin_mutation_id = row
+        .get::<Option<String>, _>("origin_mutation_id")
+        .map(|value| {
+            Uuid::parse_str(&value).map_err(|error| {
+                AppError::Storage(format!("invalid remote origin_mutation_id uuid: {error}"))
+            })
+        })
+        .transpose()?;
 
     Ok(RemoteMutation {
         remote_mutation_id: row.get("remote_mutation_id"),
@@ -305,6 +437,9 @@ fn map_remote_mutation(row: PgRow) -> AppResult<RemoteMutation> {
             .parse()
             .map_err(|error: String| AppError::Storage(error))?,
         local_version: row.get("local_version"),
+        base_local_version: row.get("base_local_version"),
+        origin_client_id,
+        origin_mutation_id,
         payload_json,
         created_at: row.get("created_at"),
         attachment_blob: row.get("attachment_blob"),

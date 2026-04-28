@@ -2,6 +2,7 @@ use super::*;
 
 impl AgentaService {
     pub async fn sync_status(&self) -> AppResult<SyncStatusSummary> {
+        let auto = self.sync_auto_status(None, None, None, false);
         let Some(remote) = self.sync_remote() else {
             return Ok(SyncStatusSummary {
                 enabled: self.sync.enabled,
@@ -13,6 +14,8 @@ impl AgentaService {
                     pull: None,
                     push_ack: None,
                 },
+                auto,
+                conflict_count: 0,
             });
         };
 
@@ -35,7 +38,32 @@ impl AgentaService {
                 pull: pull_checkpoint.map(|checkpoint| checkpoint.checkpoint_value),
                 push_ack: push_ack_checkpoint.map(|checkpoint| checkpoint.checkpoint_value),
             },
+            auto,
+            conflict_count: self
+                .store
+                .unresolved_sync_conflict_count(&remote.id)
+                .await?,
         })
+    }
+
+    pub fn sync_auto_status(
+        &self,
+        last_started_at: Option<OffsetDateTime>,
+        last_finished_at: Option<OffsetDateTime>,
+        last_error: Option<String>,
+        running: bool,
+    ) -> SyncAutoStatus {
+        SyncAutoStatus {
+            enabled: self.sync.auto.enabled,
+            running,
+            interval_seconds: self.sync.auto.interval.as_secs(),
+            batch_limit: self.sync.auto.batch_limit,
+            startup_backfill: self.sync.auto.startup_backfill,
+            last_started_at,
+            last_finished_at,
+            last_error,
+            paused_reason: None,
+        }
     }
 
     pub async fn sync_postgres_smoke_check(&self) -> AppResult<()> {
@@ -46,6 +74,7 @@ impl AgentaService {
     }
 
     pub async fn sync_backfill(&self, limit: Option<usize>) -> AppResult<SyncBackfillSummary> {
+        let _sync_guard = self.sync_run_lock.lock().await;
         let remote = self
             .sync_remote()
             .ok_or_else(|| AppError::Conflict("sync is not enabled".to_string()))?;
@@ -196,11 +225,13 @@ impl AgentaService {
     }
 
     pub async fn sync_push(&self, limit: Option<usize>) -> AppResult<SyncPushSummary> {
+        let _sync_guard = self.sync_run_lock.lock().await;
         let remote_config = self
             .sync_remote()
             .ok_or_else(|| AppError::Conflict("sync is not enabled".to_string()))?;
         let remote = self.connect_remote_postgres().await?;
         remote.ensure_schema().await?;
+        let client_id = self.store.get_or_create_sync_client_id().await?;
 
         let entries = self
             .store
@@ -215,7 +246,12 @@ impl AgentaService {
 
         for entry in entries {
             match remote
-                .push_outbox_entry(&remote_config.id, &entry, &self.store.attachments_dir)
+                .push_outbox_entry(
+                    &remote_config.id,
+                    client_id,
+                    &entry,
+                    &self.store.attachments_dir,
+                )
                 .await
             {
                 Ok(ack) => {
@@ -246,6 +282,25 @@ impl AgentaService {
                 }
                 Err(error) => {
                     let failed_at = OffsetDateTime::now_utc();
+                    let is_conflict = matches!(error, AppError::Conflict(_));
+                    if is_conflict {
+                        self.store
+                            .record_sync_conflict(
+                                &remote_config.id,
+                                entry.entity_kind,
+                                entry.local_id,
+                                entry.local_version,
+                                entry.local_version,
+                                Some(entry.mutation_id),
+                                None,
+                                "push_remote_version_changed",
+                                &json!({
+                                    "message": error.to_string(),
+                                    "operation": entry.operation,
+                                }),
+                            )
+                            .await?;
+                    }
                     let _write_guard = self.write_queue.lock().await;
                     self.store
                         .mark_sync_outbox_failed(entry.mutation_id, failed_at, &error.to_string())
@@ -260,6 +315,7 @@ impl AgentaService {
     }
 
     pub async fn sync_pull(&self, limit: Option<usize>) -> AppResult<SyncPullSummary> {
+        let _sync_guard = self.sync_run_lock.lock().await;
         let remote_config = self
             .sync_remote()
             .ok_or_else(|| AppError::Conflict("sync is not enabled".to_string()))?;
@@ -337,6 +393,17 @@ impl AgentaService {
                 last_error: entry.last_error,
             })
             .collect())
+    }
+
+    pub async fn sync_latest_remote_mutation_id(&self) -> AppResult<Option<i64>> {
+        let remote_config = self
+            .sync_remote()
+            .ok_or_else(|| AppError::Conflict("sync is not enabled".to_string()))?;
+        let remote = self.connect_remote_postgres().await?;
+        remote.ensure_schema().await?;
+        let latest = remote.latest_mutation_id(&remote_config.id).await?;
+        remote.close().await;
+        Ok(latest)
     }
 
     pub(super) fn sync_remote(&self) -> Option<&crate::app::SyncRemoteConfig> {
@@ -432,6 +499,35 @@ impl AgentaService {
             .get_sync_entity(mutation.entity_kind, mutation.local_id)
             .await?
         {
+            if existing.local_version == mutation.local_version {
+                let client_id = self.store.get_or_create_sync_client_id().await?;
+                let same_origin = mutation.origin_client_id == Some(client_id)
+                    && mutation.origin_mutation_id == existing.last_enqueued_mutation_id;
+                if same_origin {
+                    return Ok(false);
+                }
+                self.store
+                    .record_sync_conflict(
+                        remote_id,
+                        mutation.entity_kind,
+                        mutation.local_id,
+                        existing.local_version,
+                        mutation.local_version,
+                        existing.last_enqueued_mutation_id,
+                        Some(mutation.remote_mutation_id),
+                        "pull_same_version_different_origin",
+                        &json!({
+                            "remote_entity_id": mutation.remote_entity_id,
+                            "origin_client_id": mutation.origin_client_id.map(|value| value.to_string()),
+                            "origin_mutation_id": mutation.origin_mutation_id.map(|value| value.to_string()),
+                        }),
+                    )
+                    .await?;
+                return Err(AppError::Conflict(format!(
+                    "sync conflict for {} {}: local and remote version {} have different origins",
+                    mutation.entity_kind, mutation.local_id, mutation.local_version
+                )));
+            }
             if existing.local_version >= mutation.local_version {
                 return Ok(false);
             }

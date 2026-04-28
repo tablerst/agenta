@@ -13,6 +13,7 @@ use agenta_lib::{
 };
 use assert_cmd::Command;
 use serde_json::Value;
+use sqlx::postgres::PgPoolOptions;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::Row;
 use tempfile::TempDir;
@@ -64,13 +65,20 @@ async fn sync_migrations_create_tables_and_cli_status_is_stable(
         SELECT name
         FROM sqlite_master
         WHERE type = 'table'
-          AND name IN ('sync_entities', 'sync_outbox', 'sync_checkpoints', 'sync_tombstones')
+          AND name IN (
+              'sync_entities',
+              'sync_outbox',
+              'sync_checkpoints',
+              'sync_tombstones',
+              'sync_clients',
+              'sync_conflicts'
+          )
         ORDER BY name
         "#,
     )
     .fetch_all(&pool)
     .await?;
-    assert_eq!(tables.len(), 4);
+    assert_eq!(tables.len(), 6);
 
     let store = SqliteStore::open(
         &runtime.config.paths.data_dir,
@@ -119,6 +127,12 @@ async fn sync_migrations_create_tables_and_cli_status_is_stable(
     assert!(output["result"]["oldest_pending_at"].is_null());
     assert_eq!(output["result"]["checkpoints"]["pull"], "pull-cursor-1");
     assert_eq!(output["result"]["checkpoints"]["push_ack"], "push-ack-9");
+    assert_eq!(output["result"]["auto"]["enabled"], false);
+    assert_eq!(output["result"]["auto"]["running"], false);
+    assert_eq!(output["result"]["auto"]["interval_seconds"], 60);
+    assert_eq!(output["result"]["auto"]["batch_limit"], 100);
+    assert_eq!(output["result"]["auto"]["startup_backfill"], true);
+    assert_eq!(output["result"]["conflict_count"], 0);
 
     std::env::remove_var(POSTGRES_DSN_ENV);
     std::env::remove_var(POSTGRES_MAX_CONNS_ENV);
@@ -963,6 +977,217 @@ async fn postgres_remote_round_trip_pushes_and_pulls_between_runtimes(
             .map(|value| value.to_string())
             .as_deref()
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn postgres_push_conflict_records_unresolved_sync_conflict(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let _guard = environment_lock().lock().expect("lock environment");
+    if std::env::var_os(POSTGRES_DSN_ENV).is_none() {
+        return Ok(());
+    }
+
+    if std::env::var_os(POSTGRES_MAX_CONNS_ENV).is_none() {
+        std::env::set_var(POSTGRES_MAX_CONNS_ENV, "30");
+    }
+    if std::env::var_os(POSTGRES_MIN_CONNS_ENV).is_none() {
+        std::env::set_var(POSTGRES_MIN_CONNS_ENV, "5");
+    }
+    if std::env::var_os(POSTGRES_MAX_CONN_LIFETIME_ENV).is_none() {
+        std::env::set_var(POSTGRES_MAX_CONN_LIFETIME_ENV, "1h");
+    }
+
+    let remote_id = format!("pg-conflict-{}", Uuid::new_v4());
+    let sender_root = TempDir::new()?;
+    let receiver_root = TempDir::new()?;
+    let sender_config = write_test_config(&sender_root, &remote_id, true, None)?;
+    let receiver_config = write_test_config(&receiver_root, &remote_id, true, None)?;
+    let sender = AppRuntime::bootstrap(BootstrapOptions {
+        config_path: Some(sender_config),
+    })
+    .await?;
+    let receiver = AppRuntime::bootstrap(BootstrapOptions {
+        config_path: Some(receiver_config),
+    })
+    .await?;
+
+    let slug = format!("sync-conflict-{}", Uuid::new_v4().simple());
+    let project = sender
+        .service
+        .create_project(CreateProjectInput {
+            slug: slug.clone(),
+            name: "Conflict Project".to_string(),
+            description: None,
+        })
+        .await?;
+    let version = sender
+        .service
+        .create_version(CreateVersionInput {
+            project: slug.clone(),
+            name: "Conflict v1".to_string(),
+            description: None,
+            status: None,
+        })
+        .await?;
+    let task = sender
+        .service
+        .create_task(CreateTaskInput {
+            project: project.project_id.to_string(),
+            version: Some(version.version_id.to_string()),
+            task_code: None,
+            task_kind: None,
+            title: "Conflict Task".to_string(),
+            summary: Some("base".to_string()),
+            description: None,
+            status: None,
+            priority: None,
+            created_by: Some("sender".to_string()),
+        })
+        .await?;
+
+    sender.service.sync_push(Some(20)).await?;
+    receiver.service.sync_pull(Some(20)).await?;
+
+    sender
+        .service
+        .update_task(
+            &task.task_id.to_string(),
+            UpdateTaskInput {
+                version: None,
+                task_code: None,
+                task_kind: None,
+                title: None,
+                summary: Some("sender update".to_string()),
+                description: None,
+                status: None,
+                priority: None,
+                updated_by: Some("sender".to_string()),
+            },
+        )
+        .await?;
+    receiver
+        .service
+        .update_task(
+            &task.task_id.to_string(),
+            UpdateTaskInput {
+                version: None,
+                task_code: None,
+                task_kind: None,
+                title: None,
+                summary: Some("receiver update".to_string()),
+                description: None,
+                status: None,
+                priority: None,
+                updated_by: Some("receiver".to_string()),
+            },
+        )
+        .await?;
+
+    let sender_push = sender.service.sync_push(Some(20)).await?;
+    assert!(sender_push.pushed >= 1);
+    let receiver_push = receiver.service.sync_push(Some(20)).await?;
+    assert!(receiver_push.failed >= 1);
+    let status = receiver.service.sync_status().await?;
+    assert!(status.conflict_count >= 1);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn postgres_push_retry_reuses_existing_remote_mutation_ack(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let _guard = environment_lock().lock().expect("lock environment");
+    let Some(dsn) = std::env::var_os(POSTGRES_DSN_ENV) else {
+        return Ok(());
+    };
+
+    if std::env::var_os(POSTGRES_MAX_CONNS_ENV).is_none() {
+        std::env::set_var(POSTGRES_MAX_CONNS_ENV, "30");
+    }
+    if std::env::var_os(POSTGRES_MIN_CONNS_ENV).is_none() {
+        std::env::set_var(POSTGRES_MIN_CONNS_ENV, "5");
+    }
+    if std::env::var_os(POSTGRES_MAX_CONN_LIFETIME_ENV).is_none() {
+        std::env::set_var(POSTGRES_MAX_CONN_LIFETIME_ENV, "1h");
+    }
+
+    let remote_id = format!("pg-idempotent-{}", Uuid::new_v4());
+    let tempdir = TempDir::new()?;
+    let config_path = write_test_config(&tempdir, &remote_id, true, None)?;
+    let runtime = AppRuntime::bootstrap(BootstrapOptions {
+        config_path: Some(config_path),
+    })
+    .await?;
+    let project = runtime
+        .service
+        .create_project(CreateProjectInput {
+            slug: format!("idempotent-{}", Uuid::new_v4().simple()),
+            name: "Idempotent Project".to_string(),
+            description: None,
+        })
+        .await?;
+    let outbox = runtime.service.list_sync_outbox(Some(1)).await?;
+    let mutation_id = outbox[0].mutation_id;
+
+    let first = runtime.service.sync_push(Some(1)).await?;
+    assert_eq!(first.pushed, 1);
+
+    let remote_pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(dsn.to_string_lossy().as_ref())
+        .await?;
+    let count_before: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)
+        FROM agenta_sync_mutations
+        WHERE remote_id = $1 AND origin_mutation_id = $2
+        "#,
+    )
+    .bind(&remote_id)
+    .bind(mutation_id.to_string())
+    .fetch_one(&remote_pool)
+    .await?;
+    assert_eq!(count_before, 1);
+
+    let local_pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            SqliteConnectOptions::new()
+                .filename(&runtime.config.paths.database_path)
+                .create_if_missing(false)
+                .foreign_keys(true),
+        )
+        .await?;
+    sqlx::query(
+        r#"
+        UPDATE sync_outbox
+        SET status = 'pending', acked_at = NULL
+        WHERE mutation_id = ?
+        "#,
+    )
+    .bind(mutation_id.to_string())
+    .execute(&local_pool)
+    .await?;
+
+    let second = runtime.service.sync_push(Some(1)).await?;
+    assert_eq!(second.pushed, 1);
+    let count_after: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)
+        FROM agenta_sync_mutations
+        WHERE remote_id = $1 AND origin_mutation_id = $2
+        "#,
+    )
+    .bind(&remote_id)
+    .bind(mutation_id.to_string())
+    .fetch_one(&remote_pool)
+    .await?;
+    assert_eq!(count_after, 1);
+    assert_eq!(project.name, "Idempotent Project");
+    local_pool.close().await;
+    remote_pool.close().await;
 
     Ok(())
 }

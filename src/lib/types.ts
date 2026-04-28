@@ -333,6 +333,20 @@ export interface SyncStatusSummary {
   pending_outbox_count: number;
   oldest_pending_at: string | null;
   checkpoints: SyncCheckpointStatus;
+  auto: SyncAutoStatus;
+  conflict_count: number;
+}
+
+export interface SyncAutoStatus {
+  enabled: boolean;
+  running: boolean;
+  interval_seconds: number;
+  batch_limit: number;
+  startup_backfill: boolean;
+  last_started_at: string | null;
+  last_finished_at: string | null;
+  last_error: string | null;
+  paused_reason: string | null;
 }
 
 export interface SyncOutboxListItem {

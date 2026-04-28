@@ -30,4 +30,4 @@
 - Desktop 默认承载 MCP 生命周期与 Runtime 控制台；`mcp.autostart=true` 时 setup 后自动拉起，否则保持手动启动
 - MCP 发布面继续保持显式工具名 contract，不回退到 `action` 多路复用
 - YAML-first 配置继续生效，MCP 日志按宿主类型套用默认 destinations
-- 当前远程副本同步能力保持单远端 PostgreSQL、手动 `status / outbox / backfill / push / pull`、不启用后台自动同步，也未引入冲突处理 UI
+- 当前远程副本同步能力保持单远端 PostgreSQL 与手动 `status / outbox / backfill / push / pull`；Desktop 支持 `sync.auto.enabled=true` 后的 opt-in 自动同步，冲突先检测并暂停，尚未引入冲突解决 UI

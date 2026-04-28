@@ -74,6 +74,7 @@ pub struct AgentaService {
     search: SearchRuntime,
     project_context: ProjectContextConfig,
     write_queue: Arc<Mutex<()>>,
+    sync_run_lock: Arc<Mutex<()>>,
 }
 
 impl AgentaService {
@@ -94,6 +95,7 @@ impl AgentaService {
             search,
             project_context,
             write_queue: Arc::new(Mutex::new(())),
+            sync_run_lock: Arc::new(Mutex::new(())),
         })
     }
 }

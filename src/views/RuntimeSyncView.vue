@@ -50,6 +50,19 @@ const searchRunProgressPercent = computed(() => {
   }
   return Math.max(0, Math.min(100, Math.round((searchRunCompletedCount.value / run.queued) * 100)));
 });
+const syncAutoStateLabel = computed(() => {
+  const auto = runtimeConsole.syncStatus.value?.auto;
+  if (!auto?.enabled) {
+    return t("runtime.sync.auto.disabled");
+  }
+  if (auto.paused_reason) {
+    return t("runtime.sync.auto.paused");
+  }
+  if (auto.running) {
+    return t("runtime.state.running");
+  }
+  return t("runtime.sync.auto.idle");
+});
 
 watch(
   activeSurface,
@@ -203,6 +216,80 @@ onUnmounted(() => {
                   <dd>{{ runtimeConsole.syncStatus.value.mode }}</dd>
                 </div>
               </dl>
+            </section>
+
+            <section class="runtime-block runtime-block-nested">
+              <div class="runtime-block-header">
+                <div>
+                  <p class="section-label">{{ t("runtime.sync.auto.title") }}</p>
+                  <h3 class="runtime-subblock-title">{{ syncAutoStateLabel }}</h3>
+                  <p class="runtime-block-summary">{{ t("runtime.sync.auto.summary") }}</p>
+                </div>
+                <span
+                  class="status-pill"
+                  :class="{
+                    'status-pill-success': runtimeConsole.syncStatus.value.auto.enabled && !runtimeConsole.syncStatus.value.auto.paused_reason,
+                    'status-pill-warning': runtimeConsole.syncStatus.value.auto.paused_reason,
+                  }"
+                >
+                  {{
+                    runtimeConsole.syncStatus.value.auto.enabled
+                      ? t("runtime.sync.auto.enabled")
+                      : t("runtime.sync.auto.disabled")
+                  }}
+                </span>
+              </div>
+              <dl class="runtime-definition-list">
+                <div>
+                  <dt>{{ t("runtime.sync.auto.interval") }}</dt>
+                  <dd>
+                    {{
+                      t("runtime.sync.auto.intervalSeconds", {
+                        seconds: runtimeConsole.syncStatus.value.auto.interval_seconds,
+                      })
+                    }}
+                  </dd>
+                </div>
+                <div>
+                  <dt>{{ t("runtime.sync.auto.batchLimit") }}</dt>
+                  <dd>{{ runtimeConsole.syncStatus.value.auto.batch_limit }}</dd>
+                </div>
+                <div>
+                  <dt>{{ t("runtime.sync.auto.startupBackfill") }}</dt>
+                  <dd>
+                    {{
+                      runtimeConsole.syncStatus.value.auto.startup_backfill
+                        ? t("runtime.sync.auto.on")
+                        : t("runtime.sync.auto.off")
+                    }}
+                  </dd>
+                </div>
+                <div>
+                  <dt>{{ t("runtime.sync.auto.lastStartedAt") }}</dt>
+                  <dd>{{ formatDateTime(runtimeConsole.syncStatus.value.auto.last_started_at) }}</dd>
+                </div>
+                <div>
+                  <dt>{{ t("runtime.sync.auto.lastFinishedAt") }}</dt>
+                  <dd>{{ formatDateTime(runtimeConsole.syncStatus.value.auto.last_finished_at) }}</dd>
+                </div>
+                <div>
+                  <dt>{{ t("runtime.sync.auto.conflicts") }}</dt>
+                  <dd>{{ runtimeConsole.syncStatus.value.conflict_count }}</dd>
+                </div>
+              </dl>
+              <p
+                v-if="runtimeConsole.syncStatus.value.auto.paused_reason"
+                class="runtime-sync-error"
+              >
+                {{
+                  t("runtime.sync.auto.pausedReason", {
+                    reason: runtimeConsole.syncStatus.value.auto.paused_reason,
+                  })
+                }}
+              </p>
+              <p v-if="runtimeConsole.syncStatus.value.auto.last_error" class="runtime-sync-error">
+                {{ runtimeConsole.syncStatus.value.auto.last_error }}
+              </p>
             </section>
 
             <section v-if="displaySearchRun" class="runtime-block runtime-block-nested">

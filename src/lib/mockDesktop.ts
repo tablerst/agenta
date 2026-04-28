@@ -195,6 +195,18 @@ function createPreviewSyncStatus(): SyncStatusSummary {
       pull: syncPullCheckpoint,
       push_ack: syncPushAckCheckpoint,
     },
+    auto: {
+      enabled: true,
+      running: false,
+      interval_seconds: 60,
+      batch_limit: 100,
+      startup_backfill: true,
+      last_started_at: null,
+      last_finished_at: null,
+      last_error: null,
+      paused_reason: null,
+    },
+    conflict_count: 0,
   };
 }
 
