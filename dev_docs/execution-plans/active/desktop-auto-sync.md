@@ -48,3 +48,7 @@
 | [x] | 更新 Runtime Sync UI 与 i18n | 保留手动按钮 |
 | [x] | 更新文档与示例配置 | 明确 opt-in |
 | [x] | 增加/更新测试并运行验证 | `cargo check`、`sync_foundation`、`sync_auto`、`bun run build` 已通过 |
+
+## 维护记录
+
+- 2026-04-29：实际运行日志暴露远端 PostgreSQL 旧 schema 兼容问题：旧表已存在但缺少 `origin_client_id` 时，基础 schema 初始化会先创建依赖该列的幂等索引，导致升级 SQL 尚未执行就失败。已在 `src-tauri/src/sync/mod.rs` 中拆分基础建表与升级 SQL，并新增 `postgres_remote_schema_upgrade_accepts_legacy_tables` 回归测试覆盖旧表自动升级。

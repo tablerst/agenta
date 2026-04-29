@@ -18,6 +18,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::Row;
 use tempfile::TempDir;
 use time::OffsetDateTime;
+use url::Url;
 use uuid::Uuid;
 
 const POSTGRES_DSN_ENV: &str = "POSTGRES_DSN";
@@ -832,6 +833,100 @@ async fn postgres_remote_smoke_connects_when_env_present() -> Result<(), Box<dyn
 }
 
 #[tokio::test]
+async fn postgres_remote_schema_upgrade_accepts_legacy_tables(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let _guard = environment_lock().lock().expect("lock environment");
+    let Some(original_dsn) = std::env::var_os(POSTGRES_DSN_ENV) else {
+        return Ok(());
+    };
+    let original_dsn = original_dsn.to_string_lossy().to_string();
+
+    if std::env::var_os(POSTGRES_MAX_CONNS_ENV).is_none() {
+        std::env::set_var(POSTGRES_MAX_CONNS_ENV, "30");
+    }
+    if std::env::var_os(POSTGRES_MIN_CONNS_ENV).is_none() {
+        std::env::set_var(POSTGRES_MIN_CONNS_ENV, "5");
+    }
+    if std::env::var_os(POSTGRES_MAX_CONN_LIFETIME_ENV).is_none() {
+        std::env::set_var(POSTGRES_MAX_CONN_LIFETIME_ENV, "1h");
+    }
+
+    let schema = format!("agenta_legacy_{}", Uuid::new_v4().simple());
+    let schema_dsn = postgres_dsn_with_search_path(&original_dsn, &schema)?;
+    let remote_pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&original_dsn)
+        .await?;
+    let setup_result = create_legacy_remote_schema(&remote_pool, &schema).await;
+
+    let test_result: Result<(), Box<dyn std::error::Error>> = async {
+        setup_result?;
+        std::env::set_var(POSTGRES_DSN_ENV, &schema_dsn);
+
+        let tempdir = TempDir::new()?;
+        let config_path = write_test_config(
+            &tempdir,
+            &format!("pg-legacy-{}", Uuid::new_v4().simple()),
+            true,
+            None,
+        )?;
+        let runtime = AppRuntime::bootstrap(BootstrapOptions {
+            config_path: Some(config_path),
+        })
+        .await?;
+
+        assert_eq!(
+            runtime.service.sync_latest_remote_mutation_id().await?,
+            None
+        );
+
+        let upgraded_columns: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(*)
+            FROM information_schema.columns
+            WHERE table_schema = $1
+              AND table_name = 'agenta_sync_mutations'
+              AND column_name IN (
+                  'base_local_version',
+                  'origin_client_id',
+                  'origin_mutation_id'
+              )
+            "#,
+        )
+        .bind(&schema)
+        .fetch_one(&remote_pool)
+        .await?;
+        assert_eq!(upgraded_columns, 3);
+
+        let origin_index_count: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(*)
+            FROM pg_indexes
+            WHERE schemaname = $1
+              AND indexname = 'idx_agenta_sync_mutations_origin'
+            "#,
+        )
+        .bind(&schema)
+        .fetch_one(&remote_pool)
+        .await?;
+        assert_eq!(origin_index_count, 1);
+
+        Ok(())
+    }
+    .await;
+
+    let cleanup_result = sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+        .execute(&remote_pool)
+        .await;
+    remote_pool.close().await;
+    std::env::set_var(POSTGRES_DSN_ENV, original_dsn);
+
+    test_result?;
+    cleanup_result?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn postgres_remote_round_trip_pushes_and_pulls_between_runtimes(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let _guard = environment_lock().lock().expect("lock environment");
@@ -1238,4 +1333,65 @@ async fn pool_from_path(path: &Path) -> Result<sqlx::SqlitePool, Box<dyn std::er
 
 fn normalize_path_for_yaml(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
+}
+
+fn postgres_dsn_with_search_path(
+    dsn: &str,
+    schema: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let mut url = Url::parse(dsn)?;
+    url.query_pairs_mut()
+        .append_pair("options", &format!("-c search_path={schema}"));
+    Ok(url.to_string())
+}
+
+async fn create_legacy_remote_schema(
+    pool: &sqlx::PgPool,
+    schema: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    sqlx::raw_sql(&format!(
+        r#"
+        CREATE SCHEMA {schema};
+
+        CREATE TABLE {schema}.agenta_sync_objects (
+            remote_id TEXT NOT NULL,
+            entity_kind TEXT NOT NULL,
+            remote_entity_id TEXT NOT NULL,
+            local_id TEXT NOT NULL,
+            local_version BIGINT NOT NULL,
+            payload_json JSONB NOT NULL,
+            updated_at TIMESTAMPTZ NOT NULL,
+            PRIMARY KEY (remote_id, entity_kind, remote_entity_id)
+        );
+
+        CREATE TABLE {schema}.agenta_sync_mutations (
+            remote_mutation_id BIGSERIAL PRIMARY KEY,
+            remote_id TEXT NOT NULL,
+            entity_kind TEXT NOT NULL,
+            remote_entity_id TEXT NOT NULL,
+            local_id TEXT NOT NULL,
+            operation TEXT NOT NULL,
+            local_version BIGINT NOT NULL,
+            payload_json JSONB NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
+        CREATE INDEX idx_agenta_sync_mutations_remote_cursor
+            ON {schema}.agenta_sync_mutations(remote_id, remote_mutation_id ASC);
+
+        CREATE TABLE {schema}.agenta_sync_attachment_blobs (
+            remote_id TEXT NOT NULL,
+            remote_entity_id TEXT NOT NULL,
+            sha256 TEXT NOT NULL,
+            size_bytes BIGINT NOT NULL,
+            mime TEXT NOT NULL,
+            content BYTEA NOT NULL,
+            updated_at TIMESTAMPTZ NOT NULL,
+            PRIMARY KEY (remote_id, remote_entity_id)
+        );
+        "#
+    ))
+    .execute(pool)
+    .await?;
+    Ok(())
 }

@@ -12,7 +12,7 @@ use crate::app::SyncRemotePostgresConfig;
 use crate::domain::{SyncEntityKind, SyncOperation, SyncOutboxEntry};
 use crate::error::{AppError, AppResult};
 
-const REMOTE_SCHEMA_SQL: &str = r#"
+const REMOTE_BASE_SCHEMA_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS agenta_sync_objects (
     remote_id TEXT NOT NULL,
     entity_kind TEXT NOT NULL,
@@ -44,10 +44,6 @@ CREATE TABLE IF NOT EXISTS agenta_sync_mutations (
 CREATE INDEX IF NOT EXISTS idx_agenta_sync_mutations_remote_cursor
     ON agenta_sync_mutations(remote_id, remote_mutation_id ASC);
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_agenta_sync_mutations_origin
-    ON agenta_sync_mutations(remote_id, origin_client_id, origin_mutation_id)
-    WHERE origin_client_id IS NOT NULL AND origin_mutation_id IS NOT NULL;
-
 CREATE TABLE IF NOT EXISTS agenta_sync_attachment_blobs (
     remote_id TEXT NOT NULL,
     remote_entity_id TEXT NOT NULL,
@@ -58,6 +54,22 @@ CREATE TABLE IF NOT EXISTS agenta_sync_attachment_blobs (
     updated_at TIMESTAMPTZ NOT NULL,
     PRIMARY KEY (remote_id, remote_entity_id)
 );
+"#;
+
+const REMOTE_SCHEMA_UPGRADE_SQL: &str = r#"
+ALTER TABLE agenta_sync_objects
+    ADD COLUMN IF NOT EXISTS origin_client_id TEXT;
+ALTER TABLE agenta_sync_objects
+    ADD COLUMN IF NOT EXISTS origin_mutation_id TEXT;
+ALTER TABLE agenta_sync_mutations
+    ADD COLUMN IF NOT EXISTS base_local_version BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE agenta_sync_mutations
+    ADD COLUMN IF NOT EXISTS origin_client_id TEXT;
+ALTER TABLE agenta_sync_mutations
+    ADD COLUMN IF NOT EXISTS origin_mutation_id TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agenta_sync_mutations_origin
+    ON agenta_sync_mutations(remote_id, origin_client_id, origin_mutation_id)
+    WHERE origin_client_id IS NOT NULL AND origin_mutation_id IS NOT NULL;
 "#;
 
 #[derive(Clone, Debug)]
@@ -116,32 +128,18 @@ impl PostgresSyncRemote {
     }
 
     pub async fn ensure_schema(&self) -> AppResult<()> {
-        raw_sql(REMOTE_SCHEMA_SQL)
+        raw_sql(REMOTE_BASE_SCHEMA_SQL)
             .execute(&self.pool)
             .await
             .map_err(|error| {
                 AppError::Io(format!("failed to initialize remote sync schema: {error}"))
             })?;
-        raw_sql(
-            r#"
-            ALTER TABLE agenta_sync_objects
-                ADD COLUMN IF NOT EXISTS origin_client_id TEXT;
-            ALTER TABLE agenta_sync_objects
-                ADD COLUMN IF NOT EXISTS origin_mutation_id TEXT;
-            ALTER TABLE agenta_sync_mutations
-                ADD COLUMN IF NOT EXISTS base_local_version BIGINT NOT NULL DEFAULT 0;
-            ALTER TABLE agenta_sync_mutations
-                ADD COLUMN IF NOT EXISTS origin_client_id TEXT;
-            ALTER TABLE agenta_sync_mutations
-                ADD COLUMN IF NOT EXISTS origin_mutation_id TEXT;
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_agenta_sync_mutations_origin
-                ON agenta_sync_mutations(remote_id, origin_client_id, origin_mutation_id)
-                WHERE origin_client_id IS NOT NULL AND origin_mutation_id IS NOT NULL;
-            "#,
-        )
-        .execute(&self.pool)
-        .await
-        .map_err(|error| AppError::Io(format!("failed to upgrade remote sync schema: {error}")))?;
+        raw_sql(REMOTE_SCHEMA_UPGRADE_SQL)
+            .execute(&self.pool)
+            .await
+            .map_err(|error| {
+                AppError::Io(format!("failed to upgrade remote sync schema: {error}"))
+            })?;
         Ok(())
     }
 
@@ -444,4 +442,23 @@ fn map_remote_mutation(row: PgRow) -> AppResult<RemoteMutation> {
         created_at: row.get("created_at"),
         attachment_blob: row.get("attachment_blob"),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{REMOTE_BASE_SCHEMA_SQL, REMOTE_SCHEMA_UPGRADE_SQL};
+
+    #[test]
+    fn remote_schema_creates_origin_index_after_upgrade_columns() {
+        assert!(!REMOTE_BASE_SCHEMA_SQL.contains("idx_agenta_sync_mutations_origin"));
+
+        let origin_column = REMOTE_SCHEMA_UPGRADE_SQL
+            .find("ADD COLUMN IF NOT EXISTS origin_client_id TEXT")
+            .expect("upgrade adds origin_client_id");
+        let origin_index = REMOTE_SCHEMA_UPGRADE_SQL
+            .find("idx_agenta_sync_mutations_origin")
+            .expect("upgrade creates origin idempotency index");
+
+        assert!(origin_column < origin_index);
+    }
 }
