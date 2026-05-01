@@ -117,6 +117,36 @@ impl SqliteStore {
         Ok(conflict_id)
     }
 
+    pub async fn resolve_sync_conflicts_for_remote_mutation(
+        &self,
+        remote_id: &str,
+        entity_kind: SyncEntityKind,
+        local_id: Uuid,
+        remote_mutation_id: i64,
+        resolved_at: OffsetDateTime,
+    ) -> AppResult<u64> {
+        let result = query(
+            r#"
+            UPDATE sync_conflicts
+            SET resolved_at = ?
+            WHERE remote_id = ?
+              AND entity_kind = ?
+              AND local_id = ?
+              AND remote_mutation_id = ?
+              AND resolved_at IS NULL
+            "#,
+        )
+        .bind(format_time(resolved_at)?)
+        .bind(remote_id)
+        .bind(entity_kind.to_string())
+        .bind(local_id.to_string())
+        .bind(remote_mutation_id)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected())
+    }
+
     pub async fn list_sync_outbox_for_delivery(
         &self,
         remote_id: &str,
@@ -238,6 +268,27 @@ impl SqliteStore {
         .await?;
 
         rows.into_iter().map(map_sync_outbox_entry).collect()
+    }
+
+    pub async fn get_sync_outbox_entry(
+        &self,
+        mutation_id: Uuid,
+    ) -> AppResult<Option<SyncOutboxEntry>> {
+        let row = query(
+            r#"
+            SELECT
+                mutation_id, remote_id, entity_kind, local_id, operation,
+                local_version, payload_json, status, attempt_count,
+                last_attempt_at, acked_at, last_error, created_at
+            FROM sync_outbox
+            WHERE mutation_id = ?
+            "#,
+        )
+        .bind(mutation_id.to_string())
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.map(map_sync_outbox_entry).transpose()
     }
 
     pub async fn get_sync_checkpoint(

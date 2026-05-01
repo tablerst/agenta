@@ -501,9 +501,31 @@ impl AgentaService {
         {
             if existing.local_version == mutation.local_version {
                 let client_id = self.store.get_or_create_sync_client_id().await?;
-                let same_origin = mutation.origin_client_id == Some(client_id)
-                    && mutation.origin_mutation_id == existing.last_enqueued_mutation_id;
-                if same_origin {
+                let local_outbox_entry = match existing.last_enqueued_mutation_id {
+                    Some(mutation_id)
+                        if mutation.origin_client_id.is_none()
+                            && mutation.origin_mutation_id.is_none() =>
+                    {
+                        self.store.get_sync_outbox_entry(mutation_id).await?
+                    }
+                    _ => None,
+                };
+                if remote_mutation_is_self_echo(
+                    remote_id,
+                    client_id,
+                    &existing,
+                    mutation,
+                    local_outbox_entry.as_ref(),
+                ) {
+                    self.store
+                        .resolve_sync_conflicts_for_remote_mutation(
+                            remote_id,
+                            mutation.entity_kind,
+                            mutation.local_id,
+                            mutation.remote_mutation_id,
+                            OffsetDateTime::now_utc(),
+                        )
+                        .await?;
                     return Ok(false);
                 }
                 self.store
