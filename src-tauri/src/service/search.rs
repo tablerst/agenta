@@ -18,13 +18,134 @@ impl AgentaService {
         limit: Option<usize>,
         batch_size: Option<usize>,
     ) -> AppResult<SearchBackfillSummary> {
+        self.search_rebuild(limit, batch_size).await
+    }
+
+    pub async fn search_incremental_index(
+        &self,
+        limit: Option<usize>,
+        batch_size: Option<usize>,
+    ) -> AppResult<SearchBackfillSummary> {
         if !self.search.vector_enabled() {
             return Err(AppError::Conflict(
                 "vector search is not enabled".to_string(),
             ));
         }
 
-        let max_to_queue = limit.unwrap_or(1_000).clamp(1, 100_000);
+        let current_profile = search_embedding_profile(self.search.config());
+        let stored_profile = self.store.get_search_index_embedding_profile().await?;
+        match stored_profile.as_ref() {
+            None => {
+                return Err(AppError::Conflict(
+                    "search index embedding profile is unknown; run a full search index rebuild before incremental indexing".to_string(),
+                ));
+            }
+            Some(stored) if stored.fingerprint != current_profile.fingerprint => {
+                return Err(AppError::Conflict(format!(
+                    "search index embedding profile mismatch; indexed model endpoint is {} {} {}, current model endpoint is {} {} {}; run a full search index rebuild",
+                    stored.provider,
+                    stored.base_url,
+                    stored.model,
+                    current_profile.provider,
+                    current_profile.base_url,
+                    current_profile.model
+                )));
+            }
+            _ => {}
+        }
+
+        let max_to_queue = limit.unwrap_or(100_000).clamp(1, 100_000);
+        let batch_size = batch_size.unwrap_or(10).clamp(1, 200);
+        let run_id = Uuid::new_v4();
+        let mut summary = {
+            let _write_guard = self.write_queue.lock().await;
+            let task_ids = self
+                .store
+                .list_pending_search_index_job_ids(Some(max_to_queue))
+                .await?;
+            let queued = task_ids.len();
+            let mut tx = self.store.pool.begin().await?;
+            let now = OffsetDateTime::now_utc();
+            self.store
+                .create_search_index_run_tx(
+                    &mut tx,
+                    run_id,
+                    "manual_incremental",
+                    queued,
+                    queued,
+                    0,
+                    batch_size,
+                    Some(&current_profile.fingerprint),
+                    now,
+                )
+                .await?;
+            self.store
+                .requeue_search_index_jobs_tx(&mut tx, &task_ids, run_id, now)
+                .await?;
+            tx.commit().await?;
+            SearchBackfillSummary {
+                run_id,
+                status: "running".to_string(),
+                operation_kind: search_index_operation_kind("manual_incremental").to_string(),
+                operation_description: search_index_operation_description("manual_incremental")
+                    .to_string(),
+                scanned: queued,
+                queued,
+                skipped: 0,
+                processed: 0,
+                succeeded: 0,
+                failed: 0,
+                unchanged: 0,
+                pending_after: 0,
+                processing_error: None,
+            }
+        };
+
+        summary.processing_error = if summary.queued == 0 {
+            None
+        } else {
+            self.search
+                .process_pending_only_jobs_with_batch(self.store.clone(), batch_size)
+                .await
+                .err()
+                .map(|error| error.to_string())
+        };
+        summary.pending_after = self.store.pending_search_index_job_count().await?;
+        let run_status = if summary.processing_error.is_some() {
+            "failed"
+        } else {
+            "completed"
+        };
+        let run = self
+            .store
+            .finish_search_index_run(
+                run_id,
+                run_status,
+                OffsetDateTime::now_utc(),
+                summary.processing_error.as_deref(),
+            )
+            .await?;
+        summary.status = run.status;
+        summary.processed = run.processed;
+        summary.succeeded = run.succeeded;
+        summary.failed = run.failed;
+        summary.unchanged = run.unchanged;
+        Ok(summary)
+    }
+
+    pub async fn search_rebuild(
+        &self,
+        limit: Option<usize>,
+        batch_size: Option<usize>,
+    ) -> AppResult<SearchBackfillSummary> {
+        if !self.search.vector_enabled() {
+            return Err(AppError::Conflict(
+                "vector search is not enabled".to_string(),
+            ));
+        }
+
+        let current_profile = search_embedding_profile(self.search.config());
+        let max_to_queue = limit.unwrap_or(100_000).clamp(1, 100_000);
         let batch_size = batch_size.unwrap_or(10).clamp(1, 200);
         let run_id = Uuid::new_v4();
         let mut summary = {
@@ -37,11 +158,12 @@ impl AgentaService {
                 .create_search_index_run_tx(
                     &mut tx,
                     run_id,
-                    "manual_backfill",
+                    "manual_rebuild",
                     task_ids.len(),
                     queued,
                     task_ids.len().saturating_sub(queued),
                     batch_size,
+                    Some(&current_profile.fingerprint),
                     now,
                 )
                 .await?;
@@ -54,8 +176,8 @@ impl AgentaService {
             SearchBackfillSummary {
                 run_id,
                 status: "running".to_string(),
-                operation_kind: search_index_operation_kind("manual_backfill").to_string(),
-                operation_description: search_index_operation_description("manual_backfill")
+                operation_kind: search_index_operation_kind("manual_rebuild").to_string(),
+                operation_description: search_index_operation_description("manual_rebuild")
                     .to_string(),
                 scanned: task_ids.len(),
                 queued,
@@ -63,6 +185,7 @@ impl AgentaService {
                 processed: 0,
                 succeeded: 0,
                 failed: 0,
+                unchanged: 0,
                 pending_after: 0,
                 processing_error: None,
             }
@@ -93,6 +216,18 @@ impl AgentaService {
         summary.processed = run.processed;
         summary.succeeded = run.succeeded;
         summary.failed = run.failed;
+        summary.unchanged = run.unchanged;
+        if summary.processing_error.is_none() && summary.skipped == 0 {
+            self.store
+                .upsert_search_index_embedding_profile(
+                    &current_profile.provider,
+                    &current_profile.base_url,
+                    &current_profile.model,
+                    &current_profile.fingerprint,
+                    OffsetDateTime::now_utc(),
+                )
+                .await?;
+        }
         Ok(summary)
     }
 
@@ -135,6 +270,35 @@ impl AgentaService {
             Some(run) => Some(self.search_index_run_summary(run).await?),
             None => None,
         };
+        let current_profile = self
+            .search
+            .vector_enabled()
+            .then(|| search_embedding_profile(self.search.config()));
+        let indexed_profile_record = self.store.get_search_index_embedding_profile().await?;
+        let indexed_profile =
+            indexed_profile_record
+                .as_ref()
+                .map(|record| SearchEmbeddingProfileSummary {
+                    provider: record.provider.clone(),
+                    base_url: record.base_url.clone(),
+                    model: record.model.clone(),
+                    fingerprint: record.fingerprint.clone(),
+                });
+        let current_profile_summary = current_profile
+            .clone()
+            .map(search_embedding_profile_summary);
+        let embedding_profile_state = if !self.search.vector_enabled() {
+            "disabled"
+        } else {
+            match (&current_profile, &indexed_profile_record) {
+                (_, None) => "unknown",
+                (Some(current), Some(indexed)) if current.fingerprint == indexed.fingerprint => {
+                    "ready"
+                }
+                _ => "mismatch",
+            }
+        };
+        let requires_full_rebuild = matches!(embedding_profile_state, "unknown" | "mismatch");
         let failed_jobs = self
             .store
             .list_failed_search_index_jobs(Some(5))
@@ -155,6 +319,10 @@ impl AgentaService {
             stale_processing_count: queue.stale_processing_count,
             next_retry_at: queue.next_retry_at,
             last_error: queue.last_error,
+            embedding_profile_state: embedding_profile_state.to_string(),
+            requires_full_rebuild,
+            current_embedding_profile: current_profile_summary,
+            indexed_embedding_profile: indexed_profile,
             active_run,
             latest_run,
             failed_jobs,
@@ -190,6 +358,7 @@ impl AgentaService {
                     queued,
                     0,
                     batch_size,
+                    None,
                     now,
                 )
                 .await?;
@@ -235,6 +404,7 @@ impl AgentaService {
             processed: run.processed,
             succeeded: run.succeeded,
             failed: run.failed,
+            unchanged: run.unchanged,
             pending_after,
             processing_error,
         })
@@ -261,7 +431,9 @@ impl AgentaService {
             processed: record.processed,
             succeeded: record.succeeded,
             failed: record.failed,
+            unchanged: record.unchanged,
             batch_size: record.batch_size,
+            embedding_fingerprint: record.embedding_fingerprint,
             pending_count: queue.pending_count,
             processing_count: queue.processing_count,
             retrying_count: queue.retrying_count,

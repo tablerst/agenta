@@ -12,6 +12,7 @@ use tempfile::TempDir;
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
+use uuid::Uuid;
 
 use agenta_lib::{
     app::{AppRuntime, BootstrapOptions},
@@ -415,6 +416,89 @@ async fn search_index_job_count(
     Ok(row.get::<i64, _>("count"))
 }
 
+async fn first_task_id(runtime: &AppRuntime) -> Result<String, Box<dyn std::error::Error>> {
+    let mut connection = SqliteConnection::connect_with(
+        &SqliteConnectOptions::new()
+            .filename(&runtime.config.paths.database_path)
+            .create_if_missing(false)
+            .busy_timeout(std::time::Duration::from_secs(5)),
+    )
+    .await?;
+    let row = sqlx::query("SELECT task_id FROM tasks ORDER BY created_at ASC LIMIT 1")
+        .fetch_one(&mut connection)
+        .await?;
+    Ok(row.get::<String, _>("task_id"))
+}
+
+async fn insert_search_index_job(
+    runtime: &AppRuntime,
+    task_id: &str,
+    status: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut connection = SqliteConnection::connect_with(
+        &SqliteConnectOptions::new()
+            .filename(&runtime.config.paths.database_path)
+            .create_if_missing(false)
+            .busy_timeout(std::time::Duration::from_secs(5)),
+    )
+    .await?;
+    sqlx::query(
+        r#"
+        INSERT INTO search_index_jobs (
+            task_id, job_kind, status, attempt_count, last_error,
+            next_attempt_at, run_id, locked_at, lease_until, created_at, updated_at
+        ) VALUES (?, 'task_vector_upsert', ?, 0, NULL, NULL, NULL, NULL, NULL, ?, ?)
+        ON CONFLICT(task_id) DO UPDATE SET
+            status = excluded.status,
+            attempt_count = 0,
+            last_error = NULL,
+            next_attempt_at = NULL,
+            run_id = NULL,
+            locked_at = NULL,
+            lease_until = NULL,
+            updated_at = excluded.updated_at
+        "#,
+    )
+    .bind(task_id)
+    .bind(status)
+    .bind("2026-05-07T00:00:00Z")
+    .bind("2026-05-07T00:00:00Z")
+    .execute(&mut connection)
+    .await?;
+    Ok(())
+}
+
+async fn insert_search_index_document(
+    runtime: &AppRuntime,
+    task_id: &str,
+    vector_id: &str,
+    fingerprint: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut connection = SqliteConnection::connect_with(
+        &SqliteConnectOptions::new()
+            .filename(&runtime.config.paths.database_path)
+            .create_if_missing(false)
+            .busy_timeout(std::time::Duration::from_secs(5)),
+    )
+    .await?;
+    sqlx::query(
+        r#"
+        INSERT INTO search_index_documents (
+            vector_id, task_id, source_kind, document_hash,
+            embedding_fingerprint, created_at, updated_at
+        ) VALUES (?, ?, 'task', 'stale-hash', ?, ?, ?)
+        "#,
+    )
+    .bind(vector_id)
+    .bind(task_id)
+    .bind(fingerprint)
+    .bind("2026-05-07T00:00:00Z")
+    .bind("2026-05-07T00:00:00Z")
+    .execute(&mut connection)
+    .await?;
+    Ok(())
+}
+
 fn write_vector_test_config(
     tempdir: &TempDir,
     endpoint: &str,
@@ -454,8 +538,25 @@ struct MockSearchServerState {
     embedding_batch_sizes: Arc<Mutex<Vec<usize>>>,
     upsert_batch_sizes: Arc<Mutex<Vec<usize>>>,
     upsert_ids: Arc<Mutex<Vec<Vec<String>>>>,
+    delete_ids: Arc<Mutex<Vec<Vec<String>>>>,
     upsert_metadatas: Arc<Mutex<Vec<Vec<Value>>>>,
     upsert_documents: Arc<Mutex<Vec<Vec<String>>>>,
+}
+
+async fn search_delete(
+    State(state): State<MockSearchServerState>,
+    Path(_collection_id): Path<String>,
+    Json(payload): Json<Value>,
+) -> StatusCode {
+    let ids = payload["ids"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|value| value.as_str().map(str::to_string))
+        .collect::<Vec<_>>();
+    state.delete_ids.lock().await.push(ids);
+    StatusCode::OK
 }
 
 async fn search_heartbeat() -> StatusCode {
@@ -579,6 +680,10 @@ async fn spawn_mock_search_server(
             post(search_upsert),
         )
         .route(
+            "/api/v2/tenants/default_tenant/databases/default_database/collections/{collection_id}/delete",
+            post(search_delete),
+        )
+        .route(
             "/api/v2/tenants/default_tenant/databases/default_database/collections/{collection_id}/query",
             post(search_vector_query),
         )
@@ -634,6 +739,10 @@ async fn spawn_failing_embedding_server(
         .route(
             "/api/v2/tenants/default_tenant/databases/default_database/collections/{collection_id}/upsert",
             post(search_upsert),
+        )
+        .route(
+            "/api/v2/tenants/default_tenant/databases/default_database/collections/{collection_id}/delete",
+            post(search_delete),
         )
         .route(
             "/api/v2/tenants/default_tenant/databases/default_database/collections/{collection_id}/query",
@@ -1829,6 +1938,179 @@ async fn search_backfill_preserves_embedding_provider_text_error_body(
         .and_then(|job| job.last_error.as_deref())
         .expect("failed job error");
     assert!(failed_error.contains("plain provider failure"));
+
+    server.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn search_incremental_requires_full_rebuild_for_unknown_profile(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let tempdir = TempDir::new()?;
+    seed_single_search_backfill_task(
+        &tempdir,
+        "incremental-profile",
+        "Incremental profile",
+        "Profile metadata should be initialized by full rebuild.",
+    )
+    .await?;
+    let (endpoint, _state, server) = spawn_mock_search_server().await?;
+    let config_path = write_vector_test_config(&tempdir, &endpoint)?;
+    let runtime = AppRuntime::bootstrap(BootstrapOptions {
+        config_path: Some(config_path),
+    })
+    .await?;
+
+    let status = runtime.service.search_index_status().await?;
+    assert_eq!(status.embedding_profile_state, "unknown");
+    assert!(status.requires_full_rebuild);
+
+    let error = runtime
+        .service
+        .search_incremental_index(Some(10), Some(1))
+        .await
+        .expect_err("unknown embedding profile should block incremental indexing");
+    assert!(matches!(error, AppError::Conflict(_)));
+
+    let rebuild = runtime.service.search_rebuild(Some(10), Some(1)).await?;
+    assert!(rebuild.processing_error.is_none());
+    let status = runtime.service.search_index_status().await?;
+    assert_eq!(status.embedding_profile_state, "ready");
+    assert!(!status.requires_full_rebuild);
+
+    server.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn search_incremental_blocks_embedding_profile_mismatch(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let tempdir = TempDir::new()?;
+    seed_single_search_backfill_task(
+        &tempdir,
+        "incremental-mismatch",
+        "Incremental mismatch",
+        "Profile mismatch should require full rebuild.",
+    )
+    .await?;
+    let (endpoint, _state, server) = spawn_mock_search_server().await?;
+    let config_path = write_vector_test_config(&tempdir, &endpoint)?;
+    let runtime = AppRuntime::bootstrap(BootstrapOptions {
+        config_path: Some(config_path),
+    })
+    .await?;
+    runtime.service.search_rebuild(Some(10), Some(1)).await?;
+
+    let mut connection = SqliteConnection::connect_with(
+        &SqliteConnectOptions::new()
+            .filename(&runtime.config.paths.database_path)
+            .create_if_missing(false)
+            .busy_timeout(std::time::Duration::from_secs(5)),
+    )
+    .await?;
+    sqlx::query(
+        "UPDATE search_index_embedding_profiles SET model = 'other-model', fingerprint = 'different'",
+    )
+    .execute(&mut connection)
+    .await?;
+
+    let status = runtime.service.search_index_status().await?;
+    assert_eq!(status.embedding_profile_state, "mismatch");
+    assert!(status.requires_full_rebuild);
+    let error = runtime
+        .service
+        .search_incremental_index(Some(10), Some(1))
+        .await
+        .expect_err("mismatched embedding profile should block incremental indexing");
+    assert!(matches!(error, AppError::Conflict(_)));
+
+    server.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn search_incremental_processes_pending_only_and_skips_unchanged_documents(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let tempdir = TempDir::new()?;
+    seed_single_search_backfill_task(
+        &tempdir,
+        "incremental-pending",
+        "Incremental pending",
+        "Pending-only incremental runs should not retry failed jobs.",
+    )
+    .await?;
+    let (endpoint, state, server) = spawn_mock_search_server().await?;
+    let config_path = write_vector_test_config(&tempdir, &endpoint)?;
+    let runtime = AppRuntime::bootstrap(BootstrapOptions {
+        config_path: Some(config_path),
+    })
+    .await?;
+    runtime.service.search_rebuild(Some(10), Some(10)).await?;
+    state.embedding_batch_sizes.lock().await.clear();
+
+    let task_id = first_task_id(&runtime).await?;
+    insert_search_index_job(&runtime, &task_id, "pending").await?;
+    insert_search_index_job(&runtime, &Uuid::new_v4().to_string(), "failed").await?;
+
+    let summary = runtime
+        .service
+        .search_incremental_index(Some(10), Some(10))
+        .await?;
+    assert_eq!(summary.queued, 1);
+    assert_eq!(summary.unchanged, 1);
+    assert_eq!(summary.succeeded, 0);
+    assert!(summary.processing_error.is_none());
+    assert!(state.embedding_batch_sizes.lock().await.is_empty());
+
+    let status = runtime.service.search_index_status().await?;
+    assert_eq!(status.failed_count, 1);
+
+    server.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn search_incremental_deletes_stale_vector_documents(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let tempdir = TempDir::new()?;
+    seed_single_search_backfill_task(
+        &tempdir,
+        "incremental-stale",
+        "Incremental stale",
+        "Stale vector ids should be deleted during incremental indexing.",
+    )
+    .await?;
+    let (endpoint, state, server) = spawn_mock_search_server().await?;
+    let config_path = write_vector_test_config(&tempdir, &endpoint)?;
+    let runtime = AppRuntime::bootstrap(BootstrapOptions {
+        config_path: Some(config_path),
+    })
+    .await?;
+    runtime.service.search_rebuild(Some(10), Some(10)).await?;
+    let status = runtime.service.search_index_status().await?;
+    let fingerprint = status
+        .indexed_embedding_profile
+        .as_ref()
+        .expect("indexed profile")
+        .fingerprint
+        .clone();
+    let task_id = first_task_id(&runtime).await?;
+    insert_search_index_document(&runtime, &task_id, "stale-vector-id", &fingerprint).await?;
+    insert_search_index_job(&runtime, &task_id, "pending").await?;
+    state.embedding_batch_sizes.lock().await.clear();
+
+    let summary = runtime
+        .service
+        .search_incremental_index(Some(10), Some(10))
+        .await?;
+    assert_eq!(summary.queued, 1);
+    assert_eq!(summary.succeeded, 1);
+    assert!(summary.processing_error.is_none());
+    assert!(state.embedding_batch_sizes.lock().await.is_empty());
+    assert_eq!(
+        *state.delete_ids.lock().await,
+        vec![vec!["stale-vector-id".to_string()]]
+    );
 
     server.abort();
     Ok(())

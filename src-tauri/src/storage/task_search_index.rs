@@ -106,7 +106,81 @@ impl SqliteStore {
         }))
     }
 
+    pub async fn claim_next_pending_search_index_job(
+        &self,
+        now: OffsetDateTime,
+    ) -> AppResult<Option<SearchVectorJob>> {
+        let mut tx = self.pool.begin().await?;
+        let now_text = format_time(now)?;
+        let row = query(
+            r#"
+            SELECT task_id, run_id, attempt_count
+            FROM search_index_jobs
+            WHERE status = 'pending'
+            ORDER BY updated_at ASC, task_id ASC
+            LIMIT 1
+            "#,
+        )
+        .fetch_optional(&mut *tx)
+        .await?;
+        let Some(row) = row else {
+            tx.commit().await?;
+            return Ok(None);
+        };
+
+        let task_id = crate::storage::mapping::parse_uuid(
+            row.get::<String, _>("task_id"),
+            "search_index_jobs.task_id",
+        )?;
+        let run_id = row
+            .get::<Option<String>, _>("run_id")
+            .map(|value| crate::storage::mapping::parse_uuid(value, "search_index_jobs.run_id"))
+            .transpose()?;
+        let attempt_count = row.get::<i64, _>("attempt_count") + 1;
+        let lease_until =
+            format_time(now + time::Duration::seconds(SEARCH_INDEX_JOB_LEASE_SECONDS))?;
+        query(
+            r#"
+            UPDATE search_index_jobs
+            SET status = 'processing',
+                attempt_count = ?,
+                locked_at = ?,
+                lease_until = ?,
+                updated_at = ?
+            WHERE task_id = ?
+            "#,
+        )
+        .bind(attempt_count)
+        .bind(&now_text)
+        .bind(&lease_until)
+        .bind(&now_text)
+        .bind(task_id.to_string())
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+
+        Ok(Some(SearchVectorJob {
+            task_id,
+            run_id,
+            attempt_count,
+        }))
+    }
+
     pub async fn complete_search_index_job(&self, task_id: Uuid) -> AppResult<()> {
+        self.complete_search_index_job_with_outcome(task_id, false)
+            .await
+    }
+
+    pub async fn complete_unchanged_search_index_job(&self, task_id: Uuid) -> AppResult<()> {
+        self.complete_search_index_job_with_outcome(task_id, true)
+            .await
+    }
+
+    async fn complete_search_index_job_with_outcome(
+        &self,
+        task_id: Uuid,
+        unchanged: bool,
+    ) -> AppResult<()> {
         let mut tx = self.pool.begin().await?;
         let run_id = query("SELECT run_id FROM search_index_jobs WHERE task_id = ?")
             .bind(task_id.to_string())
@@ -122,19 +196,35 @@ impl SqliteStore {
             .transpose()?
         {
             let now = format_time(OffsetDateTime::now_utc())?;
-            query(
-                r#"
-                UPDATE search_index_runs
-                SET processed = processed + 1,
-                    succeeded = succeeded + 1,
-                    updated_at = ?
-                WHERE run_id = ?
-                "#,
-            )
-            .bind(now)
-            .bind(run_id.to_string())
-            .execute(&mut *tx)
-            .await?;
+            if unchanged {
+                query(
+                    r#"
+                    UPDATE search_index_runs
+                    SET processed = processed + 1,
+                        unchanged = unchanged + 1,
+                        updated_at = ?
+                    WHERE run_id = ?
+                    "#,
+                )
+                .bind(now)
+                .bind(run_id.to_string())
+                .execute(&mut *tx)
+                .await?;
+            } else {
+                query(
+                    r#"
+                    UPDATE search_index_runs
+                    SET processed = processed + 1,
+                        succeeded = succeeded + 1,
+                        updated_at = ?
+                    WHERE run_id = ?
+                    "#,
+                )
+                .bind(now)
+                .bind(run_id.to_string())
+                .execute(&mut *tx)
+                .await?;
+            }
         }
         tx.commit().await?;
         Ok(())
@@ -205,6 +295,7 @@ impl SqliteStore {
         queued: usize,
         skipped: usize,
         batch_size: usize,
+        embedding_fingerprint: Option<&str>,
         now: OffsetDateTime,
     ) -> AppResult<()> {
         let now = format_time(now)?;
@@ -212,9 +303,9 @@ impl SqliteStore {
             r#"
             INSERT INTO search_index_runs (
                 run_id, status, trigger_kind, scanned, queued, skipped,
-                processed, succeeded, failed, batch_size, started_at,
-                finished_at, last_error, updated_at
-            ) VALUES (?, 'running', ?, ?, ?, ?, 0, 0, 0, ?, ?, NULL, NULL, ?)
+                processed, succeeded, failed, unchanged, batch_size, embedding_fingerprint,
+                started_at, finished_at, last_error, updated_at
+            ) VALUES (?, 'running', ?, ?, ?, ?, 0, 0, 0, 0, ?, ?, ?, NULL, NULL, ?)
             "#,
         )
         .bind(run_id.to_string())
@@ -223,6 +314,7 @@ impl SqliteStore {
         .bind(queued as i64)
         .bind(skipped as i64)
         .bind(batch_size as i64)
+        .bind(embedding_fingerprint)
         .bind(&now)
         .bind(&now)
         .execute(&mut **tx)
@@ -328,6 +420,161 @@ impl SqliteStore {
         Ok(())
     }
 
+    pub async fn get_search_index_embedding_profile(
+        &self,
+    ) -> AppResult<Option<SearchIndexEmbeddingProfileRecord>> {
+        let row = query(
+            r#"
+            SELECT provider, base_url, model, fingerprint, updated_at
+            FROM search_index_embedding_profiles
+            WHERE profile_id = 'current'
+            "#,
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(map_search_index_embedding_profile_record)
+            .transpose()
+    }
+
+    pub async fn upsert_search_index_embedding_profile(
+        &self,
+        provider: &str,
+        base_url: &str,
+        model: &str,
+        fingerprint: &str,
+        now: OffsetDateTime,
+    ) -> AppResult<()> {
+        let now = format_time(now)?;
+        query(
+            r#"
+            INSERT INTO search_index_embedding_profiles (
+                profile_id, provider, base_url, model, fingerprint, created_at, updated_at
+            ) VALUES ('current', ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(profile_id) DO UPDATE SET
+                provider = excluded.provider,
+                base_url = excluded.base_url,
+                model = excluded.model,
+                fingerprint = excluded.fingerprint,
+                updated_at = excluded.updated_at
+            "#,
+        )
+        .bind(provider)
+        .bind(base_url)
+        .bind(model)
+        .bind(fingerprint)
+        .bind(&now)
+        .bind(&now)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn list_search_index_documents_for_task(
+        &self,
+        task_id: Uuid,
+    ) -> AppResult<Vec<SearchIndexDocumentRecord>> {
+        let rows = query(
+            r#"
+            SELECT vector_id, task_id, source_kind, document_hash, embedding_fingerprint, updated_at
+            FROM search_index_documents
+            WHERE task_id = ?
+            ORDER BY vector_id ASC
+            "#,
+        )
+        .bind(task_id.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(map_search_index_document_record)
+            .collect()
+    }
+
+    pub async fn list_pending_search_index_job_ids(
+        &self,
+        limit: Option<usize>,
+    ) -> AppResult<Vec<Uuid>> {
+        let limit = limit.unwrap_or(100_000).clamp(1, 100_000) as i64;
+        let rows = query(
+            r#"
+            SELECT task_id
+            FROM search_index_jobs
+            WHERE status = 'pending'
+            ORDER BY updated_at ASC, task_id ASC
+            LIMIT ?
+            "#,
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter()
+            .map(|row| {
+                crate::storage::mapping::parse_uuid(
+                    row.get::<String, _>("task_id"),
+                    "search_index_jobs.task_id",
+                )
+            })
+            .collect()
+    }
+
+    pub async fn upsert_search_index_documents(
+        &self,
+        records: &[SearchIndexDocumentUpsert],
+    ) -> AppResult<()> {
+        if records.is_empty() {
+            return Ok(());
+        }
+
+        let mut tx = self.pool.begin().await?;
+        let now = format_time(OffsetDateTime::now_utc())?;
+        for record in records {
+            query(
+                r#"
+                INSERT INTO search_index_documents (
+                    vector_id, task_id, source_kind, document_hash,
+                    embedding_fingerprint, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(vector_id) DO UPDATE SET
+                    task_id = excluded.task_id,
+                    source_kind = excluded.source_kind,
+                    document_hash = excluded.document_hash,
+                    embedding_fingerprint = excluded.embedding_fingerprint,
+                    updated_at = excluded.updated_at
+                "#,
+            )
+            .bind(&record.vector_id)
+            .bind(record.task_id.to_string())
+            .bind(&record.source_kind)
+            .bind(&record.document_hash)
+            .bind(&record.embedding_fingerprint)
+            .bind(&now)
+            .bind(&now)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    pub async fn delete_search_index_documents_by_vector_ids(
+        &self,
+        vector_ids: &[String],
+    ) -> AppResult<()> {
+        if vector_ids.is_empty() {
+            return Ok(());
+        }
+
+        let mut tx = self.pool.begin().await?;
+        for vector_id in vector_ids {
+            query("DELETE FROM search_index_documents WHERE vector_id = ?")
+                .bind(vector_id)
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
     pub async fn finish_search_index_run(
         &self,
         run_id: Uuid,
@@ -361,8 +608,8 @@ impl SqliteStore {
             r#"
             SELECT
                 run_id, status, trigger_kind, scanned, queued, skipped,
-                processed, succeeded, failed, batch_size, started_at,
-                finished_at, last_error, updated_at
+                processed, succeeded, failed, unchanged, batch_size,
+                embedding_fingerprint, started_at, finished_at, last_error, updated_at
             FROM search_index_runs
             WHERE run_id = ?
             "#,
@@ -378,8 +625,8 @@ impl SqliteStore {
             r#"
             SELECT
                 run_id, status, trigger_kind, scanned, queued, skipped,
-                processed, succeeded, failed, batch_size, started_at,
-                finished_at, last_error, updated_at
+                processed, succeeded, failed, unchanged, batch_size,
+                embedding_fingerprint, started_at, finished_at, last_error, updated_at
             FROM search_index_runs
             ORDER BY updated_at DESC
             LIMIT 1
@@ -395,8 +642,8 @@ impl SqliteStore {
             r#"
             SELECT
                 run_id, status, trigger_kind, scanned, queued, skipped,
-                processed, succeeded, failed, batch_size, started_at,
-                finished_at, last_error, updated_at
+                processed, succeeded, failed, unchanged, batch_size,
+                embedding_fingerprint, started_at, finished_at, last_error, updated_at
             FROM search_index_runs
             WHERE status = 'running'
             ORDER BY updated_at DESC

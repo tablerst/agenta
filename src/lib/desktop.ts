@@ -426,7 +426,27 @@ export const desktopBridge = {
     };
     return resolveBridgeMode() === "desktop"
       ? callDesktop<SearchBackfillSummary>("desktop_search", input)
-      : callPreview<SearchBackfillSummary>(() => mockDesktopBridge.searchBackfill(options));
+      : callPreview<SearchBackfillSummary>(() => mockDesktopBridge.searchRebuild(options));
+  },
+  searchIndex(options: SearchBackfillOptions = {}) {
+    const input = {
+      action: "index",
+      limit: typeof options.limit === "number" ? options.limit : null,
+      batch_size: typeof options.batchSize === "number" ? options.batchSize : null,
+    };
+    return resolveBridgeMode() === "desktop"
+      ? callDesktop<SearchBackfillSummary>("desktop_search", input)
+      : callPreview<SearchBackfillSummary>(() => mockDesktopBridge.searchIndex(options));
+  },
+  searchRebuild(options: SearchBackfillOptions = {}) {
+    const input = {
+      action: "rebuild",
+      limit: typeof options.limit === "number" ? options.limit : null,
+      batch_size: typeof options.batchSize === "number" ? options.batchSize : null,
+    };
+    return resolveBridgeMode() === "desktop"
+      ? callDesktop<SearchBackfillSummary>("desktop_search", input)
+      : callPreview<SearchBackfillSummary>(() => mockDesktopBridge.searchRebuild(options));
   },
   searchIndexStatus() {
     const input = { action: "status" };

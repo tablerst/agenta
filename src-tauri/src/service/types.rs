@@ -114,6 +114,7 @@ pub struct SearchBackfillSummary {
     pub processed: usize,
     pub succeeded: usize,
     pub failed: usize,
+    pub unchanged: usize,
     pub pending_after: usize,
     pub processing_error: Option<String>,
 }
@@ -131,7 +132,9 @@ pub struct SearchIndexRunSummary {
     pub processed: usize,
     pub succeeded: usize,
     pub failed: usize,
+    pub unchanged: usize,
     pub batch_size: usize,
+    pub embedding_fingerprint: Option<String>,
     pub pending_count: usize,
     pub processing_count: usize,
     pub retrying_count: usize,
@@ -169,9 +172,21 @@ pub struct SearchIndexStatusSummary {
     pub stale_processing_count: usize,
     pub next_retry_at: Option<OffsetDateTime>,
     pub last_error: Option<String>,
+    pub embedding_profile_state: String,
+    pub requires_full_rebuild: bool,
+    pub current_embedding_profile: Option<SearchEmbeddingProfileSummary>,
+    pub indexed_embedding_profile: Option<SearchEmbeddingProfileSummary>,
     pub active_run: Option<SearchIndexRunSummary>,
     pub latest_run: Option<SearchIndexRunSummary>,
     pub failed_jobs: Vec<SearchIndexJobSummary>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct SearchEmbeddingProfileSummary {
+    pub provider: String,
+    pub base_url: String,
+    pub model: String,
+    pub fingerprint: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -185,6 +200,7 @@ pub struct SearchQueueRecoverySummary {
     pub processed: usize,
     pub succeeded: usize,
     pub failed: usize,
+    pub unchanged: usize,
     pub pending_after: usize,
     pub processing_error: Option<String>,
 }

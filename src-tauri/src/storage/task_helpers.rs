@@ -77,11 +77,49 @@ pub(super) fn map_search_index_run(row: SqliteRow) -> AppResult<SearchIndexRunRe
         processed: row.get::<i64, _>("processed").max(0) as usize,
         succeeded: row.get::<i64, _>("succeeded").max(0) as usize,
         failed: row.get::<i64, _>("failed").max(0) as usize,
+        unchanged: row
+            .try_get::<i64, _>("unchanged")
+            .unwrap_or_default()
+            .max(0) as usize,
         batch_size: row.get::<i64, _>("batch_size").max(0) as usize,
+        embedding_fingerprint: row
+            .try_get::<Option<String>, _>("embedding_fingerprint")
+            .unwrap_or(None),
         started_at: parse_time(row.get("started_at"), "search_index_runs.started_at")?,
         finished_at: map_optional_time(row.get("finished_at"), "search_index_runs.finished_at")?,
         last_error: row.get("last_error"),
         updated_at: parse_time(row.get("updated_at"), "search_index_runs.updated_at")?,
+    })
+}
+
+pub(super) fn map_search_index_document_record(
+    row: SqliteRow,
+) -> AppResult<SearchIndexDocumentRecord> {
+    Ok(SearchIndexDocumentRecord {
+        vector_id: row.get("vector_id"),
+        task_id: crate::storage::mapping::parse_uuid(
+            row.get("task_id"),
+            "search_index_documents.task_id",
+        )?,
+        source_kind: row.get("source_kind"),
+        document_hash: row.get("document_hash"),
+        embedding_fingerprint: row.get("embedding_fingerprint"),
+        updated_at: parse_time(row.get("updated_at"), "search_index_documents.updated_at")?,
+    })
+}
+
+pub(super) fn map_search_index_embedding_profile_record(
+    row: SqliteRow,
+) -> AppResult<SearchIndexEmbeddingProfileRecord> {
+    Ok(SearchIndexEmbeddingProfileRecord {
+        provider: row.get("provider"),
+        base_url: row.get("base_url"),
+        model: row.get("model"),
+        fingerprint: row.get("fingerprint"),
+        updated_at: parse_time(
+            row.get("updated_at"),
+            "search_index_embedding_profiles.updated_at",
+        )?,
     })
 }
 

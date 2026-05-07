@@ -1,7 +1,9 @@
 mod runtime;
 
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 
+use crate::app::{SearchConfig, SearchEmbeddingProvider};
 use crate::domain::{Task, TaskActivityKind};
 
 pub use runtime::{
@@ -23,6 +25,37 @@ const DIGEST_LIMIT: usize = 320;
 const ACTIVITY_TEXT_LIMIT: usize = 6_000;
 const ACTIVITY_CHUNK_TARGET_CHARS: usize = 900;
 const ACTIVITY_CHUNK_OVERLAP_CHARS: usize = 180;
+
+#[derive(Clone, Debug, Serialize)]
+pub struct SearchEmbeddingProfile {
+    pub provider: String,
+    pub base_url: String,
+    pub model: String,
+    pub fingerprint: String,
+}
+
+pub fn search_embedding_profile(config: &SearchConfig) -> SearchEmbeddingProfile {
+    let provider = match config.embedding.provider {
+        SearchEmbeddingProvider::OpenAiCompatible => "openai_compatible",
+    }
+    .to_string();
+    let base_url = normalize_embedding_base_url(&config.embedding.base_url);
+    let model = config.embedding.model.trim().to_string();
+    let fingerprint = format!(
+        "{:x}",
+        Sha256::digest(format!("{provider}\n{base_url}\n{model}").as_bytes())
+    );
+    SearchEmbeddingProfile {
+        provider,
+        base_url,
+        model,
+        fingerprint,
+    }
+}
+
+fn normalize_embedding_base_url(value: &str) -> String {
+    value.trim().trim_end_matches('/').to_string()
+}
 
 #[derive(Clone, Debug, Serialize)]
 pub struct TaskSearchHit {

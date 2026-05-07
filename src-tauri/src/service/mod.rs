@@ -27,9 +27,10 @@ use crate::policy::{PolicyEngine, WriteDecision};
 use crate::search::{
     build_activity_search_summary, build_activity_search_text, build_search_evidence,
     build_task_context_digest, build_task_search_summary, matched_field_names,
-    normalize_search_query, weighted_rrf_score, ActivitySearchHit, SearchEvidence,
-    SearchIndexedFields, SearchMeta, SearchResponse, SearchRuntime, SearchSidecarStatus,
-    TaskSearchHit, DEFAULT_SEARCH_LIMIT, LEXICAL_RRF_WEIGHT, MAX_SEARCH_LIMIT, SEMANTIC_RRF_WEIGHT,
+    normalize_search_query, search_embedding_profile, weighted_rrf_score, ActivitySearchHit,
+    SearchEvidence, SearchIndexedFields, SearchMeta, SearchResponse, SearchRuntime,
+    SearchSidecarStatus, TaskSearchHit, DEFAULT_SEARCH_LIMIT, LEXICAL_RRF_WEIGHT, MAX_SEARCH_LIMIT,
+    SEMANTIC_RRF_WEIGHT,
 };
 use crate::storage::{SearchIndexJobRecord, SearchIndexRunRecord, SqliteStore, TaskListFilter};
 use crate::sync::{PostgresSyncRemote, RemoteMutation};

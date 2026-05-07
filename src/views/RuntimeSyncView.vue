@@ -520,21 +520,28 @@ onUnmounted(() => {
                 <button
                   class="primary-action spotlight-surface"
                   :aria-busy="
-                    runtimeConsole.isSyncActionPending('searchBackfill') ? 'true' : undefined
+                    runtimeConsole.isSyncActionPending('searchIndex') ? 'true' : undefined
                   "
                   :data-pending="
-                    runtimeConsole.isSyncActionPending('searchBackfill') ? 'true' : undefined
+                    runtimeConsole.isSyncActionPending('searchIndex') ? 'true' : undefined
                   "
-                  :disabled="runtimeConsole.syncBusy.value"
-                  @click="runtimeConsole.runSearchBackfill"
+                  :disabled="
+                    runtimeConsole.syncBusy.value ||
+                    runtimeConsole.searchIndexStatus.value?.requires_full_rebuild
+                  "
+                  @click="runtimeConsole.runSearchIndex"
                 >
                   <Search :size="14" />
-                  {{ t("runtime.actions.searchBackfill") }}
+                  {{ t("runtime.actions.searchIndex") }}
                 </button>
               </div>
 
               <p class="runtime-search-operation-note">
-                {{ t("runtime.searchIndex.rebuildWarning") }}
+                {{
+                  runtimeConsole.searchIndexStatus.value?.requires_full_rebuild
+                    ? t("runtime.searchIndex.fullRebuildRequired")
+                    : t("runtime.searchIndex.incrementalSummary")
+                }}
               </p>
 
               <details class="runtime-search-advanced">
@@ -569,6 +576,25 @@ onUnmounted(() => {
                     </dd>
                   </div>
                 </dl>
+                <div class="runtime-search-recovery-actions">
+                  <button
+                    class="secondary-action spotlight-surface"
+                    :aria-busy="
+                      runtimeConsole.isSyncActionPending('searchRebuild') ? 'true' : undefined
+                    "
+                    :data-pending="
+                      runtimeConsole.isSyncActionPending('searchRebuild') ? 'true' : undefined
+                    "
+                    :disabled="runtimeConsole.syncBusy.value"
+                    @click="runtimeConsole.runSearchRebuild"
+                  >
+                    <RotateCcw :size="14" />
+                    {{ t("runtime.actions.searchRebuild") }}
+                  </button>
+                </div>
+                <p class="runtime-search-operation-note">
+                  {{ t("runtime.searchIndex.rebuildWarning") }}
+                </p>
               </details>
             </section>
 
@@ -610,6 +636,74 @@ onUnmounted(() => {
               </div>
             </div>
 
+            <section v-if="displaySearchRun" class="runtime-search-result-panel">
+              <div class="runtime-block-header">
+                <div>
+                  <p class="section-label">
+                    {{
+                      activeSearchRun
+                        ? t("runtime.searchIndex.activeRunLabel")
+                        : t("runtime.searchIndex.latestRunLabel")
+                    }}
+                  </p>
+                  <h3 class="runtime-subblock-title">
+                    {{ t("runtime.searchIndex.progressTitle") }}
+                  </h3>
+                  <p class="runtime-block-summary">
+                    {{
+                      t("runtime.searchIndex.progressSummary", {
+                        completed: searchRunCompletedCount,
+                        queued: displaySearchRun.queued,
+                        percent: searchRunProgressPercent,
+                      })
+                    }}
+                  </p>
+                </div>
+                <span class="status-pill status-pill-success">{{ searchRunProgressPercent }}%</span>
+              </div>
+              <div
+                class="runtime-search-progress-track"
+                role="progressbar"
+                :aria-valuemin="0"
+                :aria-valuemax="100"
+                :aria-valuenow="searchRunProgressPercent"
+              >
+                <div
+                  class="runtime-search-progress-fill"
+                  :style="{ width: `${searchRunProgressPercent}%` }"
+                />
+              </div>
+              <details class="runtime-search-advanced">
+                <summary>{{ t("runtime.searchIndex.runDetails") }}</summary>
+                <dl class="runtime-definition-list runtime-search-context-grid">
+                  <div>
+                    <dt>{{ t("runtime.searchIndex.operation") }}</dt>
+                    <dd>{{ t(`runtime.searchIndex.operations.${displaySearchRun.operation_kind}`) }}</dd>
+                  </div>
+                  <div>
+                    <dt>{{ t("runtime.searchIndex.statusLabel") }}</dt>
+                    <dd>{{ runtimeConsole.formatSearchIndexStatus(displaySearchRun.status) }}</dd>
+                  </div>
+                  <div>
+                    <dt>{{ t("runtime.searchIndex.succeeded") }}</dt>
+                    <dd>{{ displaySearchRun.succeeded }}</dd>
+                  </div>
+                  <div>
+                    <dt>{{ t("runtime.searchIndex.unchanged") }}</dt>
+                    <dd>{{ displaySearchRun.unchanged }}</dd>
+                  </div>
+                  <div>
+                    <dt>{{ t("runtime.searchIndex.failed") }}</dt>
+                    <dd>{{ displaySearchRun.failed }}</dd>
+                  </div>
+                  <div>
+                    <dt>{{ t("runtime.searchIndex.batchSize") }}</dt>
+                    <dd>{{ displaySearchRun.batch_size }}</dd>
+                  </div>
+                </dl>
+              </details>
+            </section>
+
             <div
               v-if="
                 !runtimeConsole.searchIndexStatus.value?.latest_run &&
@@ -621,7 +715,8 @@ onUnmounted(() => {
               <span>{{ t("runtime.searchIndex.noResult") }}</span>
             </div>
 
-            <div v-else class="runtime-search-result-panel">
+            <details v-else class="runtime-search-result-panel runtime-search-advanced">
+              <summary>{{ t("runtime.searchIndex.resultDetails") }}</summary>
               <p class="runtime-search-operation-note">
                 {{
                   runtimeConsole.searchIndexStatus.value?.latest_run?.operation_description ??
@@ -686,6 +781,16 @@ onUnmounted(() => {
                   </dd>
                 </div>
                 <div>
+                  <dt>{{ t("runtime.searchIndex.unchanged") }}</dt>
+                  <dd>
+                    {{
+                      runtimeConsole.searchIndexStatus.value?.latest_run?.unchanged ??
+                      runtimeConsole.searchBackfillResult.value?.unchanged ??
+                      t("common.na")
+                    }}
+                  </dd>
+                </div>
+                <div>
                   <dt>{{ t("runtime.searchIndex.remaining") }}</dt>
                   <dd>
                     {{
@@ -723,6 +828,10 @@ onUnmounted(() => {
                     skipped:
                       runtimeConsole.searchIndexStatus.value?.latest_run?.skipped ??
                       runtimeConsole.searchBackfillResult.value?.skipped ??
+                      0,
+                    unchanged:
+                      runtimeConsole.searchIndexStatus.value?.latest_run?.unchanged ??
+                      runtimeConsole.searchBackfillResult.value?.unchanged ??
                       0,
                   })
                 }}
@@ -780,7 +889,7 @@ onUnmounted(() => {
                   </span>
                 </article>
               </div>
-            </div>
+            </details>
           </aside>
         </div>
       </section>

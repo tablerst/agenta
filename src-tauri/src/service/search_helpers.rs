@@ -358,7 +358,9 @@ pub(super) fn search_sidecar_status_label(status: SearchSidecarStatus) -> &'stat
 
 pub(super) fn search_index_operation_kind(trigger_kind: &str) -> &'static str {
     match trigger_kind {
+        "manual_incremental" => "manual_incremental",
         "manual_backfill" => "manual_rebuild",
+        "manual_rebuild" => "manual_rebuild",
         "retry_failed" => "retry_failed",
         "recover_stale" => "recover_stale",
         _ => "incremental_upsert",
@@ -367,9 +369,21 @@ pub(super) fn search_index_operation_kind(trigger_kind: &str) -> &'static str {
 
 pub(super) fn search_index_operation_description(trigger_kind: &str) -> &'static str {
     match search_index_operation_kind(trigger_kind) {
+        "manual_incremental" => "Processes queued incremental vector-index jobs.",
         "manual_rebuild" => "Scans local tasks and re-upserts their Chroma vectors.",
         "retry_failed" => "Requeues failed vector-index jobs and processes them again.",
         "recover_stale" => "Reclaims expired processing jobs and resumes indexing.",
         _ => "Indexes tasks changed by local or remote mutations.",
+    }
+}
+
+pub(super) fn search_embedding_profile_summary(
+    profile: crate::search::SearchEmbeddingProfile,
+) -> SearchEmbeddingProfileSummary {
+    SearchEmbeddingProfileSummary {
+        provider: profile.provider,
+        base_url: profile.base_url,
+        model: profile.model,
+        fingerprint: profile.fingerprint,
     }
 }

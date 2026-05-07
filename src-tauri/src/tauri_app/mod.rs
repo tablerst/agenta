@@ -1021,17 +1021,38 @@ async fn desktop_search(
                     .await?,
                 "Loaded search evidence",
             ),
-            "backfill" => {
+            "index" | "incremental" => {
                 let result = state
                     .service
-                    .search_backfill(input.limit, input.batch_size)
+                    .search_incremental_index(input.limit, input.batch_size)
                     .await?;
                 record_desktop_search_backfill_processing_error(
                     &state.config.paths.error_log_path,
-                    "desktop.search_backfill",
+                    "desktop.search_index",
                     &result,
                 );
-                success("search.backfill", result, "Completed search backfill")
+                success(
+                    "search.index",
+                    result,
+                    "Completed search index incremental run",
+                )
+            }
+            "rebuild" | "backfill" => {
+                let result = state
+                    .service
+                    .search_rebuild(input.limit, input.batch_size)
+                    .await?;
+                record_desktop_search_backfill_processing_error(
+                    &state.config.paths.error_log_path,
+                    "desktop.search_rebuild",
+                    &result,
+                );
+                let action = if input.action == "backfill" {
+                    "search.backfill"
+                } else {
+                    "search.rebuild"
+                };
+                success(action, result, "Completed search index rebuild")
             }
             "retry_failed" => {
                 let result = state

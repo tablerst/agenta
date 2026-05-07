@@ -397,8 +397,16 @@ export interface SearchBackfillSummary {
   processed: number;
   succeeded: number;
   failed: number;
+  unchanged: number;
   pending_after: number;
   processing_error: string | null;
+}
+
+export interface SearchEmbeddingProfileSummary {
+  provider: string;
+  base_url: string;
+  model: string;
+  fingerprint: string;
 }
 
 export interface SearchIndexRunSummary {
@@ -413,7 +421,9 @@ export interface SearchIndexRunSummary {
   processed: number;
   succeeded: number;
   failed: number;
+  unchanged: number;
   batch_size: number;
+  embedding_fingerprint: string | null;
   pending_count: number;
   processing_count: number;
   retrying_count: number;
@@ -449,6 +459,10 @@ export interface SearchIndexStatusSummary {
   stale_processing_count: number;
   next_retry_at: string | null;
   last_error: string | null;
+  embedding_profile_state: string;
+  requires_full_rebuild: boolean;
+  current_embedding_profile: SearchEmbeddingProfileSummary | null;
+  indexed_embedding_profile: SearchEmbeddingProfileSummary | null;
   active_run: SearchIndexRunSummary | null;
   latest_run: SearchIndexRunSummary | null;
   failed_jobs: SearchIndexJobSummary[];
@@ -464,6 +478,7 @@ export interface SearchQueueRecoverySummary {
   processed: number;
   succeeded: number;
   failed: number;
+  unchanged: number;
   pending_after: number;
   processing_error: string | null;
 }

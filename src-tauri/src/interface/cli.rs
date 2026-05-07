@@ -105,6 +105,8 @@ enum SearchCommand {
     Status,
     Query(SearchQueryArgs),
     Evidence(SearchEvidenceArgs),
+    Index(SearchExecuteArgs),
+    Rebuild(SearchExecuteArgs),
     Backfill(SearchExecuteArgs),
     RetryFailed(SearchExecuteArgs),
     RecoverStale(SearchExecuteArgs),
@@ -560,6 +562,8 @@ fn cli_action(command: &TopLevelCommand) -> &'static str {
         TopLevelCommand::Search(SearchCommand::Query(_)) => "search.query",
         TopLevelCommand::Search(SearchCommand::Status) => "search.status",
         TopLevelCommand::Search(SearchCommand::Evidence(_)) => "search.evidence",
+        TopLevelCommand::Search(SearchCommand::Index(_)) => "search.index",
+        TopLevelCommand::Search(SearchCommand::Rebuild(_)) => "search.rebuild",
         TopLevelCommand::Search(SearchCommand::Backfill(_)) => "search.backfill",
         TopLevelCommand::Search(SearchCommand::RetryFailed(_)) => "search.retry_failed",
         TopLevelCommand::Search(SearchCommand::RecoverStale(_)) => "search.recover_stale",
@@ -1001,13 +1005,33 @@ async fn execute_search(
                 .await?;
             success("search.evidence", result, "Loaded search evidence")
         }
+        SearchCommand::Index(args) => {
+            let result = app
+                .service
+                .search_incremental_index(args.limit, args.batch_size)
+                .await?;
+            record_cli_search_backfill_processing_error(error_log_path, "search.index", &result);
+            success(
+                "search.index",
+                result,
+                "Completed search index incremental run",
+            )
+        }
+        SearchCommand::Rebuild(args) => {
+            let result = app
+                .service
+                .search_rebuild(args.limit, args.batch_size)
+                .await?;
+            record_cli_search_backfill_processing_error(error_log_path, "search.rebuild", &result);
+            success("search.rebuild", result, "Completed search index rebuild")
+        }
         SearchCommand::Backfill(args) => {
             let result = app
                 .service
-                .search_backfill(args.limit, args.batch_size)
+                .search_rebuild(args.limit, args.batch_size)
                 .await?;
             record_cli_search_backfill_processing_error(error_log_path, "search.backfill", &result);
-            success("search.backfill", result, "Completed search backfill")
+            success("search.backfill", result, "Completed search index rebuild")
         }
         SearchCommand::RetryFailed(args) => {
             let result = app

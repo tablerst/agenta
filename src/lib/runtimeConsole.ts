@@ -51,6 +51,8 @@ function createRuntimeConsoleModel() {
     | "backfill"
     | "push"
     | "pull"
+    | "searchIndex"
+    | "searchRebuild"
     | "searchBackfill"
     | "searchRetryFailed"
     | "searchRecoverStale";
@@ -128,6 +130,9 @@ function createRuntimeConsoleModel() {
     if (!status?.enabled) {
       return "disabled";
     }
+    if (status.requires_full_rebuild) {
+      return "attention_required";
+    }
     if ((status.failed_count ?? 0) > 0 || (status.stale_processing_count ?? 0) > 0) {
       return "attention_required";
     }
@@ -160,6 +165,7 @@ function createRuntimeConsoleModel() {
   let searchIndexPollTimer: number | null = null;
   let searchIndexPollInFlight = false;
   let searchIndexLiveRefreshRequested = false;
+  let searchIndexPollGraceTicks = 0;
 
   function clampInteger(
     value: unknown,
@@ -379,7 +385,11 @@ function createRuntimeConsoleModel() {
   }
 
   function syncSearchIndexPolling() {
-    if (!searchIndexLiveRefreshRequested || !hasSearchIndexWorkInFlight(searchIndexStatus.value)) {
+    if (!searchIndexLiveRefreshRequested) {
+      stopSearchIndexPolling();
+      return;
+    }
+    if (!hasSearchIndexWorkInFlight(searchIndexStatus.value) && searchIndexPollGraceTicks <= 0) {
       stopSearchIndexPolling();
       return;
     }
@@ -396,6 +406,9 @@ function createRuntimeConsoleModel() {
       searchIndexPollInFlight = true;
       try {
         await refreshSearchIndexStatusSnapshot(false);
+        if (!hasSearchIndexWorkInFlight(searchIndexStatus.value) && searchIndexPollGraceTicks > 0) {
+          searchIndexPollGraceTicks -= 1;
+        }
         syncSearchIndexPolling();
       } finally {
         searchIndexPollInFlight = false;
@@ -409,6 +422,7 @@ function createRuntimeConsoleModel() {
       stopSearchIndexPolling();
       return;
     }
+    searchIndexPollGraceTicks = Math.max(searchIndexPollGraceTicks, 2);
     await refreshSearchIndexStatusSnapshot(false);
     syncSearchIndexPolling();
   }
@@ -588,15 +602,42 @@ function createRuntimeConsoleModel() {
     });
   }
 
-  async function runSearchBackfill() {
-    await withSyncAction("searchBackfill", async () => {
+  async function runSearchIndex() {
+    await withSyncAction("searchIndex", async () => {
       try {
         normalizeSearchBackfillForm();
-        const envelope = await desktopBridge.searchBackfill({
+        const envelope = await desktopBridge.searchIndex({
           limit: searchBackfillForm.limit,
           batchSize: searchBackfillForm.batchSize,
         });
         searchBackfillResult.value = envelope.result;
+        searchIndexPollGraceTicks = Math.max(searchIndexPollGraceTicks, 4);
+        await refreshSearchIndexStatusSnapshot(false);
+        syncSearchIndexPolling();
+        if (envelope.result.processing_error) {
+          shell.pushNotice("error", envelope.result.processing_error);
+          return;
+        }
+        shell.pushNotice(
+          "success",
+          t("notices.searchIndexCompleted", { count: envelope.result.queued }),
+        );
+      } catch (error) {
+        shell.pushNotice("error", formatDesktopError(error, t));
+      }
+    });
+  }
+
+  async function runSearchRebuild() {
+    await withSyncAction("searchRebuild", async () => {
+      try {
+        normalizeSearchBackfillForm();
+        const envelope = await desktopBridge.searchRebuild({
+          limit: searchBackfillForm.limit,
+          batchSize: searchBackfillForm.batchSize,
+        });
+        searchBackfillResult.value = envelope.result;
+        searchIndexPollGraceTicks = Math.max(searchIndexPollGraceTicks, 4);
         await loadSyncSnapshot();
         if (envelope.result.processing_error) {
           shell.pushNotice("error", envelope.result.processing_error);
@@ -604,12 +645,16 @@ function createRuntimeConsoleModel() {
         }
         shell.pushNotice(
           "success",
-          t("notices.searchBackfillCompleted", { count: envelope.result.queued }),
+          t("notices.searchRebuildCompleted", { count: envelope.result.queued }),
         );
       } catch (error) {
         shell.pushNotice("error", formatDesktopError(error, t));
       }
     });
+  }
+
+  async function runSearchBackfill() {
+    await runSearchRebuild();
   }
 
   async function runSearchRetryFailed() {
@@ -621,6 +666,7 @@ function createRuntimeConsoleModel() {
           batchSize: searchBackfillForm.batchSize,
         });
         await refreshSearchIndexStatusSnapshot(false);
+        searchIndexPollGraceTicks = Math.max(searchIndexPollGraceTicks, 4);
         syncSearchIndexPolling();
         if (envelope.result.processing_error) {
           shell.pushNotice("error", envelope.result.processing_error);
@@ -645,6 +691,7 @@ function createRuntimeConsoleModel() {
           batchSize: searchBackfillForm.batchSize,
         });
         await refreshSearchIndexStatusSnapshot(false);
+        searchIndexPollGraceTicks = Math.max(searchIndexPollGraceTicks, 4);
         syncSearchIndexPolling();
         if (envelope.result.processing_error) {
           shell.pushNotice("error", envelope.result.processing_error);
@@ -723,6 +770,8 @@ function createRuntimeConsoleModel() {
     openErrorLogDirectory,
     refreshLogs,
     runSearchBackfill,
+    runSearchIndex,
+    runSearchRebuild,
     runSearchRecoverStale,
     runSearchRetryFailed,
     runSyncBackfill,

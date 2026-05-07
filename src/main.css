@@ -1527,6 +1527,7 @@ html[data-theme="dark"] {
   }
 
   .runtime-search-progress-track {
+    flex: 0 0 10px;
     overflow: hidden;
     height: 10px;
     border-radius: 999px;
@@ -1606,8 +1607,8 @@ html[data-theme="dark"] {
 
   .runtime-search-result-panel {
     display: flex;
-    flex: 1;
-    min-height: 0;
+    flex: 0 0 auto;
+    min-height: auto;
     flex-direction: column;
     gap: 18px;
     padding-top: 4px;

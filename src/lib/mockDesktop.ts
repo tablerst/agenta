@@ -16,6 +16,7 @@ import type {
   SearchBackfillSummary,
   SearchEvidenceDetail,
   SearchQueueRecoverySummary,
+  SearchIndexRunSummary,
   SearchIndexStatusSummary,
   SearchResponse,
   SuccessEnvelope,
@@ -64,6 +65,15 @@ let syncOutbox: SyncOutboxListItem[] = [];
 let syncPullCheckpoint: string | null = null;
 let syncPushAckCheckpoint: string | null = null;
 let previewRemoteMutationCursor = 12;
+let previewSearchLatestRun: SearchIndexRunSummary | null = null;
+let previewSearchPendingCount = 3;
+
+const previewSearchEmbeddingProfile = {
+  provider: "openai_compatible",
+  base_url: "http://127.0.0.1:11434/v1",
+  model: "preview-embedding",
+  fingerprint: "preview-embedding-fingerprint",
+};
 
 function iso(hoursAgo: number) {
   return new Date(previewNow - hoursAgo * 60 * 60 * 1000).toISOString();
@@ -364,21 +374,84 @@ function runPreviewPull(limit?: number): SyncPullSummary {
   };
 }
 
-function runPreviewSearchBackfill(options: { limit?: number; batchSize?: number } = {}): SearchBackfillSummary {
-  const maxToQueue = typeof options.limit === "number" ? Math.max(1, options.limit) : 1000;
-  const scanned = state.tasks.length;
-  const queued = Math.min(scanned, maxToQueue);
+function createPreviewSearchRun(
+  operationKind: "manual_incremental" | "manual_rebuild",
+  scanned: number,
+  queued: number,
+  batchSize: number,
+): SearchIndexRunSummary {
+  const now = new Date().toISOString();
   return {
     run_id: `preview-search-run-${Date.now()}`,
     status: "completed",
-    operation_kind: "manual_rebuild",
-    operation_description: "Scans local tasks and re-upserts their Chroma vectors.",
+    trigger_kind: operationKind,
+    operation_kind: operationKind,
+    operation_description:
+      operationKind === "manual_incremental"
+        ? "Processes queued incremental vector-index jobs."
+        : "Scans local tasks and re-upserts their Chroma vectors.",
     scanned,
     queued,
     skipped: Math.max(0, scanned - queued),
     processed: queued,
     succeeded: queued,
     failed: 0,
+    unchanged: 0,
+    batch_size: batchSize,
+    embedding_fingerprint: previewSearchEmbeddingProfile.fingerprint,
+    pending_count: 0,
+    processing_count: 0,
+    retrying_count: 0,
+    remaining_count: 0,
+    started_at: now,
+    finished_at: now,
+    last_error: null,
+    updated_at: now,
+  };
+}
+
+function runPreviewSearchIndex(options: { limit?: number; batchSize?: number } = {}): SearchBackfillSummary {
+  const maxToQueue = typeof options.limit === "number" ? Math.max(1, options.limit) : 100000;
+  const queued = Math.min(previewSearchPendingCount, maxToQueue);
+  const batchSize = typeof options.batchSize === "number" ? Math.max(1, options.batchSize) : 10;
+  previewSearchLatestRun = createPreviewSearchRun("manual_incremental", queued, queued, batchSize);
+  previewSearchPendingCount = Math.max(0, previewSearchPendingCount - queued);
+  return {
+    run_id: previewSearchLatestRun.run_id,
+    status: previewSearchLatestRun.status,
+    operation_kind: previewSearchLatestRun.operation_kind,
+    operation_description: previewSearchLatestRun.operation_description,
+    scanned: queued,
+    queued,
+    skipped: 0,
+    processed: queued,
+    succeeded: queued,
+    failed: 0,
+    unchanged: 0,
+    pending_after: previewSearchPendingCount,
+    processing_error: null,
+  };
+}
+
+function runPreviewSearchRebuild(options: { limit?: number; batchSize?: number } = {}): SearchBackfillSummary {
+  const maxToQueue = typeof options.limit === "number" ? Math.max(1, options.limit) : 100000;
+  const scanned = state.tasks.length;
+  const queued = Math.min(scanned, maxToQueue);
+  const batchSize = typeof options.batchSize === "number" ? Math.max(1, options.batchSize) : 10;
+  previewSearchLatestRun = createPreviewSearchRun("manual_rebuild", scanned, queued, batchSize);
+  previewSearchPendingCount = 0;
+  return {
+    run_id: previewSearchLatestRun.run_id,
+    status: previewSearchLatestRun.status,
+    operation_kind: previewSearchLatestRun.operation_kind,
+    operation_description: previewSearchLatestRun.operation_description,
+    scanned,
+    queued,
+    skipped: Math.max(0, scanned - queued),
+    processed: queued,
+    succeeded: queued,
+    failed: 0,
+    unchanged: 0,
     pending_after: 0,
     processing_error: null,
   };
@@ -389,16 +462,20 @@ function runPreviewSearchIndexStatus(): SearchIndexStatusSummary {
     enabled: true,
     vector_available: true,
     sidecar: "external",
-    total_count: 0,
-    pending_count: 0,
+    total_count: previewSearchPendingCount,
+    pending_count: previewSearchPendingCount,
     processing_count: 0,
     failed_count: 0,
     due_count: 0,
     stale_processing_count: 0,
     next_retry_at: null,
     last_error: null,
+    embedding_profile_state: "ready",
+    requires_full_rebuild: false,
+    current_embedding_profile: previewSearchEmbeddingProfile,
+    indexed_embedding_profile: previewSearchEmbeddingProfile,
     active_run: null,
-    latest_run: null,
+    latest_run: previewSearchLatestRun,
     failed_jobs: [],
   };
 }
@@ -418,6 +495,7 @@ function runPreviewSearchRecovery(triggerKind: string): SearchQueueRecoverySumma
     processed: 0,
     succeeded: 0,
     failed: 0,
+    unchanged: 0,
     pending_after: 0,
     processing_error: null,
   };
@@ -2296,8 +2374,26 @@ export const mockDesktopBridge = {
     return Promise.resolve(
       envelope(
         "desktop_search",
-        runPreviewSearchBackfill(options),
-        "Completed preview search backfill.",
+        runPreviewSearchRebuild(options),
+        "Completed preview search index rebuild.",
+      ),
+    );
+  },
+  searchIndex(options: { limit?: number; batchSize?: number } = {}) {
+    return Promise.resolve(
+      envelope(
+        "desktop_search",
+        runPreviewSearchIndex(options),
+        "Completed preview incremental search index run.",
+      ),
+    );
+  },
+  searchRebuild(options: { limit?: number; batchSize?: number } = {}) {
+    return Promise.resolve(
+      envelope(
+        "desktop_search",
+        runPreviewSearchRebuild(options),
+        "Completed preview search index rebuild.",
       ),
     );
   },

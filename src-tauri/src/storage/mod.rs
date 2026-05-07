@@ -139,6 +139,34 @@ pub struct SearchIndexJobRecord {
 }
 
 #[derive(Clone, Debug)]
+pub struct SearchIndexDocumentRecord {
+    pub vector_id: String,
+    pub task_id: Uuid,
+    pub source_kind: String,
+    pub document_hash: String,
+    pub embedding_fingerprint: String,
+    pub updated_at: OffsetDateTime,
+}
+
+#[derive(Clone, Debug)]
+pub struct SearchIndexDocumentUpsert {
+    pub vector_id: String,
+    pub task_id: Uuid,
+    pub source_kind: String,
+    pub document_hash: String,
+    pub embedding_fingerprint: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct SearchIndexEmbeddingProfileRecord {
+    pub provider: String,
+    pub base_url: String,
+    pub model: String,
+    pub fingerprint: String,
+    pub updated_at: OffsetDateTime,
+}
+
+#[derive(Clone, Debug)]
 pub struct SearchIndexRunRecord {
     pub run_id: Uuid,
     pub status: String,
@@ -149,7 +177,9 @@ pub struct SearchIndexRunRecord {
     pub processed: usize,
     pub succeeded: usize,
     pub failed: usize,
+    pub unchanged: usize,
     pub batch_size: usize,
+    pub embedding_fingerprint: Option<String>,
     pub started_at: OffsetDateTime,
     pub finished_at: Option<OffsetDateTime>,
     pub last_error: Option<String>,

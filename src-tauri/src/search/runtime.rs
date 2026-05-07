@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -6,6 +7,7 @@ use std::time::Duration;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
@@ -14,7 +16,7 @@ use uuid::Uuid;
 use crate::app::{record_app_error, SearchConfig, SearchEmbeddingProvider, SearchVectorBackend};
 use crate::error::{AppError, AppResult};
 use crate::search::TaskVectorDocument;
-use crate::storage::{SqliteStore, TaskListFilter};
+use crate::storage::{SearchIndexDocumentUpsert, SqliteStore, TaskListFilter};
 
 const INDEX_JOB_BATCH_SIZE: usize = 10;
 const MAX_INDEX_JOB_BATCH_SIZE: usize = 200;
@@ -220,6 +222,34 @@ fn truncate_error_body(value: &str) -> String {
     truncated
 }
 
+fn task_vector_document_hash(document: &TaskVectorDocument) -> String {
+    let mut hasher = Sha256::new();
+    for value in [
+        document.vector_id.as_str(),
+        document.source_kind.as_str(),
+        document.project_id.as_str(),
+        document.project_slug.as_str(),
+        document.project_name.as_str(),
+        document.version_id.as_deref().unwrap_or(""),
+        document.version_name.as_deref().unwrap_or(""),
+        document.task_code.as_deref().unwrap_or(""),
+        document.task_kind.as_str(),
+        document.title.as_str(),
+        document.status.as_str(),
+        document.priority.as_str(),
+        document.knowledge_status.as_str(),
+        document.activity_id.as_deref().unwrap_or(""),
+        document.chunk_id.as_deref().unwrap_or(""),
+        document.attachment_id.as_deref().unwrap_or(""),
+        document.updated_at.as_str(),
+        document.document.as_str(),
+    ] {
+        hasher.update(value.as_bytes());
+        hasher.update([0]);
+    }
+    format!("{:x}", hasher.finalize())
+}
+
 fn search_index_error_message(error: &AppError) -> String {
     match error {
         AppError::Io(message)
@@ -297,18 +327,41 @@ impl SearchRuntime {
         store: SqliteStore,
         batch_size: usize,
     ) -> AppResult<()> {
+        self.process_jobs_with_batch(store, batch_size, false).await
+    }
+
+    pub async fn process_pending_only_jobs_with_batch(
+        &self,
+        store: SqliteStore,
+        batch_size: usize,
+    ) -> AppResult<()> {
+        self.process_jobs_with_batch(store, batch_size, true).await
+    }
+
+    async fn process_jobs_with_batch(
+        &self,
+        store: SqliteStore,
+        batch_size: usize,
+        pending_only: bool,
+    ) -> AppResult<()> {
         if !self.vector_enabled() {
             return Ok(());
         }
 
         let batch_size = batch_size.clamp(1, MAX_INDEX_JOB_BATCH_SIZE);
         let _guard = self.inner.worker_lock.lock().await;
+        let embedding_profile = crate::search::search_embedding_profile(self.config());
         let mut first_error: Option<String> = None;
         loop {
             let mut jobs = Vec::with_capacity(batch_size);
             for _ in 0..batch_size {
                 let now = OffsetDateTime::now_utc();
-                let Some(job) = store.claim_next_search_index_job(now).await? else {
+                let claimed = if pending_only {
+                    store.claim_next_pending_search_index_job(now).await?
+                } else {
+                    store.claim_next_search_index_job(now).await?
+                };
+                let Some(job) = claimed else {
                     break;
                 };
                 jobs.push(job);
@@ -319,17 +372,106 @@ impl SearchRuntime {
 
             let mut documents = Vec::with_capacity(jobs.len());
             let mut queued_task_ids = Vec::with_capacity(jobs.len());
+            let mut unchanged_task_ids = Vec::new();
+            let mut stale_vector_ids_by_task = HashMap::<Uuid, Vec<String>>::new();
+            let mut pending_records_by_task =
+                HashMap::<Uuid, Vec<SearchIndexDocumentUpsert>>::new();
             for job in &jobs {
                 let task_documents = store.get_task_vector_documents(job.task_id).await?;
                 if task_documents.is_empty() {
-                    store.complete_search_index_job(job.task_id).await?;
+                    let existing_documents = store
+                        .list_search_index_documents_for_task(job.task_id)
+                        .await?;
+                    if !existing_documents.is_empty() {
+                        stale_vector_ids_by_task.insert(
+                            job.task_id,
+                            existing_documents
+                                .into_iter()
+                                .map(|record| record.vector_id)
+                                .collect(),
+                        );
+                    } else {
+                        store.complete_search_index_job(job.task_id).await?;
+                    }
                 } else {
-                    queued_task_ids.push(job.task_id);
-                    documents.extend(task_documents);
+                    let existing_documents = store
+                        .list_search_index_documents_for_task(job.task_id)
+                        .await?
+                        .into_iter()
+                        .map(|record| (record.vector_id.clone(), record))
+                        .collect::<HashMap<_, _>>();
+                    let current_vector_ids = task_documents
+                        .iter()
+                        .map(|document| document.vector_id.clone())
+                        .collect::<HashSet<_>>();
+                    let stale_vector_ids = existing_documents
+                        .keys()
+                        .filter(|vector_id| !current_vector_ids.contains(*vector_id))
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    if !stale_vector_ids.is_empty() {
+                        stale_vector_ids_by_task.insert(job.task_id, stale_vector_ids);
+                    }
+
+                    let mut changed_documents = Vec::new();
+                    let mut records = Vec::new();
+                    for document in task_documents {
+                        let document_hash = task_vector_document_hash(&document);
+                        let record = SearchIndexDocumentUpsert {
+                            vector_id: document.vector_id.clone(),
+                            task_id: job.task_id,
+                            source_kind: document.source_kind.clone(),
+                            document_hash: document_hash.clone(),
+                            embedding_fingerprint: embedding_profile.fingerprint.clone(),
+                        };
+                        let unchanged =
+                            existing_documents
+                                .get(&document.vector_id)
+                                .is_some_and(|existing| {
+                                    existing.document_hash == document_hash
+                                        && existing.embedding_fingerprint
+                                            == embedding_profile.fingerprint
+                                });
+                        records.push(record);
+                        if !unchanged {
+                            changed_documents.push(document);
+                        }
+                    }
+
+                    if changed_documents.is_empty()
+                        && !stale_vector_ids_by_task.contains_key(&job.task_id)
+                    {
+                        unchanged_task_ids.push(job.task_id);
+                    } else {
+                        queued_task_ids.push(job.task_id);
+                        documents.extend(changed_documents);
+                        pending_records_by_task.insert(job.task_id, records);
+                    }
                 }
             }
 
             if documents.is_empty() {
+                for task_id in unchanged_task_ids {
+                    store.complete_unchanged_search_index_job(task_id).await?;
+                }
+                for (task_id, stale_vector_ids) in stale_vector_ids_by_task {
+                    if let Err(error) = self.delete_documents_by_ids(&stale_vector_ids).await {
+                        let error_message = search_index_error_message(&error);
+                        if first_error.is_none() {
+                            first_error = Some(error_message.clone());
+                        }
+                        let now = OffsetDateTime::now_utc();
+                        let next_attempt_at = now + time::Duration::seconds(1);
+                        store
+                            .fail_search_index_job(task_id, &error_message, next_attempt_at)
+                            .await?;
+                    } else {
+                        store
+                            .delete_search_index_documents_by_vector_ids(&stale_vector_ids)
+                            .await?;
+                        store.complete_search_index_job(task_id).await?;
+                    }
+                }
                 continue;
             }
 
@@ -339,8 +481,58 @@ impl SearchRuntime {
                 .await
             {
                 Ok(()) => {
+                    let mut all_stale_vector_ids = Vec::new();
+                    let stale_task_ids = stale_vector_ids_by_task
+                        .keys()
+                        .copied()
+                        .collect::<HashSet<_>>();
+                    let queued_task_id_set =
+                        queued_task_ids.iter().copied().collect::<HashSet<_>>();
+                    for vector_ids in stale_vector_ids_by_task.values() {
+                        all_stale_vector_ids.extend(vector_ids.iter().cloned());
+                    }
+                    if !all_stale_vector_ids.is_empty() {
+                        if let Err(error) =
+                            self.delete_documents_by_ids(&all_stale_vector_ids).await
+                        {
+                            let error_message = search_index_error_message(&error);
+                            if first_error.is_none() {
+                                first_error = Some(error_message.clone());
+                            }
+                            let now = OffsetDateTime::now_utc();
+                            for job in jobs.iter().filter(|candidate| {
+                                queued_task_ids.contains(&candidate.task_id)
+                                    || stale_task_ids.contains(&candidate.task_id)
+                            }) {
+                                let next_attempt_at = now
+                                    + time::Duration::seconds(backoff_seconds(job.attempt_count));
+                                store
+                                    .fail_search_index_job(
+                                        job.task_id,
+                                        &error_message,
+                                        next_attempt_at,
+                                    )
+                                    .await?;
+                            }
+                            continue;
+                        }
+                        store
+                            .delete_search_index_documents_by_vector_ids(&all_stale_vector_ids)
+                            .await?;
+                    }
                     for task_id in queued_task_ids {
+                        if let Some(records) = pending_records_by_task.remove(&task_id) {
+                            store.upsert_search_index_documents(&records).await?;
+                        }
                         store.complete_search_index_job(task_id).await?;
+                    }
+                    for task_id in unchanged_task_ids {
+                        store.complete_unchanged_search_index_job(task_id).await?;
+                    }
+                    for task_id in stale_task_ids {
+                        if !queued_task_id_set.contains(&task_id) {
+                            store.complete_search_index_job(task_id).await?;
+                        }
                     }
                 }
                 Err(error) => {
@@ -670,6 +862,27 @@ impl SearchRuntime {
         }
 
         Err(http_status_error(response, "chroma upsert").await)
+    }
+
+    async fn delete_documents_by_ids(&self, vector_ids: &[String]) -> AppResult<()> {
+        if vector_ids.is_empty() {
+            return Ok(());
+        }
+
+        let collection_id = self.ensure_collection_id().await?;
+        let response = self
+            .inner
+            .http
+            .post(self.collection_endpoint(&collection_id, "delete")?)
+            .json(&json!({ "ids": vector_ids }))
+            .send()
+            .await
+            .map_err(|error| AppError::Io(format!("chroma delete request failed: {error}")))?;
+        if response.status().is_success() {
+            return Ok(());
+        }
+
+        Err(http_status_error(response, "chroma delete").await)
     }
 
     async fn ensure_collection_id(&self) -> AppResult<String> {
