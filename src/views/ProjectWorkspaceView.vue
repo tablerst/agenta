@@ -303,16 +303,22 @@ async function jumpToQueuedApproval(error: unknown, slugHint?: string) {
               <h2 class="workspace-title">{{ workspaceTitle }}</h2>
               <p class="workspace-summary">{{ workspaceSummary }}</p>
             </div>
-            <div class="flex flex-wrap items-center gap-2">
-              <span v-if="!isCreatingProject && selectedProject" class="status-pill">{{ t(`status.project.${selectedProject.status}`) }}</span>
-              <span v-else-if="!isCreatingProject && projectSlug" class="status-pill status-pill-warning">
-                {{ t("projects.pendingProject") }}
-              </span>
-              <span v-if="!isCreatingProject && selectedProjectSlug" class="status-pill">{{ selectedProjectSlug }}</span>
-              <span v-if="!isCreatingProject && selectedProject" class="status-pill">
-                {{ t("projects.updated") }} {{ formatDateTime(selectedProject.updated_at) }}
-              </span>
-            </div>
+            <dl v-if="!isCreatingProject" class="workspace-header-meta-strip">
+              <div class="workspace-header-meta-item">
+                <dt>{{ t("common.status") }}</dt>
+                <dd v-if="selectedProject">{{ t(`status.project.${selectedProject.status}`) }}</dd>
+                <dd v-else-if="projectSlug">{{ t("projects.pendingProject") }}</dd>
+                <dd v-else>{{ t("common.na") }}</dd>
+              </div>
+              <div v-if="selectedProjectSlug" class="workspace-header-meta-item">
+                <dt>{{ t("projects.fields.slug") }}</dt>
+                <dd>{{ selectedProjectSlug }}</dd>
+              </div>
+              <div v-if="selectedProject" class="workspace-header-meta-item">
+                <dt>{{ t("projects.updated") }}</dt>
+                <dd>{{ formatDateTime(selectedProject.updated_at) }}</dd>
+              </div>
+            </dl>
           </div>
         </div>
 

@@ -132,6 +132,8 @@ const taskSortOptions = [
   "updated_at",
   "created_at",
 ] as const;
+const openTaskStatusValues = ["draft", "ready", "in_progress", "blocked"] as const satisfies readonly TaskStatus[];
+const openTaskStatusSet = new Set<TaskStatus>(openTaskStatusValues);
 const versionFilterOptions = computed(() => [
   { value: "", label: t("tasks.allVersions") },
   ...projectsStore.versions.map((version) => ({ value: version.version_id, label: version.name })),
@@ -198,6 +200,28 @@ const taskListItems = computed(() => {
   }
   return tasksStore.tasks.filter((item) => selectedStatusSet.value.has(item.status));
 });
+const taskSummaryTotalCount = computed(() => tasksStore.taskSummary?.total ?? taskListItems.value.length);
+const taskSummaryOpenCount = computed(() => {
+  const counts = tasksStore.taskSummary?.status_counts;
+  if (!counts) {
+    return taskListItems.value.filter((task) => openTaskStatusSet.has(task.status)).length;
+  }
+  return counts.draft + counts.ready + counts.in_progress + counts.blocked;
+});
+const taskSummaryDoneCount = computed(
+  () => tasksStore.taskSummary?.status_counts.done ?? taskListItems.value.filter((task) => task.status === "done").length,
+);
+const taskSummaryReusableCount = computed(
+  () =>
+    tasksStore.taskSummary?.knowledge_counts.reusable ??
+    taskListItems.value.filter((task) => task.knowledge_status === "reusable").length,
+);
+const isAllSummaryFilterActive = computed(
+  () => selectedStatusValues.value.length === 0 && !selectedKnowledgeStatusFilter.value,
+);
+const isOpenSummaryFilterActive = computed(() => selectedStatusesMatch(openTaskStatusValues));
+const isDoneSummaryFilterActive = computed(() => selectedStatusesMatch(["done"] as const));
+const isReusableSummaryFilterActive = computed(() => selectedKnowledgeStatusFilter.value === "reusable");
 const projectSearchTasks = computed(() => {
   const tasks = projectSearchResults.value?.tasks ?? [];
   if (selectedStatusSet.value.size === 0) {
@@ -293,6 +317,14 @@ function serializeStatusValues(value: string | string[]) {
   return values.length > 0 ? values.join(",") : undefined;
 }
 
+function selectedStatusesMatch(statuses: readonly TaskStatus[]) {
+  if (selectedStatusValues.value.length !== statuses.length) {
+    return false;
+  }
+  const nextStatusSet = new Set(statuses);
+  return selectedStatusValues.value.every((status) => nextStatusSet.has(status));
+}
+
 function buildTaskQuery(overrides: Partial<Record<TaskQueryKey, string | undefined>> = {}) {
   return mergeWorkspaceQuery({
     activity: queryValue(overrides as Record<TaskQueryKey, string | undefined>, "activity", selectedActivityId.value),
@@ -330,6 +362,8 @@ function buildTaskListFilters() {
   return {
     project: selectedProjectSlug.value || undefined,
     kind: selectedTaskKindFilter.value || undefined,
+    knowledge_status: selectedKnowledgeStatusFilter.value || undefined,
+    priority: selectedPriorityFilter.value || undefined,
     status: selectedStatusValues.value.length === 1 ? selectedStatusValues.value[0] : undefined,
     task_code_prefix: taskCodePrefixFilter.value || undefined,
     sort_by: selectedSortBy.value || undefined,
@@ -502,6 +536,44 @@ async function updateVersionFilter(version: string) {
 async function updateStatusFilters(statuses: string | string[]) {
   isCreatingTask.value = false;
   await updateQuery({ status: serializeStatusValues(statuses), task: undefined });
+}
+
+async function applyTaskSummaryFilter(filter: "all" | "open" | "done" | "reusable") {
+  isCreatingTask.value = false;
+
+  if (filter === "all") {
+    await updateQuery({ status: undefined, task: undefined });
+    selectedKnowledgeStatusFilter.value = "";
+    return;
+  }
+
+  if (filter === "reusable") {
+    await updateQuery({ status: undefined, task: undefined });
+    selectedKnowledgeStatusFilter.value = "reusable";
+    return;
+  }
+
+  await updateQuery({
+    status: filter === "open" ? serializeStatusValues([...openTaskStatusValues]) : "done",
+    task: undefined,
+  });
+  selectedKnowledgeStatusFilter.value = "";
+}
+
+function taskStatusPillClass(status: TaskStatus) {
+  return {
+    "status-pill-success": status === "done",
+    "status-pill-warning": status === "blocked" || status === "in_progress",
+    "status-pill-danger": status === "cancelled",
+    "status-pill-preview": status === "ready",
+  };
+}
+
+function knowledgeStatusPillClass(status: KnowledgeStatus) {
+  return {
+    "status-pill-success": status === "reusable",
+    "status-pill-preview": status === "working",
+  };
 }
 
 function handleTabKeydown(event: KeyboardEvent, tab: TaskDetailTab) {
@@ -935,7 +1007,9 @@ async function jumpToQueuedApproval(error: unknown) {
               <p class="section-label">{{ t("tasks.listKicker") }}</p>
               <h2 class="text-lg font-semibold text-[var(--text-main)]">{{ t("tasks.listTitle") }}</h2>
             </div>
-            <div class="flex flex-wrap items-center gap-2">
+          </div>
+          <div class="workspace-filter-toolbar">
+            <div class="task-summary-strip" role="group" :aria-label="t('tasks.filters')">
               <span v-if="selectedProjectLabel" class="status-pill">{{ selectedProjectLabel }}</span>
               <template v-if="isProjectSearchActive">
                 <span v-if="projectSearchLoading" class="status-pill">{{ t("search.loading") }}</span>
@@ -953,20 +1027,44 @@ async function jumpToQueuedApproval(error: unknown) {
                 </template>
               </template>
               <template v-else>
-                <span class="status-pill">{{ taskListItems.length }}</span>
-                <span v-if="tasksStore.taskSummary" class="status-pill">
-                  {{ t("tasks.summaryReady", { count: tasksStore.taskSummary.status_counts.ready }) }}
-                </span>
-                <span v-if="tasksStore.taskSummary" class="status-pill">
-                  {{ t("tasks.summaryDone", { count: tasksStore.taskSummary.status_counts.done }) }}
-                </span>
-                <span v-if="tasksStore.taskSummary" class="status-pill">
-                  {{ t("tasks.summaryReusable", { count: tasksStore.taskSummary.knowledge_counts.reusable }) }}
-                </span>
+                <button
+                  class="filter-chip task-summary-chip spotlight-surface"
+                  :class="{ 'filter-chip-active': isAllSummaryFilterActive }"
+                  type="button"
+                  :aria-pressed="isAllSummaryFilterActive"
+                  @click="applyTaskSummaryFilter('all')"
+                >
+                  {{ t("tasks.summaryAll", { count: taskSummaryTotalCount }) }}
+                </button>
+                <button
+                  class="filter-chip task-summary-chip spotlight-surface"
+                  :class="{ 'filter-chip-active': isOpenSummaryFilterActive }"
+                  type="button"
+                  :aria-pressed="isOpenSummaryFilterActive"
+                  @click="applyTaskSummaryFilter('open')"
+                >
+                  {{ t("tasks.summaryOpen", { count: taskSummaryOpenCount }) }}
+                </button>
+                <button
+                  class="filter-chip task-summary-chip spotlight-surface"
+                  :class="{ 'filter-chip-active': isDoneSummaryFilterActive }"
+                  type="button"
+                  :aria-pressed="isDoneSummaryFilterActive"
+                  @click="applyTaskSummaryFilter('done')"
+                >
+                  {{ t("tasks.summaryDone", { count: taskSummaryDoneCount }) }}
+                </button>
+                <button
+                  class="filter-chip task-summary-chip spotlight-surface"
+                  :class="{ 'filter-chip-active': isReusableSummaryFilterActive }"
+                  type="button"
+                  :aria-pressed="isReusableSummaryFilterActive"
+                  @click="applyTaskSummaryFilter('reusable')"
+                >
+                  {{ t("tasks.summaryReusable", { count: taskSummaryReusableCount }) }}
+                </button>
               </template>
             </div>
-          </div>
-          <div class="workspace-filter-toolbar">
             <div class="workspace-filter-primary">
               <label class="compact-field compact-field-wide workspace-search-field">
                 <span class="field-label">{{ t("tasks.projectSearch.label") }}</span>
@@ -1132,24 +1230,24 @@ async function jumpToQueuedApproval(error: unknown) {
                     v-for="task in projectSearchTasks"
                     :key="task.task_id"
                     v-spotlight
-                    class="list-row spotlight-surface"
+                    class="list-row task-row spotlight-surface"
                     :class="{ 'list-row-active': selectedTaskId === task.task_id }"
                     @click="selectSearchTask(task)"
                   >
-                    <SquareKanban :size="16" />
-                    <div class="min-w-0 flex-1 space-y-2">
-                      <div class="flex items-center justify-between gap-3">
-                        <p class="truncate text-sm font-medium text-[var(--text-main)]">
-                          {{ task.task_code ? `${task.task_code} · ${task.title}` : task.title }}
-                        </p>
-                        <div class="flex flex-wrap items-center justify-end gap-2">
-                          <span v-if="task.task_code" class="status-pill">{{ task.task_code }}</span>
-                          <span class="status-pill">{{ t(`status.taskKind.${task.task_kind}`) }}</span>
-                          <span class="status-pill">{{ t(`status.task.${task.status}`) }}</span>
-                          <span class="status-pill">{{ t(`search.source.${task.retrieval_source}`) }}</span>
-                        </div>
+                    <SquareKanban :size="16" class="task-row-icon" />
+                    <div class="task-row-body">
+                      <div class="task-row-title-line">
+                        <span v-if="task.task_code" class="task-row-code">{{ task.task_code }}</span>
+                        <span class="task-row-title">{{ task.title }}</span>
                       </div>
-                      <p class="truncate text-xs text-[var(--text-muted)]">{{ task.summary }}</p>
+                      <p class="task-row-summary">{{ task.summary }}</p>
+                      <div class="task-row-badge-strip">
+                        <span class="status-pill">{{ t(`status.taskKind.${task.task_kind}`) }}</span>
+                        <span class="status-pill" :class="taskStatusPillClass(task.status)">
+                          {{ t(`status.task.${task.status}`) }}
+                        </span>
+                        <span class="status-pill status-pill-preview">{{ t(`search.source.${task.retrieval_source}`) }}</span>
+                      </div>
                       <p v-if="task.matched_fields.length > 0" class="truncate text-[11px] text-[var(--text-muted)]">
                         {{ t("tasks.projectSearch.matchedFields") }} {{ task.matched_fields.join(" · ") }}
                       </p>
@@ -1161,7 +1259,7 @@ async function jumpToQueuedApproval(error: unknown) {
                         <span v-html="renderHighlightedEvidence(task.evidence_snippet, projectSearchResults?.query)" />
                       </p>
                     </div>
-                    <div class="list-row-meta">
+                    <div class="list-row-meta task-row-meta">
                       <span>{{ t(`status.priority.${task.priority}`) }}</span>
                       <span>{{ t(`status.knowledge.${task.knowledge_status}`) }}</span>
                     </div>
@@ -1223,27 +1321,30 @@ async function jumpToQueuedApproval(error: unknown) {
               v-for="task in taskListItems"
               :key="task.task_id"
               v-spotlight
-              class="list-row spotlight-surface"
+              class="list-row task-row spotlight-surface"
               :class="{ 'list-row-active': selectedTask?.task_id === task.task_id }"
               @click="selectTask(task.task_id)"
             >
-              <SquareKanban :size="16" />
-              <div class="min-w-0 flex-1 space-y-2">
-                <div class="flex items-center justify-between gap-3">
-                  <p class="truncate text-sm font-medium text-[var(--text-main)]">
-                    {{ task.task_code ? `${task.task_code} · ${task.title}` : task.title }}
-                  </p>
-                  <div class="flex flex-wrap items-center justify-end gap-2">
-                    <span class="status-pill">{{ t(`status.taskKind.${task.task_kind}`) }}</span>
-                    <span class="status-pill">{{ t(`status.knowledge.${task.knowledge_status}`) }}</span>
-                    <span class="status-pill">{{ t(`status.task.${task.status}`) }}</span>
-                  </div>
+              <SquareKanban :size="16" class="task-row-icon" />
+              <div class="task-row-body">
+                <div class="task-row-title-line">
+                  <span v-if="task.task_code" class="task-row-code">{{ task.task_code }}</span>
+                  <span class="task-row-title">{{ task.title }}</span>
                 </div>
-                <p class="truncate text-xs text-[var(--text-muted)]">
+                <p class="task-row-summary">
                   {{ task.latest_note_summary || task.summary || task.task_context_digest }}
                 </p>
+                <div class="task-row-badge-strip">
+                  <span class="status-pill">{{ t(`status.taskKind.${task.task_kind}`) }}</span>
+                  <span class="status-pill" :class="knowledgeStatusPillClass(task.knowledge_status)">
+                    {{ t(`status.knowledge.${task.knowledge_status}`) }}
+                  </span>
+                  <span class="status-pill" :class="taskStatusPillClass(task.status)">
+                    {{ t(`status.task.${task.status}`) }}
+                  </span>
+                </div>
               </div>
-              <div class="list-row-meta">
+              <div class="list-row-meta task-row-meta">
                 <span>{{ t(`status.priority.${task.priority}`) }}</span>
                 <span>{{ formatDateTime(task.updated_at) }}</span>
               </div>
@@ -1342,29 +1443,49 @@ async function jumpToQueuedApproval(error: unknown) {
       </div>
 
       <div v-else-if="selectedTask" class="workspace-pane-stack">
-        <section class="glass-panel p-5">
-            <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
-              <div>
+        <section class="task-detail-shell">
+            <div class="task-detail-heading">
+              <div class="task-detail-heading-copy">
                 <p class="section-label">{{ t("tasks.taskDetail") }}</p>
-                <h2 class="text-2xl font-semibold text-[var(--text-main)]">{{ selectedTask.title }}</h2>
-                <p class="mt-2 max-w-3xl text-sm leading-6 text-[var(--text-muted)]">
+                <h2 class="task-detail-title">{{ selectedTask.title }}</h2>
+                <p class="task-detail-summary">
                   {{ selectedTask.summary || t("tasks.noSummary") }}
                 </p>
               </div>
-              <div class="flex flex-wrap items-center gap-2">
-                <span v-if="selectedTask.task_code" class="status-pill">{{ selectedTask.task_code }}</span>
-                <span class="status-pill">{{ t(`status.taskKind.${selectedTask.task_kind}`) }}</span>
-                <span class="status-pill">{{ t(`status.knowledge.${selectedTask.knowledge_status}`) }}</span>
-                <span class="status-pill">{{ t(`status.task.${selectedTask.status}`) }}</span>
-                <span class="status-pill">{{ t(`status.priority.${selectedTask.priority}`) }}</span>
-                <span class="status-pill">
-                  {{ selectedTask.ready_to_start ? t("tasks.readyToStart") : t("tasks.notReadyToStart") }}
-                </span>
-                <span class="status-pill">{{ t("tasks.childCount", { count: selectedTask.child_count }) }}</span>
-                <span class="status-pill">
-                  {{ t("tasks.blockerCount", { count: selectedTask.open_blocker_count }) }}
-                </span>
-              </div>
+              <dl class="task-detail-meta-strip">
+                <div v-if="selectedTask.task_code" class="task-detail-meta-item">
+                  <dt>{{ t("tasks.fields.taskCode") }}</dt>
+                  <dd>{{ selectedTask.task_code }}</dd>
+                </div>
+                <div class="task-detail-meta-item">
+                  <dt>{{ t("tasks.fields.taskKind") }}</dt>
+                  <dd>{{ t(`status.taskKind.${selectedTask.task_kind}`) }}</dd>
+                </div>
+                <div class="task-detail-meta-item">
+                  <dt>{{ t("tasks.fields.knowledgeStatus") }}</dt>
+                  <dd>{{ t(`status.knowledge.${selectedTask.knowledge_status}`) }}</dd>
+                </div>
+                <div class="task-detail-meta-item">
+                  <dt>{{ t("common.status") }}</dt>
+                  <dd>{{ t(`status.task.${selectedTask.status}`) }}</dd>
+                </div>
+                <div class="task-detail-meta-item">
+                  <dt>{{ t("tasks.fields.priority") }}</dt>
+                  <dd>{{ t(`status.priority.${selectedTask.priority}`) }}</dd>
+                </div>
+                <div class="task-detail-meta-item">
+                  <dt>{{ t("tasks.readiness") }}</dt>
+                  <dd>{{ selectedTask.ready_to_start ? t("tasks.readyToStart") : t("tasks.notReadyToStart") }}</dd>
+                </div>
+                <div class="task-detail-meta-item">
+                  <dt>{{ t("tasks.childTasks") }}</dt>
+                  <dd>{{ selectedTask.child_count }}</dd>
+                </div>
+                <div class="task-detail-meta-item">
+                  <dt>{{ t("tasks.blockedByTasks") }}</dt>
+                  <dd>{{ selectedTask.open_blocker_count }}</dd>
+                </div>
+              </dl>
             </div>
 
           <div class="task-detail-tablist" role="tablist" :aria-label="t('tasks.detailTabs')">
