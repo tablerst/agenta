@@ -1,0 +1,2 @@
+# Keep SQLx migration checksums stable across platforms.
+src-tauri/migrations/*.sql text eol=lf

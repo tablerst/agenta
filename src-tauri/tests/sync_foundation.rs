@@ -13,6 +13,7 @@ use agenta_lib::{
 };
 use assert_cmd::Command;
 use serde_json::Value;
+use sha2::{Digest, Sha384};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::Row;
@@ -30,6 +31,26 @@ const FAIL_SYNC_OUTBOX_WRITE_ENV: &str = "AGENTA_TEST_FAIL_SYNC_OUTBOX_WRITE";
 fn environment_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
+}
+
+async fn open_test_sqlite_pool(
+    database_path: &Path,
+) -> Result<sqlx::SqlitePool, Box<dyn std::error::Error>> {
+    Ok(SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            SqliteConnectOptions::new()
+                .filename(database_path)
+                .create_if_missing(false)
+                .foreign_keys(true),
+        )
+        .await?)
+}
+
+fn test_migration_checksum_with_line_ending(sql: &str, line_ending: &str) -> Vec<u8> {
+    let normalized = sql.replace("\r\n", "\n").replace('\r', "\n");
+    let with_line_ending = normalized.replace('\n', line_ending);
+    Sha384::digest(with_line_ending.as_bytes()).to_vec()
 }
 
 #[tokio::test]
@@ -139,6 +160,58 @@ async fn sync_migrations_create_tables_and_cli_status_is_stable(
     std::env::remove_var(POSTGRES_MAX_CONNS_ENV);
     std::env::remove_var(POSTGRES_MIN_CONNS_ENV);
     std::env::remove_var(POSTGRES_MAX_CONN_LIFETIME_ENV);
+    Ok(())
+}
+
+#[tokio::test]
+async fn migration_line_ending_checksum_mismatch_is_repaired(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let tempdir = TempDir::new()?;
+    let data_dir = tempdir.path().join("data");
+    let attachments_dir = data_dir.join("attachments");
+    let database_path = data_dir.join("agenta.sqlite3");
+
+    let store = SqliteStore::open(&data_dir, &database_path, &attachments_dir).await?;
+    drop(store);
+
+    let pool = open_test_sqlite_pool(&database_path).await?;
+    let current_checksum: Vec<u8> =
+        sqlx::query_scalar("SELECT checksum FROM _sqlx_migrations WHERE version = 1")
+            .fetch_one(&pool)
+            .await?;
+
+    let migration_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("migrations")
+        .join("0001_initial_schema.sql");
+    let migration_sql = std::fs::read_to_string(migration_path)?;
+    let lf_checksum = test_migration_checksum_with_line_ending(&migration_sql, "\n");
+    let crlf_checksum = test_migration_checksum_with_line_ending(&migration_sql, "\r\n");
+    let alternate_checksum = if current_checksum == lf_checksum {
+        crlf_checksum
+    } else if current_checksum == crlf_checksum {
+        lf_checksum
+    } else {
+        panic!("current migration checksum is not an LF/CRLF variant");
+    };
+    assert_ne!(current_checksum, alternate_checksum);
+
+    sqlx::query("UPDATE _sqlx_migrations SET checksum = ? WHERE version = 1")
+        .bind(&alternate_checksum)
+        .execute(&pool)
+        .await?;
+    pool.close().await;
+
+    let store = SqliteStore::open(&data_dir, &database_path, &attachments_dir).await?;
+    drop(store);
+
+    let pool = open_test_sqlite_pool(&database_path).await?;
+    let repaired_checksum: Vec<u8> =
+        sqlx::query_scalar("SELECT checksum FROM _sqlx_migrations WHERE version = 1")
+            .fetch_one(&pool)
+            .await?;
+    assert_eq!(repaired_checksum, current_checksum);
+    pool.close().await;
+
     Ok(())
 }
 

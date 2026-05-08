@@ -13,6 +13,8 @@ mod tasks;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use sha2::{Digest, Sha384};
+use sqlx::migrate::{Migration, Migrator};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteRow};
 use sqlx::{query, QueryBuilder, Row, Sqlite, SqlitePool, Transaction};
 use time::OffsetDateTime;
@@ -32,6 +34,8 @@ use mapping::{format_time, map_activity, map_task, parse_time};
 use task_helpers::*;
 
 const SEARCH_INDEX_JOB_LEASE_SECONDS: i64 = 300;
+
+static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
 #[derive(Clone)]
 pub struct SqliteStore {
@@ -212,14 +216,138 @@ impl SqliteStore {
             .max_connections(5)
             .connect_with(options)
             .await?;
-        sqlx::migrate!("./migrations")
-            .run(&pool)
-            .await
-            .map_err(AppError::from)?;
+        repair_line_ending_only_migration_checksums(&pool, &MIGRATOR).await?;
+        MIGRATOR.run(&pool).await.map_err(AppError::from)?;
 
         Ok(Self {
             pool,
             attachments_dir: attachments_dir.to_path_buf(),
         })
+    }
+}
+
+async fn repair_line_ending_only_migration_checksums(
+    pool: &SqlitePool,
+    migrator: &Migrator,
+) -> AppResult<()> {
+    let table_exists: Option<(i64,)> = sqlx::query_as(
+        r#"
+        SELECT 1
+        FROM sqlite_master
+        WHERE type = 'table'
+          AND name = '_sqlx_migrations'
+        "#,
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    if table_exists.is_none() {
+        return Ok(());
+    }
+
+    let rows: Vec<(i64, Vec<u8>)> = sqlx::query_as(
+        r#"
+        SELECT version, checksum
+        FROM _sqlx_migrations
+        WHERE success = TRUE
+        ORDER BY version
+        "#,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    for (version, applied_checksum) in rows {
+        let Some(migration) = migrator
+            .iter()
+            .find(|migration| migration.version == version)
+        else {
+            continue;
+        };
+
+        if applied_checksum.as_slice() == migration.checksum.as_ref() {
+            continue;
+        }
+
+        if migration_line_ending_checksum_matches(migration, &applied_checksum) {
+            sqlx::query(
+                r#"
+                UPDATE _sqlx_migrations
+                SET checksum = ?
+                WHERE version = ?
+                  AND checksum = ?
+                "#,
+            )
+            .bind(migration.checksum.as_ref())
+            .bind(version)
+            .bind(applied_checksum)
+            .execute(pool)
+            .await?;
+
+            tracing::info!(
+                migration_version = version,
+                "repaired SQLx migration checksum after line-ending normalization"
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn migration_line_ending_checksum_matches(migration: &Migration, checksum: &[u8]) -> bool {
+    let normalized_lf = normalize_sql_line_endings_to_lf(migration.sql.as_ref());
+    let normalized_crlf = normalized_lf.replace('\n', "\r\n");
+
+    checksum == sha384_bytes(normalized_lf.as_bytes()).as_slice()
+        || checksum == sha384_bytes(normalized_crlf.as_bytes()).as_slice()
+}
+
+fn normalize_sql_line_endings_to_lf(sql: &str) -> String {
+    sql.replace("\r\n", "\n").replace('\r', "\n")
+}
+
+fn sha384_bytes(bytes: &[u8]) -> Vec<u8> {
+    Sha384::digest(bytes).to_vec()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::borrow::Cow;
+
+    use super::*;
+    use sqlx::migrate::MigrationType;
+
+    #[test]
+    fn migration_line_ending_checksum_matcher_accepts_only_lf_crlf_variants() {
+        let sql = "CREATE TABLE example (\n    id TEXT PRIMARY KEY\n);\n";
+        let migration = Migration {
+            version: 1,
+            description: Cow::Borrowed("example"),
+            migration_type: MigrationType::Simple,
+            sql: Cow::Borrowed(sql),
+            checksum: Cow::Owned(sha384_bytes(sql.as_bytes())),
+            no_tx: false,
+        };
+
+        let crlf_checksum = sha384_bytes(
+            normalize_sql_line_endings_to_lf(sql)
+                .replace('\n', "\r\n")
+                .as_bytes(),
+        );
+        let changed_checksum = sha384_bytes(
+            "CREATE TABLE example (\n    id TEXT PRIMARY KEY,\n    name TEXT\n);\n".as_bytes(),
+        );
+
+        assert!(migration_line_ending_checksum_matches(
+            &migration,
+            migration.checksum.as_ref()
+        ));
+        assert!(migration_line_ending_checksum_matches(
+            &migration,
+            &crlf_checksum
+        ));
+        assert!(!migration_line_ending_checksum_matches(
+            &migration,
+            &changed_checksum
+        ));
     }
 }

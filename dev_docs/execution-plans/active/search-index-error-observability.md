@@ -57,5 +57,5 @@
 
 ## 后续讨论
 
-- 数据库迁移兼容和 checksum mismatch 的恢复策略需要单独讨论。当前倾向是先做诊断态和备份指引，不自动修改 `_sqlx_migrations`。
+- 数据库迁移兼容和 checksum mismatch 的恢复策略已在 `MigrationCompat-01` 收口：启动前只对 LF/CRLF 换行符等价导致的 checksum mismatch 做受限修复，真实 SQL 内容变化仍继续报 `migration_error`。
 - 后续可增加旧版本 SQLite fixture，覆盖“上一发布版数据库被新二进制打开”的升级路径。
