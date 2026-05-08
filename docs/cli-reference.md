@@ -225,7 +225,7 @@ agenta search evidence --attachment-id <evidence_attachment_id>
 - `vector_status=ready`: Chroma 可用且实际贡献向量结果
 - `pending_index_jobs`: 仍待处理的向量索引任务数
 
-当前 `v0.1.2` 打包闸口见 [v0.1.2 发布与打包说明](v0.1.2-release.md)；SearchV2 的专项发布、回滚策略和验收命令仍见 [SearchV2 发布与运维说明](search-v2-release.md)。
+当前 `v0.1.3` 打包闸口见 [v0.1.3 发布与打包说明](v0.1.3-release.md)；历史 `v0.1.2` 发布口径见 [v0.1.2 发布与打包说明](v0.1.2-release.md)，SearchV2 的专项发布、回滚策略和验收命令仍见 [SearchV2 发布与运维说明](search-v2-release.md)。
 
 ### 搜索索引回填
 

@@ -7,6 +7,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -18,6 +19,7 @@ const packageJsonPath = path.join(repoRoot, "package.json");
 const tauriConfigPath = path.join(repoRoot, "src-tauri", "tauri.conf.json");
 const cargoTomlPath = path.join(repoRoot, "src-tauri", "Cargo.toml");
 const cargoLockPath = path.join(repoRoot, "src-tauri", "Cargo.lock");
+const tauriBundleDir = path.join(repoRoot, "src-tauri", "target", "release", "bundle");
 const releaseArtifactsRoot = path.join(repoRoot, "target", "release-artifacts");
 const semverPattern = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 const binaryNames = ["agenta", "agenta-cli", "agenta-mcp", "agenta-desktop"];
@@ -95,6 +97,7 @@ function main() {
     }
 
     run("cargo", cargoCliBuildArgs, buildEnv);
+    rmSync(tauriBundleDir, { recursive: true, force: true });
     run(packageBuildCommand.command, packageBuildCommand.args, buildEnv);
 
     mkdirSync(path.join(releaseDir, "installers"), { recursive: true });
@@ -364,14 +367,13 @@ function run(command, args, extraEnv = {}) {
 }
 
 function copyInstallers(releaseDir) {
-  const bundleDir = path.join(repoRoot, "src-tauri", "target", "release", "bundle");
-  if (!existsSync(bundleDir)) {
-    throw new Error(`Missing Tauri bundle output: ${bundleDir}`);
+  if (!existsSync(tauriBundleDir)) {
+    throw new Error(`Missing Tauri bundle output: ${tauriBundleDir}`);
   }
 
   const artifacts = [];
-  for (const sourcePath of listFiles(bundleDir)) {
-    const relativeSource = path.relative(bundleDir, sourcePath);
+  for (const sourcePath of listFiles(tauriBundleDir)) {
+    const relativeSource = path.relative(tauriBundleDir, sourcePath);
     const targetPath = path.join(releaseDir, "installers", relativeSource);
     mkdirSync(path.dirname(targetPath), { recursive: true });
     copyFileSync(sourcePath, targetPath);
@@ -379,7 +381,7 @@ function copyInstallers(releaseDir) {
   }
 
   if (artifacts.length === 0) {
-    throw new Error(`No installer artifacts found in ${bundleDir}`);
+    throw new Error(`No installer artifacts found in ${tauriBundleDir}`);
   }
 
   return artifacts;
