@@ -41,7 +41,7 @@ const searchRunCompletedCount = computed(() => {
   if (!run) {
     return 0;
   }
-  return Math.max(0, run.queued - run.remaining_count);
+  return Math.max(0, run.processed);
 });
 const searchRunProgressPercent = computed(() => {
   const run = displaySearchRun.value;
@@ -333,41 +333,57 @@ onUnmounted(() => {
                 :aria-valuemin="0"
                 :aria-valuemax="100"
                 :aria-valuenow="searchRunProgressPercent"
+                tabindex="0"
               >
                 <div
                   class="runtime-search-progress-fill"
                   :style="{ width: `${searchRunProgressPercent}%` }"
                 />
+                <div class="runtime-search-progress-popover" role="tooltip">
+                  <dl class="runtime-search-popover-grid">
+                    <div>
+                      <dt>{{ t("runtime.searchIndex.scanned") }}</dt>
+                      <dd>{{ displaySearchRun.scanned }}</dd>
+                    </div>
+                    <div>
+                      <dt>{{ t("runtime.searchIndex.included") }}</dt>
+                      <dd>{{ displaySearchRun.queued }}</dd>
+                    </div>
+                    <div>
+                      <dt>{{ t("runtime.searchIndex.processed") }}</dt>
+                      <dd>{{ displaySearchRun.processed }}</dd>
+                    </div>
+                    <div>
+                      <dt>{{ t("runtime.searchIndex.succeeded") }}</dt>
+                      <dd>{{ displaySearchRun.succeeded }}</dd>
+                    </div>
+                    <div>
+                      <dt>{{ t("runtime.searchIndex.unchanged") }}</dt>
+                      <dd>{{ displaySearchRun.unchanged }}</dd>
+                    </div>
+                    <div>
+                      <dt>{{ t("runtime.searchIndex.failed") }}</dt>
+                      <dd>{{ displaySearchRun.failed }}</dd>
+                    </div>
+                    <div>
+                      <dt>{{ t("runtime.searchIndex.remaining") }}</dt>
+                      <dd>{{ displaySearchRun.remaining_count }}</dd>
+                    </div>
+                    <div>
+                      <dt>{{ t("runtime.searchIndex.retrying") }}</dt>
+                      <dd>{{ displaySearchRun.retrying_count }}</dd>
+                    </div>
+                    <div>
+                      <dt>{{ t("runtime.searchIndex.batchSize") }}</dt>
+                      <dd>{{ displaySearchRun.batch_size }}</dd>
+                    </div>
+                    <div>
+                      <dt>{{ t("runtime.searchIndex.lastUpdated") }}</dt>
+                      <dd>{{ runtimeConsole.searchIndexLastUpdatedLabel.value }}</dd>
+                    </div>
+                  </dl>
+                </div>
               </div>
-
-              <dl class="runtime-search-run-strip">
-                <div>
-                  <dt>{{ t("runtime.searchIndex.completed") }}</dt>
-                  <dd>{{ searchRunCompletedCount }}</dd>
-                </div>
-                <div>
-                  <dt>{{ t("runtime.searchIndex.remaining") }}</dt>
-                  <dd>{{ displaySearchRun.remaining_count }}</dd>
-                </div>
-                <div>
-                  <dt>{{ t("runtime.searchIndex.retrying") }}</dt>
-                  <dd>{{ displaySearchRun.retrying_count }}</dd>
-                </div>
-                <div>
-                  <dt>{{ t("runtime.searchIndex.lastUpdated") }}</dt>
-                  <dd>{{ runtimeConsole.searchIndexLastUpdatedLabel.value }}</dd>
-                </div>
-                <div>
-                  <dt>{{ t("runtime.searchIndex.nextRetryAt") }}</dt>
-                  <dd>
-                    {{ formatDateTime(runtimeConsole.searchIndexStatus.value?.next_retry_at) }}
-                  </dd>
-                </div>
-                <div>
-                  <dt>{{ t("runtime.searchIndex.batchSize") }}</dt>
-                  <dd>{{ displaySearchRun.batch_size }}</dd>
-                </div>
-              </dl>
             </section>
 
             <section class="runtime-block runtime-block-nested">
@@ -667,11 +683,56 @@ onUnmounted(() => {
                 :aria-valuemin="0"
                 :aria-valuemax="100"
                 :aria-valuenow="searchRunProgressPercent"
+                tabindex="0"
               >
                 <div
                   class="runtime-search-progress-fill"
                   :style="{ width: `${searchRunProgressPercent}%` }"
                 />
+                <div class="runtime-search-progress-popover" role="tooltip">
+                  <dl class="runtime-search-popover-grid">
+                    <div>
+                      <dt>{{ t("runtime.searchIndex.scanned") }}</dt>
+                      <dd>{{ displaySearchRun.scanned }}</dd>
+                    </div>
+                    <div>
+                      <dt>{{ t("runtime.searchIndex.included") }}</dt>
+                      <dd>{{ displaySearchRun.queued }}</dd>
+                    </div>
+                    <div>
+                      <dt>{{ t("runtime.searchIndex.processed") }}</dt>
+                      <dd>{{ displaySearchRun.processed }}</dd>
+                    </div>
+                    <div>
+                      <dt>{{ t("runtime.searchIndex.succeeded") }}</dt>
+                      <dd>{{ displaySearchRun.succeeded }}</dd>
+                    </div>
+                    <div>
+                      <dt>{{ t("runtime.searchIndex.unchanged") }}</dt>
+                      <dd>{{ displaySearchRun.unchanged }}</dd>
+                    </div>
+                    <div>
+                      <dt>{{ t("runtime.searchIndex.failed") }}</dt>
+                      <dd>{{ displaySearchRun.failed }}</dd>
+                    </div>
+                    <div>
+                      <dt>{{ t("runtime.searchIndex.remaining") }}</dt>
+                      <dd>{{ displaySearchRun.remaining_count }}</dd>
+                    </div>
+                    <div>
+                      <dt>{{ t("runtime.searchIndex.retrying") }}</dt>
+                      <dd>{{ displaySearchRun.retrying_count }}</dd>
+                    </div>
+                    <div>
+                      <dt>{{ t("runtime.searchIndex.batchSize") }}</dt>
+                      <dd>{{ displaySearchRun.batch_size }}</dd>
+                    </div>
+                    <div>
+                      <dt>{{ t("runtime.searchIndex.lastUpdated") }}</dt>
+                      <dd>{{ runtimeConsole.searchIndexLastUpdatedLabel.value }}</dd>
+                    </div>
+                  </dl>
+                </div>
               </div>
               <details class="runtime-search-advanced">
                 <summary>{{ t("runtime.searchIndex.runDetails") }}</summary>

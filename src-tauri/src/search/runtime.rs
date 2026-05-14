@@ -303,7 +303,7 @@ impl SearchRuntime {
         let error_log_path = self.inner.error_log_path.clone();
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(200)).await;
-            if let Err(error) = runtime.process_pending_jobs(store).await {
+            if let Err(error) = runtime.process_automatic_incremental_run(store).await {
                 if let Some(path) = error_log_path {
                     let _ = record_app_error(
                         &path,
@@ -338,11 +338,80 @@ impl SearchRuntime {
         self.process_jobs_with_batch(store, batch_size, true).await
     }
 
+    pub async fn process_search_index_run_with_batch(
+        &self,
+        store: SqliteStore,
+        run_id: Uuid,
+        batch_size: usize,
+        pending_only: bool,
+    ) -> AppResult<()> {
+        self.process_jobs_with_batch_for_run(store, batch_size, pending_only, Some(run_id))
+            .await
+    }
+
+    async fn process_automatic_incremental_run(&self, store: SqliteStore) -> AppResult<()> {
+        if !self.vector_enabled() {
+            return Ok(());
+        }
+
+        let batch_size = INDEX_JOB_BATCH_SIZE;
+        let run_id = Uuid::new_v4();
+        let embedding_profile = crate::search::search_embedding_profile(self.config());
+        let _guard = self.inner.worker_lock.lock().await;
+        let queued = store
+            .create_automatic_search_index_run(
+                run_id,
+                batch_size,
+                Some(&embedding_profile.fingerprint),
+                OffsetDateTime::now_utc(),
+            )
+            .await?;
+        if queued.is_none() {
+            return Ok(());
+        }
+
+        let processing_error = self
+            .process_jobs_with_batch_for_run_locked(&store, batch_size, false, Some(run_id))
+            .await
+            .err()
+            .map(|error| error.to_string());
+        let run_status = if processing_error.is_some() {
+            "failed"
+        } else {
+            "completed"
+        };
+        store
+            .finish_search_index_run(
+                run_id,
+                run_status,
+                OffsetDateTime::now_utc(),
+                processing_error.as_deref(),
+            )
+            .await?;
+
+        if let Some(error_message) = processing_error {
+            Err(AppError::Io(error_message))
+        } else {
+            Ok(())
+        }
+    }
+
     async fn process_jobs_with_batch(
         &self,
         store: SqliteStore,
         batch_size: usize,
         pending_only: bool,
+    ) -> AppResult<()> {
+        self.process_jobs_with_batch_for_run(store, batch_size, pending_only, None)
+            .await
+    }
+
+    async fn process_jobs_with_batch_for_run(
+        &self,
+        store: SqliteStore,
+        batch_size: usize,
+        pending_only: bool,
+        run_id: Option<Uuid>,
     ) -> AppResult<()> {
         if !self.vector_enabled() {
             return Ok(());
@@ -350,13 +419,28 @@ impl SearchRuntime {
 
         let batch_size = batch_size.clamp(1, MAX_INDEX_JOB_BATCH_SIZE);
         let _guard = self.inner.worker_lock.lock().await;
+        self.process_jobs_with_batch_for_run_locked(&store, batch_size, pending_only, run_id)
+            .await
+    }
+
+    async fn process_jobs_with_batch_for_run_locked(
+        &self,
+        store: &SqliteStore,
+        batch_size: usize,
+        pending_only: bool,
+        run_id: Option<Uuid>,
+    ) -> AppResult<()> {
         let embedding_profile = crate::search::search_embedding_profile(self.config());
         let mut first_error: Option<String> = None;
         loop {
             let mut jobs = Vec::with_capacity(batch_size);
             for _ in 0..batch_size {
                 let now = OffsetDateTime::now_utc();
-                let claimed = if pending_only {
+                let claimed = if let Some(run_id) = run_id {
+                    store
+                        .claim_next_search_index_job_for_run(run_id, now, pending_only)
+                        .await?
+                } else if pending_only {
                     store.claim_next_pending_search_index_job(now).await?
                 } else {
                     store.claim_next_search_index_job(now).await?

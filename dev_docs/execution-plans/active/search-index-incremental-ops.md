@@ -49,6 +49,9 @@
 | [x] | 重构 Runtime 搜索索引 UI | 主按钮改为增量构建，全量重建移入高级区域，Inspector 固定进度条并支持详情展开 |
 | [x] | 补充回归测试并运行验证 | `cargo check`、完整 `cargo test`、`workspace_regression`、`bun run build`、Playwright 桌面/移动烟测通过 |
 | [x] | 同步 Agenta closeout | 已写入 conclusion note，`SearchIndexOps-01` 状态已更新为 `done` 并读回确认 |
+| [x] | 自动增量纳入最近运行 | `automatic_incremental` 复用现有 run schema；自动 worker 无可执行任务时不创建空 run，有任务时进入 active/latest run |
+| [x] | run-scoped 队列处理 | 手动增量、全量重建、失败重试、过期恢复和自动增量均只 claim 当前 run 绑定的 job |
+| [x] | 进度条 popover 详情 | Runtime 搜索索引页以进度条为主展示，hover/focus 展示扫描、纳入、已处理、成功、未变化、失败、剩余、重试中和批量大小 |
 
 ## 验证记录
 
@@ -57,3 +60,11 @@
 - `cargo test --manifest-path src-tauri/Cargo.toml` 通过。
 - `bun run build` 通过，保留 Vite chunk size warning。
 - Playwright 预览页 `http://127.0.0.1:1420/runtime/sync` 已验证搜索索引页桌面与 390px 移动视口：增量按钮、全量重建高级区、Inspector 进度条、运行详情和最近结果详情均可用且无重叠。
+
+### 2026-05-14 追加验证
+
+- 已补 `SearchIndexOps-02`：自动增量 worker 会创建 `trigger_kind = automatic_incremental` 的 run，并通过 `operation_kind = incremental_upsert` 对外展示。
+- 本轮不新增数据库迁移，复用 `search_index_runs` 与 `search_index_jobs.run_id`；自动 run 只绑定当前可执行且未被 active run 占用的 pending/due/stale job。
+- `workspace_regression` 新增自动增量成功和失败回归：成功 run 会进入 latest run，失败 run 会记录 failed 计数和 `last_error`。
+- 已重新运行 `cargo check --manifest-path src-tauri/Cargo.toml`、`cargo test --manifest-path src-tauri/Cargo.toml --test workspace_regression -- --nocapture`、`bun run build`。
+- Playwright 已在 `http://127.0.0.1:1420/runtime/sync` 验证桌面与 390px 视口下进度 popover 可见、未越界且不覆盖进度条。

@@ -105,7 +105,7 @@ impl AgentaService {
             None
         } else {
             self.search
-                .process_pending_only_jobs_with_batch(self.store.clone(), batch_size)
+                .process_search_index_run_with_batch(self.store.clone(), run_id, batch_size, true)
                 .await
                 .err()
                 .map(|error| error.to_string())
@@ -191,12 +191,15 @@ impl AgentaService {
             }
         };
 
-        summary.processing_error = self
-            .search
-            .process_pending_jobs_with_batch(self.store.clone(), batch_size)
-            .await
-            .err()
-            .map(|error| error.to_string());
+        summary.processing_error = if summary.queued == 0 {
+            None
+        } else {
+            self.search
+                .process_search_index_run_with_batch(self.store.clone(), run_id, batch_size, false)
+                .await
+                .err()
+                .map(|error| error.to_string())
+        };
         summary.pending_after = self.store.pending_search_index_job_count().await?;
         let run_status = if summary.processing_error.is_some() {
             "failed"
@@ -372,7 +375,7 @@ impl AgentaService {
             None
         } else {
             self.search
-                .process_pending_jobs_with_batch(self.store.clone(), batch_size)
+                .process_search_index_run_with_batch(self.store.clone(), run_id, batch_size, false)
                 .await
                 .err()
                 .map(|error| error.to_string())

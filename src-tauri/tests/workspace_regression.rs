@@ -2116,6 +2116,129 @@ async fn search_incremental_deletes_stale_vector_documents(
     Ok(())
 }
 
+#[tokio::test]
+async fn automatic_search_index_worker_creates_latest_incremental_run(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let tempdir = TempDir::new()?;
+    seed_single_search_backfill_task(
+        &tempdir,
+        "auto-index-run",
+        "Automatic index run",
+        "Automatic worker should publish its own run summary.",
+    )
+    .await?;
+    let (endpoint, _state, server) = spawn_mock_search_server().await?;
+    let config_path = write_vector_test_config(&tempdir, &endpoint)?;
+    let runtime = AppRuntime::bootstrap(BootstrapOptions {
+        config_path: Some(config_path),
+    })
+    .await?;
+    runtime.service.search_rebuild(Some(10), Some(10)).await?;
+
+    let task_id = first_task_id(&runtime).await?;
+    runtime
+        .service
+        .create_note(CreateNoteInput {
+            task: task_id,
+            content: "Automatic run changed note content.".to_string(),
+            note_kind: Some(NoteKind::Conclusion),
+            created_by: Some("auto-index-test".to_string()),
+        })
+        .await?;
+    let mut latest_run = None;
+    for _ in 0..120 {
+        let status = runtime.service.search_index_status().await?;
+        if let Some(run) = status.latest_run {
+            if run.trigger_kind == "automatic_incremental" && run.status == "completed" {
+                latest_run = Some(run);
+                break;
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    let latest_run = latest_run.expect("completed automatic search run");
+    assert_eq!(latest_run.operation_kind, "incremental_upsert");
+    assert_eq!(latest_run.trigger_kind, "automatic_incremental");
+    assert_eq!(latest_run.status, "completed");
+    assert_eq!(latest_run.scanned, 1);
+    assert_eq!(latest_run.queued, 1);
+    assert_eq!(latest_run.processed, 1);
+    assert_eq!(latest_run.remaining_count, 0);
+
+    server.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn automatic_search_index_worker_records_failed_latest_run(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let tempdir = TempDir::new()?;
+    seed_single_search_backfill_task(
+        &tempdir,
+        "auto-index-failure",
+        "Automatic index failure",
+        "Automatic worker failures should be visible in latest run.",
+    )
+    .await?;
+    let (ok_endpoint, _state, ok_server) = spawn_mock_search_server().await?;
+    let ok_config_path = write_vector_test_config(&tempdir, &ok_endpoint)?;
+    let ok_runtime = AppRuntime::bootstrap(BootstrapOptions {
+        config_path: Some(ok_config_path),
+    })
+    .await?;
+    ok_runtime
+        .service
+        .search_rebuild(Some(10), Some(10))
+        .await?;
+    drop(ok_runtime);
+    ok_server.abort();
+
+    let (failing_endpoint, failing_server) = spawn_failing_embedding_server(false).await?;
+    let failing_config_path = write_vector_test_config(&tempdir, &failing_endpoint)?;
+    let runtime = AppRuntime::bootstrap(BootstrapOptions {
+        config_path: Some(failing_config_path),
+    })
+    .await?;
+    let task_id = first_task_id(&runtime).await?;
+    runtime
+        .service
+        .create_note(CreateNoteInput {
+            task: task_id,
+            content: "Automatic failure changed note content.".to_string(),
+            note_kind: Some(NoteKind::Conclusion),
+            created_by: Some("auto-index-test".to_string()),
+        })
+        .await?;
+    let mut latest_run = None;
+    let mut last_run_debug = String::new();
+    for _ in 0..120 {
+        let status = runtime.service.search_index_status().await?;
+        if let Some(run) = status.latest_run {
+            last_run_debug = format!("{run:?}");
+            if run.trigger_kind == "automatic_incremental" && run.status == "failed" {
+                latest_run = Some(run);
+                break;
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    let latest_run = latest_run.unwrap_or_else(|| {
+        panic!("failed automatic search run; last seen {last_run_debug}");
+    });
+    assert_eq!(latest_run.operation_kind, "incremental_upsert");
+    assert_eq!(latest_run.trigger_kind, "automatic_incremental");
+    assert_eq!(latest_run.status, "failed");
+    assert_eq!(latest_run.scanned, 1);
+    assert_eq!(latest_run.queued, 1);
+    assert_eq!(latest_run.processed, 1);
+    assert_eq!(latest_run.failed, 1);
+    let latest_error = latest_run.last_error.as_deref().expect("latest run error");
+    assert!(!latest_error.trim().is_empty());
+
+    failing_server.abort();
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cli_search_backfill_processing_error_is_written_to_error_log(
 ) -> Result<(), Box<dyn std::error::Error>> {

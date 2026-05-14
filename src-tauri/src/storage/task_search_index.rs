@@ -166,6 +166,100 @@ impl SqliteStore {
         }))
     }
 
+    pub async fn claim_next_search_index_job_for_run(
+        &self,
+        run_id: Uuid,
+        now: OffsetDateTime,
+        pending_only: bool,
+    ) -> AppResult<Option<SearchVectorJob>> {
+        let mut tx = self.pool.begin().await?;
+        let now_text = format_time(now)?;
+        let row = if pending_only {
+            query(
+                r#"
+                SELECT task_id, run_id, attempt_count
+                FROM search_index_jobs
+                WHERE run_id = ?
+                  AND status = 'pending'
+                ORDER BY updated_at ASC, task_id ASC
+                LIMIT 1
+                "#,
+            )
+            .bind(run_id.to_string())
+            .fetch_optional(&mut *tx)
+            .await?
+        } else {
+            query(
+                r#"
+                SELECT task_id, run_id, attempt_count
+                FROM search_index_jobs
+                WHERE run_id = ?
+                  AND (
+                    (
+                        status IN ('pending', 'failed')
+                        AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+                    )
+                    OR (
+                        status = 'processing'
+                        AND lease_until IS NOT NULL
+                        AND lease_until <= ?
+                    )
+                  )
+                ORDER BY updated_at ASC, task_id ASC
+                LIMIT 1
+                "#,
+            )
+            .bind(run_id.to_string())
+            .bind(&now_text)
+            .bind(&now_text)
+            .fetch_optional(&mut *tx)
+            .await?
+        };
+        let Some(row) = row else {
+            tx.commit().await?;
+            return Ok(None);
+        };
+
+        let task_id = crate::storage::mapping::parse_uuid(
+            row.get::<String, _>("task_id"),
+            "search_index_jobs.task_id",
+        )?;
+        let job_run_id = row
+            .get::<Option<String>, _>("run_id")
+            .map(|value| crate::storage::mapping::parse_uuid(value, "search_index_jobs.run_id"))
+            .transpose()?;
+        let attempt_count = row.get::<i64, _>("attempt_count") + 1;
+        let lease_until =
+            format_time(now + time::Duration::seconds(SEARCH_INDEX_JOB_LEASE_SECONDS))?;
+        query(
+            r#"
+            UPDATE search_index_jobs
+            SET status = 'processing',
+                attempt_count = ?,
+                locked_at = ?,
+                lease_until = ?,
+                updated_at = ?
+            WHERE task_id = ?
+              AND run_id = ?
+            "#,
+        )
+        .bind(attempt_count)
+        .bind(&now_text)
+        .bind(&lease_until)
+        .bind(&now_text)
+        .bind(task_id.to_string())
+        .bind(run_id.to_string())
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+
+        Ok(Some(SearchVectorJob {
+            task_id,
+            run_id: job_run_id,
+            attempt_count,
+        }))
+    }
+
     pub async fn complete_search_index_job(&self, task_id: Uuid) -> AppResult<()> {
         self.complete_search_index_job_with_outcome(task_id, false)
             .await
@@ -320,6 +414,100 @@ impl SqliteStore {
         .execute(&mut **tx)
         .await?;
         Ok(())
+    }
+
+    pub async fn create_automatic_search_index_run(
+        &self,
+        run_id: Uuid,
+        batch_size: usize,
+        embedding_fingerprint: Option<&str>,
+        now: OffsetDateTime,
+    ) -> AppResult<Option<usize>> {
+        let mut tx = self.pool.begin().await?;
+        let now_text = format_time(now)?;
+        let row = query(
+            r#"
+            SELECT COUNT(*) AS count
+            FROM search_index_jobs
+            WHERE (
+                run_id IS NULL
+                OR NOT EXISTS (
+                    SELECT 1
+                    FROM search_index_runs r
+                    WHERE r.run_id = search_index_jobs.run_id
+                      AND r.status = 'running'
+                )
+            )
+              AND (
+                (
+                    status IN ('pending', 'failed')
+                    AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+                )
+                OR (
+                    status = 'processing'
+                    AND lease_until IS NOT NULL
+                    AND lease_until <= ?
+                )
+              )
+            "#,
+        )
+        .bind(&now_text)
+        .bind(&now_text)
+        .fetch_one(&mut *tx)
+        .await?;
+        let queued = row.get::<i64, _>("count").max(0) as usize;
+        if queued == 0 {
+            tx.commit().await?;
+            return Ok(None);
+        }
+
+        self.create_search_index_run_tx(
+            &mut tx,
+            run_id,
+            "automatic_incremental",
+            queued,
+            queued,
+            0,
+            batch_size,
+            embedding_fingerprint,
+            now,
+        )
+        .await?;
+        query(
+            r#"
+            UPDATE search_index_jobs
+            SET run_id = ?,
+                updated_at = ?
+            WHERE (
+                run_id IS NULL
+                OR NOT EXISTS (
+                    SELECT 1
+                    FROM search_index_runs r
+                    WHERE r.run_id = search_index_jobs.run_id
+                      AND r.status = 'running'
+                )
+            )
+              AND (
+                (
+                    status IN ('pending', 'failed')
+                    AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+                )
+                OR (
+                    status = 'processing'
+                    AND lease_until IS NOT NULL
+                    AND lease_until <= ?
+                )
+              )
+            "#,
+        )
+        .bind(run_id.to_string())
+        .bind(&now_text)
+        .bind(&now_text)
+        .bind(&now_text)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(Some(queued))
     }
 
     pub async fn list_failed_search_index_job_ids(
