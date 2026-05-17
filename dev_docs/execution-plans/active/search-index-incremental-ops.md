@@ -68,3 +68,24 @@
 - `workspace_regression` 新增自动增量成功和失败回归：成功 run 会进入 latest run，失败 run 会记录 failed 计数和 `last_error`。
 - 已重新运行 `cargo check --manifest-path src-tauri/Cargo.toml`、`cargo test --manifest-path src-tauri/Cargo.toml --test workspace_regression -- --nocapture`、`bun run build`。
 - Playwright 已在 `http://127.0.0.1:1420/runtime/sync` 验证桌面与 390px 视口下进度 popover 可见、未越界且不覆盖进度条。
+
+### 2026-05-15 追加计划：搜索索引页进度化重排
+
+本轮 `SearchIndexOps-03` 聚焦桌面 Runtime 搜索索引页的视觉与交互提质，不改变 Rust service、Tauri command、Desktop bridge 返回结构。页面继续使用 `active_run/latest_run` 与现有轮询数据，改为以真实进度条承载主运行状态，并用分段队列健康条替代大数字堆叠。
+
+TODO 追踪：
+
+| 状态 | 事项 | 备注 |
+| --- | --- | --- |
+| [x] | 新建 Agenta `SearchIndexOps-03` 任务 | 作为本轮 UI 提质恢复入口 |
+| [x] | 重排 Runtime 搜索索引 tab | 顶部固定当前/最近运行进度，下面组织队列健康、维护动作、最近结果与失败恢复 |
+| [x] | 强化真实进度动效 | 仅运行中显示扫光动效，失败态与完成态保持克制区分，并支持 reduced motion |
+| [x] | 更新 preview mock 递进 | 浏览器预览中点击构建索引后通过 status 轮询推进 active run |
+| [x] | 完成验证与 closeout | `bun run build` 与 Playwright 桌面/移动验证完成；Agenta closeout 见 `SearchIndexOps-03` |
+
+验证记录：
+
+- `bun run build` 通过，保留既有 Vite chunk size warning。
+- Playwright 在 `http://127.0.0.1:1420/runtime/sync` 验证桌面与 390px 视口下搜索索引页无重叠，进度条、队列健康条和最近结果区可见。
+- Playwright 验证 progressbar 可聚焦，focus 后 tooltip 可见；`prefers-reduced-motion: reduce` 下运行扫光动画为 `none`。
+- Preview bridge 验证 `searchIndex()` 返回 running，后续 `searchIndexStatus()` 先返回 active run，再随时间推进到 latest completed。

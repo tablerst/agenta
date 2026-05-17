@@ -65,6 +65,7 @@ let syncOutbox: SyncOutboxListItem[] = [];
 let syncPullCheckpoint: string | null = null;
 let syncPushAckCheckpoint: string | null = null;
 let previewRemoteMutationCursor = 12;
+let previewSearchActiveRun: SearchIndexRunSummary | null = null;
 let previewSearchLatestRun: SearchIndexRunSummary | null = null;
 let previewSearchPendingCount = 3;
 
@@ -379,12 +380,16 @@ function createPreviewSearchRun(
   scanned: number,
   queued: number,
   batchSize: number,
+  overrides: Partial<SearchIndexRunSummary> = {},
 ): SearchIndexRunSummary {
   const now = new Date().toISOString();
+  const processed = Math.max(0, Math.min(queued, overrides.processed ?? queued));
+  const remaining = Math.max(0, queued - processed);
+  const status = overrides.status ?? "completed";
   return {
-    run_id: `preview-search-run-${Date.now()}`,
-    status: "completed",
-    trigger_kind: operationKind,
+    run_id: overrides.run_id ?? `preview-search-run-${Date.now()}`,
+    status,
+    trigger_kind: overrides.trigger_kind ?? operationKind,
     operation_kind: operationKind,
     operation_description:
       operationKind === "manual_incremental"
@@ -393,39 +398,96 @@ function createPreviewSearchRun(
     scanned,
     queued,
     skipped: Math.max(0, scanned - queued),
-    processed: queued,
-    succeeded: queued,
-    failed: 0,
-    unchanged: 0,
+    processed,
+    succeeded: overrides.succeeded ?? processed,
+    failed: overrides.failed ?? 0,
+    unchanged: overrides.unchanged ?? 0,
     batch_size: batchSize,
     embedding_fingerprint: previewSearchEmbeddingProfile.fingerprint,
-    pending_count: 0,
-    processing_count: 0,
-    retrying_count: 0,
-    remaining_count: 0,
-    started_at: now,
-    finished_at: now,
-    last_error: null,
+    pending_count: overrides.pending_count ?? 0,
+    processing_count:
+      overrides.processing_count ?? (status === "running" ? Math.min(batchSize, remaining) : 0),
+    retrying_count: overrides.retrying_count ?? 0,
+    remaining_count: overrides.remaining_count ?? remaining,
+    started_at: overrides.started_at ?? now,
+    finished_at: overrides.finished_at ?? (status === "running" ? null : now),
+    last_error: overrides.last_error ?? null,
     updated_at: now,
   };
+}
+
+function startPreviewSearchRun(
+  operationKind: "manual_incremental" | "manual_rebuild",
+  scanned: number,
+  queued: number,
+  batchSize: number,
+) {
+  previewSearchActiveRun = createPreviewSearchRun(operationKind, scanned, queued, batchSize, {
+    status: queued > 0 ? "running" : "completed",
+    processed: 0,
+    succeeded: 0,
+  });
+  if (queued === 0) {
+    previewSearchLatestRun = previewSearchActiveRun;
+    previewSearchActiveRun = null;
+  }
+}
+
+function advancePreviewSearchActiveRun() {
+  if (!previewSearchActiveRun || previewSearchActiveRun.status !== "running") {
+    return;
+  }
+
+  const now = new Date().toISOString();
+  const startedAt = Date.parse(previewSearchActiveRun.started_at);
+  const elapsedMs = Number.isFinite(startedAt) ? Date.now() - startedAt : 0;
+  const durationMs = Math.min(60000, Math.max(45000, previewSearchActiveRun.queued * 3000));
+  const rawProcessed =
+    elapsedMs >= durationMs
+      ? previewSearchActiveRun.queued
+      : Math.floor((Math.max(0, elapsedMs) / durationMs) * previewSearchActiveRun.queued);
+  const processed = Math.min(
+    previewSearchActiveRun.queued,
+    elapsedMs > 1200 && previewSearchActiveRun.queued > 0
+      ? Math.max(1, rawProcessed)
+      : rawProcessed,
+  );
+  const remaining = Math.max(0, previewSearchActiveRun.queued - processed);
+  previewSearchActiveRun = {
+    ...previewSearchActiveRun,
+    status: remaining === 0 ? "completed" : "running",
+    processed,
+    succeeded: processed,
+    processing_count: remaining > 0 ? Math.min(previewSearchActiveRun.batch_size, remaining) : 0,
+    remaining_count: remaining,
+    finished_at: remaining === 0 ? now : null,
+    updated_at: now,
+  };
+
+  if (previewSearchActiveRun.status === "completed") {
+    previewSearchLatestRun = previewSearchActiveRun;
+    previewSearchActiveRun = null;
+  }
 }
 
 function runPreviewSearchIndex(options: { limit?: number; batchSize?: number } = {}): SearchBackfillSummary {
   const maxToQueue = typeof options.limit === "number" ? Math.max(1, options.limit) : 100000;
   const queued = Math.min(previewSearchPendingCount, maxToQueue);
   const batchSize = typeof options.batchSize === "number" ? Math.max(1, options.batchSize) : 10;
-  previewSearchLatestRun = createPreviewSearchRun("manual_incremental", queued, queued, batchSize);
+  startPreviewSearchRun("manual_incremental", queued, queued, batchSize);
   previewSearchPendingCount = Math.max(0, previewSearchPendingCount - queued);
+  const run = previewSearchActiveRun ?? previewSearchLatestRun;
   return {
-    run_id: previewSearchLatestRun.run_id,
-    status: previewSearchLatestRun.status,
-    operation_kind: previewSearchLatestRun.operation_kind,
-    operation_description: previewSearchLatestRun.operation_description,
+    run_id: run?.run_id ?? `preview-search-run-${Date.now()}`,
+    status: run?.status ?? "completed",
+    operation_kind: run?.operation_kind ?? "manual_incremental",
+    operation_description:
+      run?.operation_description ?? "Processes queued incremental vector-index jobs.",
     scanned: queued,
     queued,
     skipped: 0,
-    processed: queued,
-    succeeded: queued,
+    processed: run?.processed ?? 0,
+    succeeded: run?.succeeded ?? 0,
     failed: 0,
     unchanged: 0,
     pending_after: previewSearchPendingCount,
@@ -438,18 +500,20 @@ function runPreviewSearchRebuild(options: { limit?: number; batchSize?: number }
   const scanned = state.tasks.length;
   const queued = Math.min(scanned, maxToQueue);
   const batchSize = typeof options.batchSize === "number" ? Math.max(1, options.batchSize) : 10;
-  previewSearchLatestRun = createPreviewSearchRun("manual_rebuild", scanned, queued, batchSize);
+  startPreviewSearchRun("manual_rebuild", scanned, queued, batchSize);
   previewSearchPendingCount = 0;
+  const run = previewSearchActiveRun ?? previewSearchLatestRun;
   return {
-    run_id: previewSearchLatestRun.run_id,
-    status: previewSearchLatestRun.status,
-    operation_kind: previewSearchLatestRun.operation_kind,
-    operation_description: previewSearchLatestRun.operation_description,
+    run_id: run?.run_id ?? `preview-search-run-${Date.now()}`,
+    status: run?.status ?? "completed",
+    operation_kind: run?.operation_kind ?? "manual_rebuild",
+    operation_description:
+      run?.operation_description ?? "Scans local tasks and re-upserts their Chroma vectors.",
     scanned,
     queued,
     skipped: Math.max(0, scanned - queued),
-    processed: queued,
-    succeeded: queued,
+    processed: run?.processed ?? 0,
+    succeeded: run?.succeeded ?? 0,
     failed: 0,
     unchanged: 0,
     pending_after: 0,
@@ -458,13 +522,15 @@ function runPreviewSearchRebuild(options: { limit?: number; batchSize?: number }
 }
 
 function runPreviewSearchIndexStatus(): SearchIndexStatusSummary {
+  advancePreviewSearchActiveRun();
+  const activeProcessingCount = previewSearchActiveRun?.processing_count ?? 0;
   return {
     enabled: true,
     vector_available: true,
     sidecar: "external",
-    total_count: previewSearchPendingCount,
+    total_count: previewSearchPendingCount + activeProcessingCount,
     pending_count: previewSearchPendingCount,
-    processing_count: 0,
+    processing_count: activeProcessingCount,
     failed_count: 0,
     due_count: 0,
     stale_processing_count: 0,
@@ -474,7 +540,7 @@ function runPreviewSearchIndexStatus(): SearchIndexStatusSummary {
     requires_full_rebuild: false,
     current_embedding_profile: previewSearchEmbeddingProfile,
     indexed_embedding_profile: previewSearchEmbeddingProfile,
-    active_run: null,
+    active_run: previewSearchActiveRun,
     latest_run: previewSearchLatestRun,
     failed_jobs: [],
   };
@@ -2453,5 +2519,8 @@ export const mockDesktopBridge = {
     syncPullCheckpoint = null;
     syncPushAckCheckpoint = null;
     previewRemoteMutationCursor = 12;
+    previewSearchActiveRun = null;
+    previewSearchLatestRun = null;
+    previewSearchPendingCount = 3;
   },
 };

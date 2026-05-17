@@ -13,6 +13,7 @@ const runtimeConsole = props.runtimeConsole;
 const { t } = useI18n({ useScope: "global" });
 
 type SyncSurface = "pipeline" | "search";
+type SearchQueueSegmentKey = "pending" | "processing" | "failed" | "stale";
 
 const activeSurface = ref<SyncSurface>("pipeline");
 
@@ -49,6 +50,126 @@ const searchRunProgressPercent = computed(() => {
     return 0;
   }
   return Math.max(0, Math.min(100, Math.round((searchRunCompletedCount.value / run.queued) * 100)));
+});
+const searchRunIsActive = computed(() => {
+  const run = displaySearchRun.value;
+  return Boolean(
+    run &&
+      (activeSearchRun.value ||
+        run.status === "running" ||
+        run.remaining_count > 0 ||
+        run.processing_count > 0),
+  );
+});
+const searchRunHasFailure = computed(() => {
+  const run = displaySearchRun.value;
+  return Boolean(run && (run.status === "failed" || run.failed > 0 || run.last_error));
+});
+const searchRunPanelState = computed(() => {
+  if (!displaySearchRun.value) {
+    return "idle";
+  }
+  if (searchRunHasFailure.value) {
+    return "failed";
+  }
+  if (searchRunIsActive.value) {
+    return "running";
+  }
+  return "completed";
+});
+const searchRunPanelClass = computed(() => `runtime-search-run-panel-${searchRunPanelState.value}`);
+const searchRunStatusPillClass = computed(() => {
+  switch (searchRunPanelState.value) {
+    case "running":
+      return "status-pill status-pill-warning";
+    case "failed":
+      return "status-pill status-pill-danger";
+    case "completed":
+      return "status-pill status-pill-success";
+    default:
+      return "status-pill";
+  }
+});
+const searchRunLabel = computed(() => {
+  if (!displaySearchRun.value) {
+    return t("runtime.searchIndex.noRunLabel");
+  }
+  return activeSearchRun.value
+    ? t("runtime.searchIndex.activeRunLabel")
+    : t("runtime.searchIndex.latestRunLabel");
+});
+const searchRunProgressSummary = computed(() => {
+  const run = displaySearchRun.value;
+  if (!run) {
+    return t("runtime.searchIndex.noRunProgressSummary");
+  }
+  return t("runtime.searchIndex.progressSummary", {
+    completed: searchRunCompletedCount.value,
+    queued: run.queued,
+    percent: searchRunProgressPercent.value,
+  });
+});
+const searchRunProgressAriaLabel = computed(() => {
+  const run = displaySearchRun.value;
+  if (!run) {
+    return t("runtime.searchIndex.noRunProgressSummary");
+  }
+  return t("runtime.searchIndex.progressAria", {
+    completed: searchRunCompletedCount.value,
+    queued: run.queued,
+    percent: searchRunProgressPercent.value,
+    status: runtimeConsole.formatSearchIndexStatus(run.status),
+  });
+});
+const searchQueueCounts = computed(() => {
+  const status = runtimeConsole.searchIndexStatus.value;
+  return [
+    {
+      key: "pending" as const,
+      label: t("runtime.searchIndex.pending"),
+      count: status?.pending_count ?? 0,
+      className: "runtime-search-queue-segment-pending",
+    },
+    {
+      key: "processing" as const,
+      label: t("runtime.searchIndex.processing"),
+      count: status?.processing_count ?? 0,
+      className: "runtime-search-queue-segment-processing",
+    },
+    {
+      key: "failed" as const,
+      label: t("runtime.searchIndex.failed"),
+      count: status?.failed_count ?? 0,
+      className: "runtime-search-queue-segment-failed",
+    },
+    {
+      key: "stale" as const,
+      label: t("runtime.searchIndex.stale"),
+      count: status?.stale_processing_count ?? 0,
+      className: "runtime-search-queue-segment-stale",
+    },
+  ] satisfies Array<{
+    key: SearchQueueSegmentKey;
+    label: string;
+    count: number;
+    className: string;
+  }>;
+});
+const visibleSearchQueueSegments = computed(() =>
+  searchQueueCounts.value.filter((segment) => segment.count > 0),
+);
+const searchQueueTotal = computed(() =>
+  searchQueueCounts.value.reduce((sum, segment) => sum + segment.count, 0),
+);
+const searchQueueHealthSummary = computed(() => {
+  const status = runtimeConsole.searchIndexStatus.value;
+  if (!status?.enabled) {
+    return t("runtime.searchIndex.queueDisabledSummary");
+  }
+  if (searchQueueTotal.value === 0) {
+    return t("runtime.searchIndex.queueEmptySummary");
+  }
+  return t("runtime.searchIndex.queueHealthSummary", { count: searchQueueTotal.value });
 });
 const syncAutoStateLabel = computed(() => {
   const auto = runtimeConsole.syncStatus.value?.auto;
@@ -472,37 +593,158 @@ onUnmounted(() => {
           class="runtime-sync-search-grid"
           role="tabpanel"
         >
+          <section
+            class="runtime-block runtime-block-nested runtime-search-run-panel"
+            :class="searchRunPanelClass"
+          >
+            <div class="runtime-block-header runtime-search-run-header">
+              <div>
+                <p class="section-label">{{ searchRunLabel }}</p>
+                <h3 class="runtime-subblock-title">{{ t("runtime.searchIndex.progressTitle") }}</h3>
+                <p class="runtime-block-summary">{{ searchRunProgressSummary }}</p>
+              </div>
+              <div class="runtime-search-run-badges">
+                <span :class="searchRunStatusPillClass">
+                  {{
+                    displaySearchRun
+                      ? runtimeConsole.formatSearchIndexStatus(displaySearchRun.status)
+                      : t("runtime.searchIndex.noRunStatus")
+                  }}
+                </span>
+                <span v-if="displaySearchRun" class="status-pill runtime-search-progress-percent">
+                  {{ searchRunProgressPercent }}%
+                </span>
+              </div>
+            </div>
+
+            <div class="runtime-search-progress-shell">
+              <div
+                class="runtime-search-progress-track runtime-search-progress-track-large"
+                :class="{
+                  'runtime-search-progress-track-active': searchRunIsActive,
+                  'runtime-search-progress-track-failed': searchRunHasFailure,
+                }"
+                role="progressbar"
+                :aria-label="searchRunProgressAriaLabel"
+                :aria-valuemin="0"
+                :aria-valuemax="100"
+                :aria-valuenow="searchRunProgressPercent"
+                tabindex="0"
+              >
+                <div
+                  class="runtime-search-progress-fill"
+                  :style="{ width: `${searchRunProgressPercent}%` }"
+                />
+                <div
+                  v-if="displaySearchRun"
+                  class="runtime-search-progress-popover"
+                  role="tooltip"
+                >
+                  <dl class="runtime-search-popover-grid">
+                    <div>
+                      <dt>{{ t("runtime.searchIndex.scanned") }}</dt>
+                      <dd>{{ displaySearchRun.scanned }}</dd>
+                    </div>
+                    <div>
+                      <dt>{{ t("runtime.searchIndex.included") }}</dt>
+                      <dd>{{ displaySearchRun.queued }}</dd>
+                    </div>
+                    <div>
+                      <dt>{{ t("runtime.searchIndex.processed") }}</dt>
+                      <dd>{{ displaySearchRun.processed }}</dd>
+                    </div>
+                    <div>
+                      <dt>{{ t("runtime.searchIndex.succeeded") }}</dt>
+                      <dd>{{ displaySearchRun.succeeded }}</dd>
+                    </div>
+                    <div>
+                      <dt>{{ t("runtime.searchIndex.unchanged") }}</dt>
+                      <dd>{{ displaySearchRun.unchanged }}</dd>
+                    </div>
+                    <div>
+                      <dt>{{ t("runtime.searchIndex.failed") }}</dt>
+                      <dd>{{ displaySearchRun.failed }}</dd>
+                    </div>
+                    <div>
+                      <dt>{{ t("runtime.searchIndex.remaining") }}</dt>
+                      <dd>{{ displaySearchRun.remaining_count }}</dd>
+                    </div>
+                    <div>
+                      <dt>{{ t("runtime.searchIndex.retrying") }}</dt>
+                      <dd>{{ displaySearchRun.retrying_count }}</dd>
+                    </div>
+                    <div>
+                      <dt>{{ t("runtime.searchIndex.batchSize") }}</dt>
+                      <dd>{{ displaySearchRun.batch_size }}</dd>
+                    </div>
+                    <div>
+                      <dt>{{ t("runtime.searchIndex.lastUpdated") }}</dt>
+                      <dd>{{ runtimeConsole.searchIndexLastUpdatedLabel.value }}</dd>
+                    </div>
+                  </dl>
+                </div>
+              </div>
+
+              <div v-if="displaySearchRun" class="runtime-search-progress-meta">
+                <span>{{ t(`runtime.searchIndex.operations.${displaySearchRun.operation_kind}`) }}</span>
+                <span>
+                  {{ t("runtime.searchIndex.remaining") }}
+                  {{ displaySearchRun.remaining_count }}
+                </span>
+                <span>{{ runtimeConsole.searchIndexLastUpdatedLabel.value }}</span>
+              </div>
+              <p v-else class="runtime-metadata-meta">
+                {{ t("runtime.searchIndex.noRunProgressHint") }}
+              </p>
+            </div>
+          </section>
+
           <div class="runtime-main-column">
             <section class="runtime-block runtime-block-nested runtime-search-status-block">
               <div class="runtime-block-header">
                 <div>
-                  <p class="section-label">{{ t("runtime.searchIndex.statusLabel") }}</p>
-                  <h3 class="runtime-subblock-title">{{ t("runtime.searchIndex.statusTitle") }}</h3>
-                  <p class="runtime-block-summary">{{ runtimeConsole.searchIndexStatusSummary.value }}</p>
+                  <p class="section-label">{{ t("runtime.searchIndex.queueLabel") }}</p>
+                  <h3 class="runtime-subblock-title">{{ t("runtime.searchIndex.queueTitle") }}</h3>
+                  <p class="runtime-block-summary">{{ searchQueueHealthSummary }}</p>
                 </div>
                 <span :class="runtimeConsole.searchIndexHealthClass.value">
                   {{ t(`runtime.searchIndex.surfaceStates.${runtimeConsole.searchIndexSurfaceState.value}.label`) }}
                 </span>
               </div>
 
-              <dl class="runtime-search-index-strip runtime-search-queue-strip">
-                <div class="runtime-search-index-item">
-                  <dt>{{ t("runtime.searchIndex.pending") }}</dt>
-                  <dd>{{ runtimeConsole.searchIndexStatus.value?.pending_count ?? t("common.na") }}</dd>
-                </div>
-                <div class="runtime-search-index-item">
-                  <dt>{{ t("runtime.searchIndex.processing") }}</dt>
-                  <dd>{{ runtimeConsole.searchIndexStatus.value?.processing_count ?? t("common.na") }}</dd>
-                </div>
-                <div class="runtime-search-index-item">
-                  <dt>{{ t("runtime.searchIndex.failed") }}</dt>
-                  <dd>{{ runtimeConsole.searchIndexStatus.value?.failed_count ?? t("common.na") }}</dd>
-                </div>
-                <div class="runtime-search-index-item">
-                  <dt>{{ t("runtime.searchIndex.stale") }}</dt>
-                  <dd>
-                    {{ runtimeConsole.searchIndexStatus.value?.stale_processing_count ?? t("common.na") }}
-                  </dd>
+              <div
+                class="runtime-search-queue-meter"
+                role="img"
+                :aria-label="t('runtime.searchIndex.queueHealthAria', { count: searchQueueTotal })"
+              >
+                <span
+                  v-if="visibleSearchQueueSegments.length === 0"
+                  class="runtime-search-queue-segment runtime-search-queue-segment-empty"
+                />
+                <span
+                  v-for="segment in visibleSearchQueueSegments"
+                  :key="segment.key"
+                  class="runtime-search-queue-segment"
+                  :class="segment.className"
+                  :style="{ flexGrow: segment.count }"
+                  :title="t('runtime.searchIndex.queueSegmentTitle', {
+                    label: segment.label,
+                    count: segment.count,
+                  })"
+                />
+              </div>
+
+              <dl class="runtime-search-queue-list">
+                <div v-for="segment in searchQueueCounts" :key="segment.key">
+                  <dt>
+                    <span
+                      class="runtime-search-queue-dot"
+                      :class="segment.className"
+                      aria-hidden="true"
+                    />
+                    {{ segment.label }}
+                  </dt>
+                  <dd>{{ segment.count }}</dd>
                 </div>
               </dl>
 
@@ -652,119 +894,6 @@ onUnmounted(() => {
               </div>
             </div>
 
-            <section v-if="displaySearchRun" class="runtime-search-result-panel">
-              <div class="runtime-block-header">
-                <div>
-                  <p class="section-label">
-                    {{
-                      activeSearchRun
-                        ? t("runtime.searchIndex.activeRunLabel")
-                        : t("runtime.searchIndex.latestRunLabel")
-                    }}
-                  </p>
-                  <h3 class="runtime-subblock-title">
-                    {{ t("runtime.searchIndex.progressTitle") }}
-                  </h3>
-                  <p class="runtime-block-summary">
-                    {{
-                      t("runtime.searchIndex.progressSummary", {
-                        completed: searchRunCompletedCount,
-                        queued: displaySearchRun.queued,
-                        percent: searchRunProgressPercent,
-                      })
-                    }}
-                  </p>
-                </div>
-                <span class="status-pill status-pill-success">{{ searchRunProgressPercent }}%</span>
-              </div>
-              <div
-                class="runtime-search-progress-track"
-                role="progressbar"
-                :aria-valuemin="0"
-                :aria-valuemax="100"
-                :aria-valuenow="searchRunProgressPercent"
-                tabindex="0"
-              >
-                <div
-                  class="runtime-search-progress-fill"
-                  :style="{ width: `${searchRunProgressPercent}%` }"
-                />
-                <div class="runtime-search-progress-popover" role="tooltip">
-                  <dl class="runtime-search-popover-grid">
-                    <div>
-                      <dt>{{ t("runtime.searchIndex.scanned") }}</dt>
-                      <dd>{{ displaySearchRun.scanned }}</dd>
-                    </div>
-                    <div>
-                      <dt>{{ t("runtime.searchIndex.included") }}</dt>
-                      <dd>{{ displaySearchRun.queued }}</dd>
-                    </div>
-                    <div>
-                      <dt>{{ t("runtime.searchIndex.processed") }}</dt>
-                      <dd>{{ displaySearchRun.processed }}</dd>
-                    </div>
-                    <div>
-                      <dt>{{ t("runtime.searchIndex.succeeded") }}</dt>
-                      <dd>{{ displaySearchRun.succeeded }}</dd>
-                    </div>
-                    <div>
-                      <dt>{{ t("runtime.searchIndex.unchanged") }}</dt>
-                      <dd>{{ displaySearchRun.unchanged }}</dd>
-                    </div>
-                    <div>
-                      <dt>{{ t("runtime.searchIndex.failed") }}</dt>
-                      <dd>{{ displaySearchRun.failed }}</dd>
-                    </div>
-                    <div>
-                      <dt>{{ t("runtime.searchIndex.remaining") }}</dt>
-                      <dd>{{ displaySearchRun.remaining_count }}</dd>
-                    </div>
-                    <div>
-                      <dt>{{ t("runtime.searchIndex.retrying") }}</dt>
-                      <dd>{{ displaySearchRun.retrying_count }}</dd>
-                    </div>
-                    <div>
-                      <dt>{{ t("runtime.searchIndex.batchSize") }}</dt>
-                      <dd>{{ displaySearchRun.batch_size }}</dd>
-                    </div>
-                    <div>
-                      <dt>{{ t("runtime.searchIndex.lastUpdated") }}</dt>
-                      <dd>{{ runtimeConsole.searchIndexLastUpdatedLabel.value }}</dd>
-                    </div>
-                  </dl>
-                </div>
-              </div>
-              <details class="runtime-search-advanced">
-                <summary>{{ t("runtime.searchIndex.runDetails") }}</summary>
-                <dl class="runtime-definition-list runtime-search-context-grid">
-                  <div>
-                    <dt>{{ t("runtime.searchIndex.operation") }}</dt>
-                    <dd>{{ t(`runtime.searchIndex.operations.${displaySearchRun.operation_kind}`) }}</dd>
-                  </div>
-                  <div>
-                    <dt>{{ t("runtime.searchIndex.statusLabel") }}</dt>
-                    <dd>{{ runtimeConsole.formatSearchIndexStatus(displaySearchRun.status) }}</dd>
-                  </div>
-                  <div>
-                    <dt>{{ t("runtime.searchIndex.succeeded") }}</dt>
-                    <dd>{{ displaySearchRun.succeeded }}</dd>
-                  </div>
-                  <div>
-                    <dt>{{ t("runtime.searchIndex.unchanged") }}</dt>
-                    <dd>{{ displaySearchRun.unchanged }}</dd>
-                  </div>
-                  <div>
-                    <dt>{{ t("runtime.searchIndex.failed") }}</dt>
-                    <dd>{{ displaySearchRun.failed }}</dd>
-                  </div>
-                  <div>
-                    <dt>{{ t("runtime.searchIndex.batchSize") }}</dt>
-                    <dd>{{ displaySearchRun.batch_size }}</dd>
-                  </div>
-                </dl>
-              </details>
-            </section>
-
             <div
               v-if="
                 !runtimeConsole.searchIndexStatus.value?.latest_run &&
@@ -898,10 +1027,20 @@ onUnmounted(() => {
                 }}
               </p>
 
-              <div
-                v-if="runtimeConsole.searchIndexStatus.value?.failed_jobs.length"
-                class="runtime-sync-outbox-list"
-              >
+            </details>
+
+            <section
+              v-if="runtimeConsole.searchIndexStatus.value?.failed_jobs.length"
+              class="runtime-search-result-panel runtime-search-recovery-panel"
+            >
+              <div class="runtime-block-header">
+                <div>
+                  <p class="section-label">{{ t("runtime.searchIndex.recoveryLabel") }}</p>
+                  <h3 class="runtime-subblock-title">{{ t("runtime.searchIndex.recoveryTitle") }}</h3>
+                  <p class="runtime-block-summary">{{ t("runtime.searchIndex.recoverySummary") }}</p>
+                </div>
+              </div>
+              <div class="runtime-sync-outbox-list">
                 <div class="runtime-search-recovery-actions">
                   <button
                     class="secondary-action spotlight-surface"
@@ -950,7 +1089,7 @@ onUnmounted(() => {
                   </span>
                 </article>
               </div>
-            </details>
+            </section>
           </aside>
         </div>
       </section>

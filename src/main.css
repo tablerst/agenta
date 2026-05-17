@@ -1794,26 +1794,127 @@ html[data-theme="dark"] {
     line-height: 1.6;
   }
 
+  .runtime-search-run-panel {
+    grid-column: 1 / -1;
+    padding-bottom: 28px;
+    border-bottom: 1px solid var(--border-color);
+  }
+
+  .runtime-search-run-header {
+    align-items: flex-end;
+    margin-bottom: 16px;
+  }
+
+  .runtime-search-run-badges {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+
+  .runtime-search-progress-shell {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 10px;
+  }
+
   .runtime-search-progress-track {
     flex: 0 0 10px;
     position: relative;
+    overflow: visible;
     height: 10px;
     border-radius: 999px;
     background: color-mix(in srgb, var(--bg-elevated) 72%, transparent);
     box-shadow: inset 0 1px 0 var(--border-highlight);
   }
 
+  .runtime-search-progress-track-large {
+    flex-basis: 18px;
+    height: 18px;
+    overflow: visible;
+    border: 1px solid var(--border-color);
+    background:
+      linear-gradient(180deg, color-mix(in srgb, var(--bg-panel) 86%, transparent), color-mix(in srgb, var(--bg-main) 96%, transparent)),
+      color-mix(in srgb, var(--bg-panel) 80%, transparent);
+    box-shadow:
+      inset 0 1px 0 var(--border-highlight),
+      inset 0 -1px 0 color-mix(in srgb, var(--accent-color) 4%, transparent);
+  }
+
   .runtime-search-progress-track:focus-visible {
-    outline: 2px solid color-mix(in srgb, var(--accent) 36%, transparent);
+    outline: 2px solid color-mix(in srgb, var(--accent-color) 36%, transparent);
     outline-offset: 4px;
   }
 
   .runtime-search-progress-fill {
+    position: relative;
+    overflow: hidden;
     height: 100%;
     border-radius: inherit;
     background:
-      linear-gradient(90deg, color-mix(in srgb, var(--accent) 72%, white 8%), var(--accent));
+      linear-gradient(90deg, color-mix(in srgb, var(--accent-color) 72%, white 8%), var(--accent-color));
     transition: width 220ms ease;
+  }
+
+  .runtime-search-progress-track-large .runtime-search-progress-fill {
+    min-width: 0;
+    box-shadow:
+      inset 0 1px 0 color-mix(in srgb, white 18%, transparent),
+      0 0 18px color-mix(in srgb, var(--accent-color) 18%, transparent);
+  }
+
+  .runtime-search-progress-track-active .runtime-search-progress-fill::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background:
+      linear-gradient(
+        110deg,
+        transparent 0%,
+        transparent 32%,
+        color-mix(in srgb, var(--btn-primary-text) 24%, transparent) 48%,
+        transparent 64%,
+        transparent 100%
+      );
+    animation: runtime-search-progress-sheen 1400ms linear infinite;
+    transform: translateX(-100%);
+  }
+
+  .runtime-search-progress-track-failed .runtime-search-progress-fill {
+    background: linear-gradient(90deg, rgba(244, 63, 94, 0.72), rgba(194, 65, 79, 0.94));
+    box-shadow: 0 0 18px rgba(244, 63, 94, 0.16);
+  }
+
+  @keyframes runtime-search-progress-sheen {
+    from {
+      transform: translateX(-100%);
+    }
+
+    to {
+      transform: translateX(100%);
+    }
+  }
+
+  .runtime-search-progress-percent {
+    color: var(--text-main);
+    border-color: color-mix(in srgb, var(--accent-color) 14%, var(--border-color));
+    background: color-mix(in srgb, var(--accent-soft) 72%, transparent);
+  }
+
+  .runtime-search-progress-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 16px;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text-muted);
+  }
+
+  .runtime-search-progress-meta span {
+    min-width: 0;
   }
 
   .runtime-search-progress-popover {
@@ -1836,10 +1937,93 @@ html[data-theme="dark"] {
   }
 
   .runtime-search-progress-track:hover .runtime-search-progress-popover,
+  .runtime-search-progress-track:focus .runtime-search-progress-popover,
   .runtime-search-progress-track:focus-visible .runtime-search-progress-popover,
   .runtime-search-progress-track:focus-within .runtime-search-progress-popover {
     opacity: 1;
     transform: translate(-50%, 0);
+  }
+
+  .runtime-search-queue-meter {
+    display: flex;
+    min-width: 0;
+    height: 12px;
+    gap: 2px;
+    overflow: hidden;
+    border: 1px solid var(--border-color);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--bg-panel) 76%, transparent);
+    box-shadow: inset 0 1px 0 var(--border-highlight);
+  }
+
+  .runtime-search-queue-segment {
+    min-width: 6px;
+    height: 100%;
+    flex-basis: 0;
+    transition:
+      flex-grow 220ms ease,
+      opacity 140ms ease;
+  }
+
+  .runtime-search-queue-segment-empty {
+    flex: 1 1 auto;
+    min-width: 0;
+    background: color-mix(in srgb, var(--accent-color) 7%, transparent);
+  }
+
+  .runtime-search-queue-segment-pending {
+    background: color-mix(in srgb, var(--text-muted) 34%, transparent);
+  }
+
+  .runtime-search-queue-segment-processing {
+    background: color-mix(in srgb, var(--accent-color) 68%, transparent);
+  }
+
+  .runtime-search-queue-segment-failed {
+    background: rgba(244, 63, 94, 0.68);
+  }
+
+  .runtime-search-queue-segment-stale {
+    background: rgba(245, 158, 11, 0.62);
+  }
+
+  .runtime-search-queue-list {
+    display: grid;
+    gap: 12px 18px;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    padding-top: 14px;
+  }
+
+  .runtime-search-queue-list div {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .runtime-search-queue-list dt {
+    display: inline-flex;
+    min-width: 0;
+    align-items: center;
+    gap: 7px;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  .runtime-search-queue-list dd {
+    font-size: 15px;
+    line-height: 1.35;
+    font-weight: 600;
+    color: var(--text-main);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .runtime-search-queue-dot {
+    width: 7px;
+    height: 7px;
+    flex: 0 0 auto;
+    border-radius: 999px;
   }
 
   .runtime-search-popover-grid {
@@ -2348,6 +2532,10 @@ html[data-theme="dark"] {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .runtime-search-queue-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .runtime-metadata-item {
     padding-right: 0;
     padding-bottom: 14px;
@@ -2613,6 +2801,18 @@ html[data-theme="dark"] {
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .runtime-search-run-header {
+    align-items: flex-start;
+  }
+
+  .runtime-search-run-badges {
+    justify-content: flex-start;
+  }
+
+  .runtime-search-queue-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .shell-notice {
     right: 14px;
     left: 14px;
@@ -2635,9 +2835,16 @@ html[data-theme="dark"] {
   .spotlight-surface::before,
   .overview-editor,
   .runtime-host-stack,
-  .runtime-sync-stack {
+  .runtime-sync-stack,
+  .runtime-search-progress-fill,
+  .runtime-search-progress-track-active .runtime-search-progress-fill::after,
+  .runtime-search-queue-segment {
     transition-duration: 1ms !important;
     animation-duration: 1ms !important;
+  }
+
+  .runtime-search-progress-track-active .runtime-search-progress-fill::after {
+    animation: none !important;
   }
 
   :where(
