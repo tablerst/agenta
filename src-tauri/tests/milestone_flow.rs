@@ -241,6 +241,7 @@ async fn mcp_streamable_http_lists_tools_and_calls_project_tool() {
     let client = ().serve(transport).await.expect("connect rmcp client");
 
     let tools = client.list_all_tools().await.expect("list tools");
+    assert!(tools.iter().any(|tool| tool.name == "feedback_submit"));
     assert!(tools.iter().any(|tool| tool.name == "project_create"));
     assert!(tools.iter().any(|tool| tool.name == "project_get"));
     assert!(tools.iter().any(|tool| tool.name == "project_list"));

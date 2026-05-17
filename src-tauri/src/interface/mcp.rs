@@ -26,8 +26,8 @@ use crate::service::{
     CreateAttachmentInput, CreateChildTaskInput, CreateNoteInput, CreateProjectInput,
     CreateTaskInput, CreateVersionInput, DetachChildTaskInput, PageCursor, PageRequest, PageResult,
     RequestOrigin, ResolveTaskBlockerInput, SearchEvidenceInput, SearchInput, SortOrder,
-    TaskContextOptions, TaskDetail, TaskLink, TaskListPageResult, TaskQuery, TaskSortBy,
-    UpdateProjectInput, UpdateTaskInput, UpdateVersionInput,
+    SubmitFeedbackInput, TaskContextOptions, TaskDetail, TaskLink, TaskListPageResult, TaskQuery,
+    TaskSortBy, UpdateProjectInput, UpdateTaskInput, UpdateVersionInput,
 };
 
 #[derive(Clone)]
@@ -138,6 +138,9 @@ impl AgentaMcpServer {
                 memory_dir: optional_trimmed(params.memory_dir),
                 entry_task_id: optional_trimmed(params.entry_task_id),
                 entry_task_code: optional_trimmed(params.entry_task_code),
+                feedback_task_id: optional_trimmed(params.feedback_task_id),
+                feedback_task_code: optional_trimmed(params.feedback_task_code),
+                feedback_file: optional_trimmed(params.feedback_file),
                 force: params.force.unwrap_or(false),
                 dry_run: params.dry_run.unwrap_or(false),
             })
@@ -153,6 +156,56 @@ impl AgentaMcpServer {
             &result,
         )
         .await;
+
+        result.map(Json)
+    }
+
+    #[tool(
+        name = "feedback_submit",
+        description = "Submit Agent-facing feedback about Agenta workflow, tools, docs, or usability. The feedback is stored as a finding note on a configured feedback inbox task.",
+        annotations(
+            title = "Feedback Submit",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    pub async fn feedback_submit(
+        &self,
+        Parameters(params): Parameters<FeedbackSubmitToolInput>,
+    ) -> Result<Json<FeedbackSubmitToolOutput>, ErrorData> {
+        let action = "submit";
+        self.log_tool_call("feedback_submit", action).await;
+        let result = self
+            .service
+            .submit_feedback_from(
+                RequestOrigin::Mcp,
+                SubmitFeedbackInput {
+                    project: optional_trimmed(params.project),
+                    feedback_task_id: optional_trimmed(params.feedback_task_id),
+                    feedback_task_code: optional_trimmed(params.feedback_task_code),
+                    surface: required_text(params.surface, "surface")?,
+                    severity: optional_trimmed(params.severity),
+                    title: required_text(params.title, "title")?,
+                    friction: required_text(params.friction, "friction")?,
+                    expected: optional_trimmed(params.expected),
+                    suggested_change: optional_trimmed(params.suggested_change),
+                    evidence: optional_trimmed(params.evidence),
+                    created_by: optional_trimmed(params.created_by),
+                    create_task_if_missing: params.create_task_if_missing.unwrap_or(true),
+                },
+            )
+            .await
+            .map(|feedback| FeedbackSubmitToolOutput {
+                task: TaskRecord::from(feedback.task),
+                note: NoteRecord::from(feedback.note),
+                created_task: feedback.created_task,
+                feedback_file: feedback.feedback_file,
+            })
+            .map_err(error_to_rmcp);
+        self.log_structured_tool_result("feedback_submit", action, "Submitted feedback", &result)
+            .await;
 
         result.map(Json)
     }
@@ -1254,6 +1307,7 @@ mod tests {
     fn project_tools_follow_min_compat_contract() {
         let tools = [
             AgentaMcpServer::context_init_tool_attr(),
+            AgentaMcpServer::feedback_submit_tool_attr(),
             AgentaMcpServer::project_create_tool_attr(),
             AgentaMcpServer::project_get_tool_attr(),
             AgentaMcpServer::project_list_tool_attr(),
@@ -1303,8 +1357,24 @@ mod tests {
             serde_json::to_string(&context_tool["outputSchema"]).expect("context output schema");
         assert!(context_input.contains("\"entry_task_id\""));
         assert!(context_input.contains("\"entry_task_code\""));
+        assert!(context_input.contains("\"feedback_task_code\""));
+        assert!(context_input.contains("\"feedback_file\""));
         assert!(context_output.contains("\"entry_task_id\""));
         assert!(context_output.contains("\"entry_task_code\""));
+        assert!(context_output.contains("\"feedback_task_code\""));
+        assert!(context_output.contains("\"feedback_file\""));
+        let feedback_submit =
+            serde_json::to_value(AgentaMcpServer::feedback_submit_tool_attr()).expect("tool json");
+        assert_eq!(feedback_submit["annotations"]["readOnlyHint"], false);
+        let feedback_input =
+            serde_json::to_string(&feedback_submit["inputSchema"]).expect("feedback input");
+        let feedback_output =
+            serde_json::to_string(&feedback_submit["outputSchema"]).expect("feedback output");
+        assert!(feedback_input.contains("\"surface\""));
+        assert!(feedback_input.contains("\"friction\""));
+        assert!(feedback_input.contains("\"create_task_if_missing\""));
+        assert!(feedback_output.contains("\"created_task\""));
+        assert!(feedback_output.contains("\"feedback_file\""));
         assert_eq!(create_tool["description"], "Create a new project.");
         assert!(
             create_tool["inputSchema"]["properties"]

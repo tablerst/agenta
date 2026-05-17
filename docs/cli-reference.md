@@ -44,6 +44,8 @@ project: demo
 instructions: README.md
 memory_dir: memory
 # entry_task_code: InitCtx-00 # optional task-lane recovery entry
+# feedback_task_code: AgentFeedback-00 # optional Agent feedback inbox
+# feedback_file: feedback.md # fallback when Agenta writes are unavailable
 ```
 
 Agent 推荐工作流：
@@ -59,6 +61,7 @@ Agent 推荐工作流：
 当前顶层命令：
 
 - `context`: 项目上下文目录初始化
+- `feedback`: Agent 使用反馈提交
 - `project`: 项目创建、读取、列表、更新
 - `version`: 版本创建、读取、列表、更新
 - `task`: 任务创建、读取、列表、更新，以及任务关系维护
@@ -76,6 +79,7 @@ agenta context init --project demo
 agenta context init --project demo --workspace-root D:\repo
 agenta context init --project demo --context-dir D:\repo\.agenta --force
 agenta context init --project demo --entry-task-code InitCtx-00
+agenta context init --project demo --feedback-task-code AgentFeedback-00 --feedback-file feedback.md
 agenta context init --project demo --context-dir D:\repo\.agenta --dry-run
 ```
 
@@ -88,12 +92,41 @@ agenta context init --project demo --context-dir D:\repo\.agenta --dry-run
 - `--memory-dir`: 写入 manifest 的记忆目录，默认 `memory`
 - `--entry-task-id`: 写入 manifest 的任务泳道恢复入口 UUID，可省略
 - `--entry-task-code`: 写入 manifest 的任务泳道恢复入口编号，例如 `InitCtx-00`，可省略
+- `--feedback-task-id`: 写入 manifest 的 Agent 反馈收集任务 UUID，可省略
+- `--feedback-task-code`: 写入 manifest 的 Agent 反馈收集任务编号，推荐 `AgentFeedback-00`
+- `--feedback-file`: 写入 manifest 的反馈 fallback 文件，推荐 `feedback.md`
 - `--force`: 已有 manifest 不一致时允许覆盖
 - `--dry-run`: 只返回目标路径和状态，不写文件
 
 `context init` 会创建 `project.yaml`，并在 `memory_dir` 非空时创建对应目录。
 
 不要为了项目级长期上下文强制设置 `entry_task_id` 或 `entry_task_code`。项目级长期上下文应继续由仓库文件承载，Agenta 只记录任务级结论、验证、风险和 closeout。
+
+## Agent 反馈
+
+当 Agent 在使用 Agenta、`agenta-workflow` skill、MCP 工具、CLI 命令、Desktop bridge 或文档时遇到摩擦，可以提交反馈。反馈不是当前业务任务的 closeout；它会写入反馈收集任务，供维护者定期 triage。
+
+推荐先在项目 manifest 中配置反馈入口：
+
+```yaml
+feedback_task_code: AgentFeedback-00
+feedback_file: feedback.md
+```
+
+提交反馈：
+
+```powershell
+agenta feedback submit `
+  --project demo `
+  --surface skill `
+  --severity normal `
+  --title "Feedback route was unclear" `
+  --friction "The Agent did not know where to leave workflow feedback." `
+  --expected "A stable feedback inbox should be discoverable." `
+  --suggested-change "Document feedback submit in the skill."
+```
+
+如果没有找到 `AgentFeedback-00`，默认会创建 `[AgentFeedback-00] Agent 使用反馈收集箱` 并追加 `note_kind=finding` 的反馈 note。使用 `--create-task-if-missing false` 可以要求任务必须预先存在。
 
 ## 项目与任务
 

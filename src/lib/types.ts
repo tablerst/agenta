@@ -80,6 +80,9 @@ export interface ContextInitResult {
   used_defaults: boolean;
   entry_task_id: string | null;
   entry_task_code: string | null;
+  feedback_task_id: string | null;
+  feedback_task_code: string | null;
+  feedback_file: string | null;
 }
 
 export interface Task {

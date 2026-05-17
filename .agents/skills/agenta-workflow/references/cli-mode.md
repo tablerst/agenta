@@ -34,6 +34,12 @@ Context:
 agenta context init --project demo
 ```
 
+Feedback:
+
+```powershell
+agenta feedback submit --project demo --surface skill --title "Feedback title" --friction "What was hard to use"
+```
+
 Projects, versions, and tasks:
 
 ```powershell
@@ -80,5 +86,6 @@ agenta sync pull --limit 100
 - Use CLI mode when the user explicitly asks for command-line operation or the Agent Host cannot access MCP tools.
 - Run commands from the target project root unless the user or config explicitly points elsewhere.
 - Preserve command sequences when the same operation must be repeated.
+- Use `agenta feedback submit` for Agenta workflow/tooling friction; do not mix product feedback into ordinary task closeout notes.
 - After each write, read back the result with the appropriate command.
 - Follow `common-workflow.md` for task organization, note style, and status rules.

@@ -1,4 +1,4 @@
 interface:
   display_name: "Agenta Workflow"
-  short_description: "Manage Agenta project, version, task context, and closeout flow through MCP or CLI"
-  default_prompt: "Use $agenta-workflow to choose MCP or CLI, initialize or reuse an Agenta project/version, restore task context, and close out work."
+  short_description: "Manage Agenta project, version, task context, closeout, and Agent feedback flow through MCP or CLI"
+  default_prompt: "Use $agenta-workflow to choose MCP or CLI, initialize or reuse an Agenta project/version, restore task context, close out work, and submit Agenta workflow feedback when relevant."

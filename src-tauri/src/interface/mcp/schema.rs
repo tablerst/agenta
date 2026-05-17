@@ -31,6 +31,12 @@ pub struct ContextInitToolInput {
     pub entry_task_id: Option<String>,
     /// Optional default recovery task code written into the manifest.
     pub entry_task_code: Option<String>,
+    /// Optional feedback inbox task UUID written into the manifest.
+    pub feedback_task_id: Option<String>,
+    /// Optional feedback inbox task code written into the manifest.
+    pub feedback_task_code: Option<String>,
+    /// Optional fallback feedback file path written into the manifest.
+    pub feedback_file: Option<String>,
     /// When true, overwrite an existing manifest if its contents differ.
     pub force: Option<bool>,
     /// When true, do not write files and only report the resolved target and outcome.
@@ -46,6 +52,9 @@ pub struct ContextInitRecord {
     pub used_defaults: bool,
     pub entry_task_id: Option<String>,
     pub entry_task_code: Option<String>,
+    pub feedback_task_id: Option<String>,
+    pub feedback_task_code: Option<String>,
+    pub feedback_file: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, JsonSchema)]
@@ -177,6 +186,9 @@ impl From<ContextInitResult> for ContextInitRecord {
             used_defaults: result.used_defaults,
             entry_task_id: result.entry_task_id,
             entry_task_code: result.entry_task_code,
+            feedback_task_id: result.feedback_task_id,
+            feedback_task_code: result.feedback_task_code,
+            feedback_file: result.feedback_file,
         }
     }
 }
@@ -879,6 +891,48 @@ pub struct ActivityRecord {
 pub struct NoteToolOutput {
     /// The resolved note record.
     pub note: NoteRecord,
+}
+
+/// Submit Agent-facing feedback about Agenta workflow, tools, docs, or usability.
+#[derive(Debug, Deserialize, JsonSchema, Default)]
+pub struct FeedbackSubmitToolInput {
+    /// Optional project reference. Supported values: project_id UUID or slug.
+    pub project: Option<String>,
+    /// Optional explicit feedback inbox task UUID.
+    pub feedback_task_id: Option<String>,
+    /// Optional feedback inbox task code. Defaults to `AgentFeedback-00`.
+    pub feedback_task_code: Option<String>,
+    /// Product surface where the friction occurred, such as skill, mcp, cli, desktop, or docs.
+    pub surface: String,
+    /// Optional severity label. Defaults to `normal` in the created note.
+    pub severity: Option<String>,
+    /// Short feedback title.
+    pub title: String,
+    /// What felt unclear, noisy, missing, or hard to use.
+    pub friction: String,
+    /// Optional expected behavior.
+    pub expected: Option<String>,
+    /// Optional suggested product, tool, or documentation change.
+    pub suggested_change: Option<String>,
+    /// Optional tool call, command, file path, or short evidence snippet.
+    pub evidence: Option<String>,
+    /// Actor name to record as the note author. Falls back to the MCP origin actor when omitted.
+    pub created_by: Option<String>,
+    /// When true, create the default feedback inbox task if no matching task exists.
+    pub create_task_if_missing: Option<bool>,
+}
+
+/// Result returned by feedback_submit.
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+pub struct FeedbackSubmitToolOutput {
+    /// Feedback inbox task that received the note.
+    pub task: TaskRecord,
+    /// Created feedback note.
+    pub note: NoteRecord,
+    /// True when this call created the feedback inbox task.
+    pub created_task: bool,
+    /// Optional fallback feedback file path from the project context manifest.
+    pub feedback_file: Option<String>,
 }
 
 /// Result returned when listing notes.

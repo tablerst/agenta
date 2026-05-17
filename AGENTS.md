@@ -45,6 +45,7 @@ Current Tauri config points at Bun:
 - Before substantial investigation or implementation, reuse or initialize the Agenta project and active version through the selected operation surface.
 - For numbered or reusable work, set `task_code`, `task_kind`, and `note_kind` explicitly.
 - After each substantive phase, keep code and verification artifacts, active execution plans, and Agenta task notes/statuses synchronized.
+- When Agenta workflow, tools, docs, or skill instructions cause friction, submit concise feedback to `AgentFeedback-00` through `feedback_submit` or `agenta feedback submit`; use `.agenta/feedback.md` only as a fallback when Agenta writes are unavailable.
 - After any Agenta write, read back the affected project, version, task, note, or attachment before continuing.
 - If neither Agenta MCP tools nor the `agenta` CLI are available, report the workflow installation/configuration issue instead of silently skipping the ledger.
 

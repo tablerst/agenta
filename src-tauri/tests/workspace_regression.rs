@@ -24,8 +24,8 @@ use agenta_lib::{
     service::{
         ApprovalQuery, ContextInitInput, ContextInitStatus, CreateAttachmentInput, CreateNoteInput,
         CreateProjectInput, CreateTaskInput, CreateVersionInput, PageRequest, SearchEvidenceInput,
-        SearchInput, SortOrder, TaskQuery, TaskSortBy, UpdateProjectInput, UpdateTaskInput,
-        UpdateVersionInput,
+        SearchInput, SortOrder, SubmitFeedbackInput, TaskQuery, TaskSortBy, UpdateProjectInput,
+        UpdateTaskInput, UpdateVersionInput,
     },
 };
 
@@ -2897,6 +2897,9 @@ async fn context_init_creates_and_updates_manifest() -> Result<(), Box<dyn std::
             memory_dir: None,
             entry_task_id: None,
             entry_task_code: None,
+            feedback_task_id: None,
+            feedback_task_code: None,
+            feedback_file: None,
             force: false,
             dry_run: false,
         })
@@ -2920,6 +2923,9 @@ async fn context_init_creates_and_updates_manifest() -> Result<(), Box<dyn std::
             memory_dir: Some("notes".to_string()),
             entry_task_id: None,
             entry_task_code: None,
+            feedback_task_id: None,
+            feedback_task_code: None,
+            feedback_file: None,
             force: false,
             dry_run: false,
         })
@@ -2937,6 +2943,9 @@ async fn context_init_creates_and_updates_manifest() -> Result<(), Box<dyn std::
             memory_dir: Some("notes".to_string()),
             entry_task_id: Some("task-entry".to_string()),
             entry_task_code: Some("InitCtx-00".to_string()),
+            feedback_task_id: Some("feedback-task".to_string()),
+            feedback_task_code: Some("AgentFeedback-00".to_string()),
+            feedback_file: Some("feedback.md".to_string()),
             force: true,
             dry_run: false,
         })
@@ -2944,12 +2953,21 @@ async fn context_init_creates_and_updates_manifest() -> Result<(), Box<dyn std::
     assert_eq!(updated.status, ContextInitStatus::Updated);
     assert_eq!(updated.entry_task_id.as_deref(), Some("task-entry"));
     assert_eq!(updated.entry_task_code.as_deref(), Some("InitCtx-00"));
+    assert_eq!(updated.feedback_task_id.as_deref(), Some("feedback-task"));
+    assert_eq!(
+        updated.feedback_task_code.as_deref(),
+        Some("AgentFeedback-00")
+    );
+    assert_eq!(updated.feedback_file.as_deref(), Some("feedback.md"));
     assert!(updated.context_dir.join("notes").exists());
     let updated_manifest = std::fs::read_to_string(&updated.manifest_path)?;
     assert!(updated_manifest.contains("instructions: docs/overview.md"));
     assert!(updated_manifest.contains("memory_dir: notes"));
     assert!(updated_manifest.contains("entry_task_id: task-entry"));
     assert!(updated_manifest.contains("entry_task_code: InitCtx-00"));
+    assert!(updated_manifest.contains("feedback_task_id: feedback-task"));
+    assert!(updated_manifest.contains("feedback_task_code: AgentFeedback-00"));
+    assert!(updated_manifest.contains("feedback_file: feedback.md"));
 
     Ok(())
 }
@@ -3067,6 +3085,112 @@ async fn context_manifest_scopes_queries_and_all_projects_opt_in(
         })
         .await?;
     assert_eq!(global_search.tasks.len(), 2);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn feedback_submit_creates_inbox_and_appends_finding(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let tempdir = TempDir::new()?;
+    let context_dir = tempdir.path().join("workspace").join(".agenta");
+    let config_path = write_test_config_with_project_context(&tempdir, &context_dir)?;
+    let runtime = AppRuntime::bootstrap(BootstrapOptions {
+        config_path: Some(config_path),
+    })
+    .await?;
+
+    let project = runtime
+        .service
+        .create_project(CreateProjectInput {
+            slug: "feedback-demo".to_string(),
+            name: "Feedback Demo".to_string(),
+            description: None,
+        })
+        .await?;
+    runtime
+        .service
+        .init_project_context(ContextInitInput {
+            project: Some(project.slug.clone()),
+            workspace_root: Some(tempdir.path().join("workspace")),
+            context_dir: None,
+            instructions: None,
+            memory_dir: None,
+            entry_task_id: None,
+            entry_task_code: None,
+            feedback_task_id: None,
+            feedback_task_code: Some("AgentFeedback-00".to_string()),
+            feedback_file: Some("feedback.md".to_string()),
+            force: false,
+            dry_run: false,
+        })
+        .await?;
+
+    let submitted = runtime
+        .service
+        .submit_feedback_from(
+            agenta_lib::service::RequestOrigin::Cli,
+            SubmitFeedbackInput {
+                project: None,
+                feedback_task_id: None,
+                feedback_task_code: None,
+                surface: "skill".to_string(),
+                severity: Some("low".to_string()),
+                title: "Feedback route was unclear".to_string(),
+                friction: "Agent did not know where to leave workflow feedback.".to_string(),
+                expected: Some("A stable inbox should be discoverable.".to_string()),
+                suggested_change: Some("Document feedback_submit in the skill.".to_string()),
+                evidence: Some(".agents/skills/agenta-workflow/SKILL.md".to_string()),
+                created_by: Some("test-agent".to_string()),
+                create_task_if_missing: true,
+            },
+        )
+        .await?;
+
+    assert!(submitted.created_task);
+    assert_eq!(
+        submitted.task.task_code.as_deref(),
+        Some("AgentFeedback-00")
+    );
+    assert_eq!(submitted.feedback_file.as_deref(), Some("feedback.md"));
+    assert_eq!(submitted.note.created_by, "test-agent");
+    assert!(submitted.note.content.contains("surface: skill"));
+    assert!(submitted.note.content.contains("## Friction"));
+    assert!(submitted.note.content.contains("## Suggested Change"));
+
+    let context = runtime
+        .service
+        .get_task_context(&submitted.task.task_id.to_string(), Some(5))
+        .await?;
+    assert_eq!(context.notes.len(), 1);
+    let note_kind = context.notes[0]
+        .metadata_json
+        .get("note_kind")
+        .and_then(Value::as_str);
+    assert_eq!(note_kind, Some(NoteKind::Finding.as_str()));
+
+    let second = runtime
+        .service
+        .submit_feedback_from(
+            agenta_lib::service::RequestOrigin::Cli,
+            SubmitFeedbackInput {
+                project: Some(project.slug),
+                feedback_task_id: None,
+                feedback_task_code: Some("AgentFeedback-00".to_string()),
+                surface: "mcp".to_string(),
+                severity: None,
+                title: "MCP output is noisy".to_string(),
+                friction: "The result took extra parsing.".to_string(),
+                expected: None,
+                suggested_change: None,
+                evidence: None,
+                created_by: None,
+                create_task_if_missing: true,
+            },
+        )
+        .await?;
+    assert!(!second.created_task);
+    assert_eq!(second.task.task_id, submitted.task.task_id);
 
     Ok(())
 }

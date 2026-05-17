@@ -318,6 +318,9 @@ struct DesktopContextInput {
     memory_dir: Option<String>,
     entry_task_id: Option<String>,
     entry_task_code: Option<String>,
+    feedback_task_id: Option<String>,
+    feedback_task_code: Option<String>,
+    feedback_file: Option<String>,
     force: Option<bool>,
     dry_run: Option<bool>,
 }
@@ -593,6 +596,9 @@ async fn desktop_context(
                         memory_dir: input.memory_dir,
                         entry_task_id: input.entry_task_id,
                         entry_task_code: input.entry_task_code,
+                        feedback_task_id: input.feedback_task_id,
+                        feedback_task_code: input.feedback_task_code,
+                        feedback_file: input.feedback_file,
                         force: input.force.unwrap_or(false),
                         dry_run: input.dry_run.unwrap_or(false),
                     })

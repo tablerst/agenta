@@ -14,6 +14,7 @@
 - 当 MCP 工具可见且用户没有指定 CLI 时，Agent 优先通过 MCP 读写项目、版本、任务和笔记；当用户选择 CLI 或 MCP 不可用但 CLI 可用时，Agent 使用 CLI 完成同一闭环。
 - 首次初始化时能复用或创建 Agenta project、active version、context/index task。
 - 每个实质工作阶段结束后，Agent 会同步代码/验证结果、本地执行计划、Agenta task note/status，并读回确认。
+- 当 Agent 遇到 Agenta skill、MCP、CLI、Desktop bridge、文档或易用性问题时，能把反馈提交到统一反馈收集任务。
 
 ## 前置条件
 
@@ -23,7 +24,7 @@
 - 至少一个 Agenta 操作面已经可用：
   - MCP：Agenta Desktop 托管 MCP 或 `agenta-mcp` 已经运行，且 Agent Host 已经接入 MCP 服务。
   - CLI：`agenta --help` 可以执行，或 Agent Host 被允许运行等价的 Agenta CLI 命令。
-- 如果使用 MCP，Agent 能看到 Agenta 工具，至少应包含 `project_list`、`version_list`、`task_list`、`context_init`、`task_create`、`note_create`、`search_query`、`search_evidence_get`。
+- 如果使用 MCP，Agent 能看到 Agenta 工具，至少应包含 `project_list`、`version_list`、`task_list`、`context_init`、`feedback_submit`、`task_create`、`note_create`、`search_query`、`search_evidence_get`。
 - 如果使用 CLI，Agent 能在目标项目根目录运行 `agenta project list`、`agenta context init`、`agenta task list` 等命令。
 - 目标项目允许新增项目本地目录 `.agents/skills/`。
 - 目标项目根目录允许维护至少一个 Agent 指令文件，例如 `AGENTS.md`。
@@ -114,6 +115,7 @@ Test-Path .agents\skills\agenta-workflow\SKILL.md
 - Before substantial investigation or implementation, reuse or initialize the Agenta project and active version through the selected Agenta operation surface.
 - For numbered or reusable work, set `task_code`, `task_kind`, and `note_kind` explicitly.
 - After each substantive phase, keep code and verification artifacts, local execution plans, and Agenta task notes/statuses synchronized.
+- When Agenta workflow, tools, or docs cause friction, submit concise feedback to the configured feedback inbox instead of mixing product feedback into ordinary task closeout notes.
 - After any Agenta write, read back the affected project, version, task, note, or attachment before continuing.
 - If Agenta MCP tools are unavailable, use the Agenta CLI when it is available and appropriate; if neither MCP nor CLI is available, report that the Agenta workflow is not installed correctly instead of silently skipping the ledger.
 ```
@@ -156,6 +158,7 @@ If MCP is unavailable but the agenta CLI is available, use CLI mode and preserve
 Reuse an existing Agenta project if one already matches this workspace.
 If no suitable project exists, create one.
 Create or select an active baseline version, set it as the project default when appropriate, and run context_init only when this workspace needs a manifest hint or migration.
+When writing a project context manifest, configure feedback_task_code=AgentFeedback-00 and feedback_file=feedback.md unless this repository already has a different feedback route.
 Create a reusable index task only when a task lane genuinely needs one; do not force project-wide long-term context into Agenta.
 After each write, read back the resulting state and summarize the project slug, active version, relevant repository files, and any task-level recovery task.
 ```

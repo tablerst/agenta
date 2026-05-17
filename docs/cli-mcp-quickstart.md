@@ -45,6 +45,8 @@ project: demo
 instructions: README.md
 memory_dir: memory
 # entry_task_code: InitCtx-00 # optional task-lane recovery entry
+# feedback_task_code: AgentFeedback-00 # optional Agent feedback inbox
+# feedback_file: feedback.md # fallback when Agenta writes are unavailable
 ```
 
 MCP 配置面如下：
@@ -114,6 +116,13 @@ cargo run --manifest-path src-tauri/Cargo.toml --bin agenta -- `
   task context --task <task-id> --notes-limit 5 --attachments-limit 3
 ```
 
+提交 Agent 使用反馈：
+
+```powershell
+cargo run --manifest-path src-tauri/Cargo.toml --bin agenta -- `
+  feedback submit --project demo --surface skill --title "Feedback title" --friction "What was hard to use"
+```
+
 CLI 默认输出 JSON。
 
 更完整的 CLI 命令面、搜索回填、Chroma 前置条件和用户主动同步命令说明见 [CLI Reference](cli-reference.md)。
@@ -170,6 +179,7 @@ Standalone `agenta-mcp` 默认走 `stdout` 日志；若显式配置 `mcp.log.des
 当前工具清单：
 
 - `context_init`：初始化或更新项目上下文 manifest
+- `feedback_submit`：提交 Agent 对 Agenta workflow、工具、文档或易用性的反馈
 - `project_create`：创建项目
 - `project_get`：按 UUID 或 slug 读取项目
 - `project_list`：列出项目
@@ -229,6 +239,7 @@ Standalone `agenta-mcp` 默认走 `stdout` 日志；若显式配置 `mcp.log.des
 - 如果项目上下文目录位置不固定，显式传 `context_dir` 或 `workspace_root`
 - Desktop、CLI 和 MCP 都应复用这同一个动作，而不是各自手写目录规则
 - 不要为了项目级长期上下文强制写入 `entry_task_code`；只有某个任务泳道确实需要稳定恢复入口时才写
+- 如需收集 Agent 对 Agenta 本身的改进建议，可在 manifest 中设置 `feedback_task_code: AgentFeedback-00`，并通过 `feedback_submit` 写入反馈收集任务
 
 接入建议：
 

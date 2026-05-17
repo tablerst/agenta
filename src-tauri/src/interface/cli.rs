@@ -16,8 +16,8 @@ use crate::service::{
     CreateAttachmentInput, CreateChildTaskInput, CreateNoteInput, CreateProjectInput,
     CreateTaskInput, CreateVersionInput, DetachChildTaskInput, RequestOrigin,
     ResolveTaskBlockerInput, SearchBackfillSummary, SearchEvidenceInput, SearchInput,
-    SearchQueueRecoverySummary, TaskContextOptions, TaskQuery, UpdateProjectInput, UpdateTaskInput,
-    UpdateVersionInput,
+    SearchQueueRecoverySummary, SubmitFeedbackInput, TaskContextOptions, TaskQuery,
+    UpdateProjectInput, UpdateTaskInput, UpdateVersionInput,
 };
 
 #[derive(Debug, Parser)]
@@ -37,6 +37,8 @@ enum TopLevelCommand {
     #[command(subcommand)]
     Context(ContextCommand),
     #[command(subcommand)]
+    Feedback(FeedbackCommand),
+    #[command(subcommand)]
     Project(ProjectCommand),
     #[command(subcommand)]
     Version(VersionCommand),
@@ -55,6 +57,11 @@ enum TopLevelCommand {
 #[derive(Debug, Subcommand)]
 enum ContextCommand {
     Init(ContextInitArgs),
+}
+
+#[derive(Debug, Subcommand)]
+enum FeedbackCommand {
+    Submit(FeedbackSubmitArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -153,10 +160,44 @@ struct ContextInitArgs {
     entry_task_id: Option<String>,
     #[arg(long = "entry-task-code")]
     entry_task_code: Option<String>,
+    #[arg(long = "feedback-task-id")]
+    feedback_task_id: Option<String>,
+    #[arg(long = "feedback-task-code")]
+    feedback_task_code: Option<String>,
+    #[arg(long = "feedback-file")]
+    feedback_file: Option<String>,
     #[arg(long)]
     force: bool,
     #[arg(long = "dry-run")]
     dry_run: bool,
+}
+
+#[derive(Debug, Args)]
+struct FeedbackSubmitArgs {
+    #[arg(long)]
+    project: Option<String>,
+    #[arg(long = "feedback-task-id")]
+    feedback_task_id: Option<String>,
+    #[arg(long = "feedback-task-code")]
+    feedback_task_code: Option<String>,
+    #[arg(long)]
+    surface: String,
+    #[arg(long)]
+    severity: Option<String>,
+    #[arg(long)]
+    title: String,
+    #[arg(long)]
+    friction: String,
+    #[arg(long)]
+    expected: Option<String>,
+    #[arg(long = "suggested-change")]
+    suggested_change: Option<String>,
+    #[arg(long)]
+    evidence: Option<String>,
+    #[arg(long = "created-by")]
+    created_by: Option<String>,
+    #[arg(long = "create-task-if-missing", default_value_t = true, action = clap::ArgAction::Set)]
+    create_task_if_missing: bool,
 }
 
 #[derive(Debug, Args)]
@@ -536,6 +577,7 @@ fn config_path_from_args() -> Option<PathBuf> {
 fn cli_action(command: &TopLevelCommand) -> &'static str {
     match command {
         TopLevelCommand::Context(ContextCommand::Init(_)) => "context.init",
+        TopLevelCommand::Feedback(FeedbackCommand::Submit(_)) => "feedback.submit",
         TopLevelCommand::Project(ProjectCommand::Create(_)) => "project.create",
         TopLevelCommand::Project(ProjectCommand::Get(_)) => "project.get",
         TopLevelCommand::Project(ProjectCommand::List) => "project.list",
@@ -597,6 +639,7 @@ async fn execute(
 ) -> AppResult<SuccessEnvelope> {
     match command {
         TopLevelCommand::Context(command) => execute_context(app, command).await,
+        TopLevelCommand::Feedback(command) => execute_feedback(app, command).await,
         TopLevelCommand::Project(command) => execute_project(app, command).await,
         TopLevelCommand::Version(command) => execute_version(app, command).await,
         TopLevelCommand::Task(command) => execute_task(app, command).await,
@@ -620,11 +663,42 @@ async fn execute_context(app: AgentaApp, command: ContextCommand) -> AppResult<S
                     memory_dir: args.memory_dir,
                     entry_task_id: args.entry_task_id,
                     entry_task_code: args.entry_task_code,
+                    feedback_task_id: args.feedback_task_id,
+                    feedback_task_code: args.feedback_task_code,
+                    feedback_file: args.feedback_file,
                     force: args.force,
                     dry_run: args.dry_run,
                 })
                 .await?;
             success("context.init", result, "Initialized project context")
+        }
+    }
+}
+
+async fn execute_feedback(app: AgentaApp, command: FeedbackCommand) -> AppResult<SuccessEnvelope> {
+    match command {
+        FeedbackCommand::Submit(args) => {
+            let result = app
+                .service
+                .submit_feedback_from(
+                    RequestOrigin::Cli,
+                    SubmitFeedbackInput {
+                        project: args.project,
+                        feedback_task_id: args.feedback_task_id,
+                        feedback_task_code: args.feedback_task_code,
+                        surface: args.surface,
+                        severity: args.severity,
+                        title: args.title,
+                        friction: args.friction,
+                        expected: args.expected,
+                        suggested_change: args.suggested_change,
+                        evidence: args.evidence,
+                        created_by: args.created_by,
+                        create_task_if_missing: args.create_task_if_missing,
+                    },
+                )
+                .await?;
+            success("feedback.submit", result, "Submitted feedback")
         }
     }
 }

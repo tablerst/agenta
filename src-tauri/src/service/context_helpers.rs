@@ -14,6 +14,12 @@ pub(super) fn manifests_match(
             == normalize_manifest_value(right.entry_task_id.as_deref())
         && normalize_manifest_value(left.entry_task_code.as_deref())
             == normalize_manifest_value(right.entry_task_code.as_deref())
+        && normalize_manifest_value(left.feedback_task_id.as_deref())
+            == normalize_manifest_value(right.feedback_task_id.as_deref())
+        && normalize_manifest_value(left.feedback_task_code.as_deref())
+            == normalize_manifest_value(right.feedback_task_code.as_deref())
+        && normalize_manifest_value(left.feedback_file.as_deref())
+            == normalize_manifest_value(right.feedback_file.as_deref())
 }
 
 pub(super) fn normalize_manifest_value(value: Option<&str>) -> Option<String> {

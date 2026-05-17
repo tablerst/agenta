@@ -41,6 +41,7 @@ mod approvals;
 mod attachments;
 mod context;
 mod context_helpers;
+mod feedback;
 mod overview;
 mod pagination;
 mod projects;

@@ -242,6 +242,9 @@ pub struct ContextInitInput {
     pub memory_dir: Option<String>,
     pub entry_task_id: Option<String>,
     pub entry_task_code: Option<String>,
+    pub feedback_task_id: Option<String>,
+    pub feedback_task_code: Option<String>,
+    pub feedback_file: Option<String>,
     pub force: bool,
     pub dry_run: bool,
 }
@@ -255,6 +258,9 @@ pub struct ContextInitResult {
     pub used_defaults: bool,
     pub entry_task_id: Option<String>,
     pub entry_task_code: Option<String>,
+    pub feedback_task_id: Option<String>,
+    pub feedback_task_code: Option<String>,
+    pub feedback_file: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -364,6 +370,30 @@ pub struct CreateNoteInput {
     pub content: String,
     pub note_kind: Option<NoteKind>,
     pub created_by: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct SubmitFeedbackInput {
+    pub project: Option<String>,
+    pub feedback_task_id: Option<String>,
+    pub feedback_task_code: Option<String>,
+    pub surface: String,
+    pub severity: Option<String>,
+    pub title: String,
+    pub friction: String,
+    pub expected: Option<String>,
+    pub suggested_change: Option<String>,
+    pub evidence: Option<String>,
+    pub created_by: Option<String>,
+    pub create_task_if_missing: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct SubmitFeedbackResult {
+    pub task: Task,
+    pub note: TaskActivity,
+    pub created_task: bool,
+    pub feedback_file: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -636,6 +666,9 @@ pub(super) struct ProjectContextManifest {
     pub(super) memory_dir: Option<String>,
     pub(super) entry_task_id: Option<String>,
     pub(super) entry_task_code: Option<String>,
+    pub(super) feedback_task_id: Option<String>,
+    pub(super) feedback_task_code: Option<String>,
+    pub(super) feedback_file: Option<String>,
 }
 
 #[derive(Debug)]

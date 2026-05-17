@@ -1,3 +1,5 @@
 project: agenta
 instructions: README.md
 memory_dir: memory
+feedback_task_code: AgentFeedback-00
+feedback_file: feedback.md

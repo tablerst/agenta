@@ -1395,6 +1395,18 @@ function initProjectContext(input: JsonMap): ContextInitResult {
       typeof input.entry_task_code === "string" && input.entry_task_code.trim()
         ? input.entry_task_code.trim()
         : null,
+    feedback_task_id:
+      typeof input.feedback_task_id === "string" && input.feedback_task_id.trim()
+        ? input.feedback_task_id.trim()
+        : null,
+    feedback_task_code:
+      typeof input.feedback_task_code === "string" && input.feedback_task_code.trim()
+        ? input.feedback_task_code.trim()
+        : null,
+    feedback_file:
+      typeof input.feedback_file === "string" && input.feedback_file.trim()
+        ? input.feedback_file.trim()
+        : null,
   };
 }
 

@@ -11,6 +11,7 @@ First decide which scenario the request belongs to:
 - Task progress: an existing task needs reading conclusions, design conclusions, or implementation progress.
 - Task closeout: the current task is done and needs status, summary, and closure verification.
 - Index capture: multiple pieces of context need to be summarized into a persistent entry point.
+- Workflow feedback: the Agent encountered Agenta skill, MCP, CLI, desktop, documentation, or usability friction that maintainers should triage later.
 
 Before restoring Agenta task context, read the project-maintained files that govern the work: root agent instructions, README, relevant architecture notes, active execution plans, and local skills. Use Agenta after that to recover task history, decisions, evidence, and status.
 
@@ -45,7 +46,16 @@ Use these playbooks as default call order. Adapt field names to the selected ope
 3. Append one note per directly affected Agenta task.
 4. Update task status only when the task state truly changed.
 5. Read back the updated task or task context.
-6. Report the verification commands and the Agenta task ids that were updated.
+6. If the work exposed Agenta workflow friction, submit feedback through `feedback-loop.md`.
+7. Report the verification commands and the Agenta task ids that were updated.
+
+### Workflow Feedback
+
+1. Confirm the feedback is about Agenta workflow/tooling, not the current project task.
+2. Prefer the configured feedback task from `feedback_task_id` or `feedback_task_code` in `project.yaml`.
+3. Use `feedback_submit` in MCP mode or `agenta feedback submit` in CLI mode.
+4. Keep the feedback concise: surface, severity, friction, expected behavior, suggested change, and evidence.
+5. Read back the created note or task context when the selected surface supports it.
 
 ### Version Closeout
 

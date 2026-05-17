@@ -56,12 +56,48 @@ impl AgentaService {
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned);
+        let feedback_task_id = input
+            .feedback_task_id
+            .as_deref()
+            .or_else(|| {
+                existing_manifest
+                    .as_ref()
+                    .and_then(|manifest| manifest.feedback_task_id.as_deref())
+            })
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        let feedback_task_code = input
+            .feedback_task_code
+            .as_deref()
+            .or_else(|| {
+                existing_manifest
+                    .as_ref()
+                    .and_then(|manifest| manifest.feedback_task_code.as_deref())
+            })
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        let feedback_file = input
+            .feedback_file
+            .as_deref()
+            .or_else(|| {
+                existing_manifest
+                    .as_ref()
+                    .and_then(|manifest| manifest.feedback_file.as_deref())
+            })
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
         let desired_manifest = ProjectContextManifest {
             project: Some(project.clone()),
             instructions: Some(instructions.clone()),
             memory_dir: Some(memory_dir.clone()),
             entry_task_id: entry_task_id.clone(),
             entry_task_code: entry_task_code.clone(),
+            feedback_task_id: feedback_task_id.clone(),
+            feedback_task_code: feedback_task_code.clone(),
+            feedback_file: feedback_file.clone(),
         };
         let used_defaults = input.context_dir.is_none()
             || input.instructions.is_none()
@@ -112,6 +148,9 @@ impl AgentaService {
             used_defaults,
             entry_task_id,
             entry_task_code,
+            feedback_task_id,
+            feedback_task_code,
+            feedback_file,
         })
     }
 
@@ -272,6 +311,15 @@ impl AgentaService {
             let trimmed = value.trim();
             (!trimmed.is_empty()).then(|| trimmed.to_string())
         }))
+    }
+
+    pub(super) fn feedback_route_from_context_manifest(
+        &self,
+    ) -> AppResult<Option<ProjectContextManifest>> {
+        let Some(manifest_path) = self.find_project_context_manifest()? else {
+            return Ok(None);
+        };
+        self.read_project_context_manifest(&manifest_path).map(Some)
     }
 
     pub(super) fn find_project_context_manifest(&self) -> AppResult<Option<PathBuf>> {

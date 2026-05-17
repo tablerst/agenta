@@ -398,6 +398,41 @@ fn cli_outputs_json_and_reuses_same_database() -> Result<(), Box<dyn std::error:
         .as_array()
         .is_some_and(|activities| !activities.is_empty()));
 
+    let mut feedback_submit = Command::cargo_bin("agenta")?;
+    let feedback_submit_output = feedback_submit
+        .args([
+            "--config",
+            &config_path_str,
+            "feedback",
+            "submit",
+            "--project",
+            "cli-demo",
+            "--surface",
+            "cli",
+            "--title",
+            "CLI feedback smoke",
+            "--friction",
+            "Feedback submission should be a first-class command.",
+            "--suggested-change",
+            "Keep feedback submit documented.",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let feedback_submit_json: Value = serde_json::from_slice(&feedback_submit_output)?;
+    assert_eq!(feedback_submit_json["action"], "feedback.submit");
+    assert_eq!(feedback_submit_json["result"]["created_task"], true);
+    assert_eq!(
+        feedback_submit_json["result"]["task"]["task_code"],
+        "AgentFeedback-00"
+    );
+    assert_eq!(
+        feedback_submit_json["result"]["note"]["metadata_json"]["note_kind"],
+        "finding"
+    );
+
     let mut list = Command::cargo_bin("agenta-cli")?;
     let list_output = list
         .args(["--config", &config_path_str, "project", "list"])
@@ -536,6 +571,7 @@ async fn mcp_streamable_http_tool_call_returns_structured_content(
     let tools = list_tools_payload["result"]["tools"]
         .as_array()
         .ok_or("tools/list payload missing tools array")?;
+    assert!(tools.iter().any(|tool| tool["name"] == "feedback_submit"));
     assert!(tools.iter().any(|tool| tool["name"] == "project_create"));
     assert!(tools.iter().any(|tool| tool["name"] == "project_get"));
     assert!(tools.iter().any(|tool| tool["name"] == "project_list"));
@@ -858,6 +894,9 @@ async fn mcp_context_init_creates_manifest_in_explicit_directory(
                 memory_dir: Some("memory".to_string()),
                 entry_task_id: None,
                 entry_task_code: None,
+                feedback_task_id: None,
+                feedback_task_code: Some("AgentFeedback-00".to_string()),
+                feedback_file: Some("feedback.md".to_string()),
                 force: Some(false),
                 dry_run: Some(false),
             },
@@ -867,6 +906,11 @@ async fn mcp_context_init_creates_manifest_in_explicit_directory(
 
     assert_eq!(output.context.project, project.slug);
     assert_eq!(output.context.status, "created");
+    assert_eq!(
+        output.context.feedback_task_code.as_deref(),
+        Some("AgentFeedback-00")
+    );
+    assert_eq!(output.context.feedback_file.as_deref(), Some("feedback.md"));
     assert!(context_dir.join("project.yaml").exists());
     assert!(context_dir.join("memory").exists());
 
@@ -953,6 +997,7 @@ async fn standalone_agenta_mcp_binary_exposes_explicit_tools_and_runs_smoke_flow
         "attachment_list",
         "search_query",
         "search_evidence_get",
+        "feedback_submit",
     ] {
         assert!(
             tools.iter().any(|tool| tool["name"] == required),

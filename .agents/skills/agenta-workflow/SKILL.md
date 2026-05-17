@@ -41,6 +41,7 @@ Do not assume CLI is the default, and do not treat MCP as the only valid entry p
 4. Do the requested work and run the appropriate verification.
 5. Sync code/verifications, local execution plans, and Agenta task notes/statuses.
 6. Read back every Agenta write before reporting completion.
+7. If Agenta itself, this skill, or the selected operating surface caused friction, submit concise Agent feedback through `references/feedback-loop.md`.
 
 ## References To Read
 
@@ -48,6 +49,7 @@ Do not assume CLI is the default, and do not treat MCP as the only valid entry p
 - Read `references/common-workflow.md` next for shared rules around project reuse, task decomposition, note capture, and status closeout.
 - If using CLI mode, read `references/cli-mode.md`.
 - If using MCP mode, read `references/mcp-mode.md`.
+- Read `references/feedback-loop.md` when an Agent should report Agenta workflow, tool, documentation, or usability feedback.
 
 ## Expected Outputs
 
@@ -57,6 +59,7 @@ After using this skill, produce one or more of these artifacts:
 - A stable default baseline version.
 - A set of tasks organized around task-level recovery.
 - Findings or conclusion notes bound to Agenta tasks.
+- Agent feedback notes routed to a configured feedback inbox task when the Agenta workflow itself needs improvement.
 - Trustworthy task state and knowledge state.
 - An index-style task only when a task lane genuinely needs a reusable recovery entry.
 
