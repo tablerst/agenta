@@ -242,6 +242,7 @@ async fn mcp_streamable_http_lists_tools_and_calls_project_tool() {
 
     let tools = client.list_all_tools().await.expect("list tools");
     assert!(tools.iter().any(|tool| tool.name == "feedback_submit"));
+    assert!(tools.iter().any(|tool| tool.name == "workflow_check"));
     assert!(tools.iter().any(|tool| tool.name == "project_create"));
     assert!(tools.iter().any(|tool| tool.name == "project_get"));
     assert!(tools.iter().any(|tool| tool.name == "project_list"));

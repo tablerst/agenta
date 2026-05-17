@@ -433,6 +433,84 @@ fn cli_outputs_json_and_reuses_same_database() -> Result<(), Box<dyn std::error:
         "finding"
     );
 
+    let workspace_root = tempdir.path().to_string_lossy().to_string();
+    let mut context_init = Command::cargo_bin("agenta")?;
+    context_init
+        .args([
+            "--config",
+            &config_path_str,
+            "context",
+            "init",
+            "--project",
+            "cli-demo",
+            "--workspace-root",
+            &workspace_root,
+            "--context-dir",
+            ".agenta",
+            "--entry-task-id",
+            task_id,
+            "--feedback-task-code",
+            "AgentFeedback-00",
+            "--force",
+        ])
+        .assert()
+        .success();
+
+    let mut workflow_check = Command::cargo_bin("agenta")?;
+    let workflow_check_output = workflow_check
+        .args([
+            "--config",
+            &config_path_str,
+            "workflow",
+            "check",
+            "--project",
+            "cli-demo",
+            "--task",
+            task_id,
+            "--workspace-root",
+            &workspace_root,
+            "--include-execution-plans",
+            "false",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let workflow_check_json: Value = serde_json::from_slice(&workflow_check_output)?;
+    assert_eq!(workflow_check_json["action"], "workflow.check");
+    assert!(workflow_check_json["result"]["digest"]["health"].is_string());
+    assert!(workflow_check_json["result"]["missing_surfaces"].is_array());
+    assert!(workflow_check_json["result"]["recommended_next_actions"].is_array());
+
+    let mut workflow_check_human = Command::cargo_bin("agenta")?;
+    let workflow_check_human_output = workflow_check_human
+        .args([
+            "--config",
+            &config_path_str,
+            "--human",
+            "workflow",
+            "check",
+            "--project",
+            "cli-demo",
+            "--task",
+            task_id,
+            "--workspace-root",
+            &workspace_root,
+            "--include-execution-plans",
+            "false",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let workflow_check_human_text = String::from_utf8(workflow_check_human_output)?;
+    assert!(workflow_check_human_text.contains("Workflow health:"));
+    assert!(workflow_check_human_text.contains("Missing:"));
+    assert!(workflow_check_human_text.contains("Next:"));
+    assert!(workflow_check_human_text.lines().count() <= 10);
+
     let mut list = Command::cargo_bin("agenta-cli")?;
     let list_output = list
         .args(["--config", &config_path_str, "project", "list"])
@@ -572,6 +650,7 @@ async fn mcp_streamable_http_tool_call_returns_structured_content(
         .as_array()
         .ok_or("tools/list payload missing tools array")?;
     assert!(tools.iter().any(|tool| tool["name"] == "feedback_submit"));
+    assert!(tools.iter().any(|tool| tool["name"] == "workflow_check"));
     assert!(tools.iter().any(|tool| tool["name"] == "project_create"));
     assert!(tools.iter().any(|tool| tool["name"] == "project_get"));
     assert!(tools.iter().any(|tool| tool["name"] == "project_list"));
@@ -998,6 +1077,7 @@ async fn standalone_agenta_mcp_binary_exposes_explicit_tools_and_runs_smoke_flow
         "search_query",
         "search_evidence_get",
         "feedback_submit",
+        "workflow_check",
     ] {
         assert!(
             tools.iter().any(|tool| tool["name"] == required),
@@ -1319,6 +1399,31 @@ async fn standalone_agenta_mcp_binary_exposes_explicit_tools_and_runs_smoke_flow
         .ok_or("task_context_get missing recent_activities")?;
     assert_eq!(recent_activities.len(), 2);
     assert_eq!(recent_activities[0]["kind"], "status_change");
+
+    let workflow_payload = post_jsonrpc(
+        &client,
+        &url,
+        Some(&session_id),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 76,
+            "method": "tools/call",
+            "params": {
+                "name": "workflow_check",
+                "arguments": {
+                    "project": project_id.clone(),
+                    "task": task_id.clone(),
+                    "include_execution_plans": false
+                }
+            }
+        }),
+    )
+    .await?;
+    let workflow = &workflow_payload["result"]["structuredContent"];
+    assert!(workflow["digest"]["health"].is_string());
+    assert!(workflow["missing_surfaces"].is_array());
+    assert!(workflow["recommended_next_actions"].is_array());
+    assert!(workflow["open_tasks"]["total"].is_number());
 
     let search_payload = post_jsonrpc(
         &client,

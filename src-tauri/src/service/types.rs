@@ -263,6 +263,124 @@ pub struct ContextInitResult {
     pub feedback_file: Option<String>,
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct WorkflowCheckInput {
+    pub project: Option<String>,
+    pub version: Option<String>,
+    pub task: Option<String>,
+    pub task_code_prefix: Option<String>,
+    pub workspace_root: Option<PathBuf>,
+    pub include_execution_plans: bool,
+    pub open_task_limit: Option<usize>,
+    pub recent_activity_limit: Option<usize>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct WorkflowCheckResult {
+    pub digest: WorkflowCheckDigest,
+    pub scope: WorkflowCheckScope,
+    pub surface_statuses: Vec<WorkflowSurfaceStatus>,
+    pub missing_surfaces: Vec<String>,
+    pub warnings: Vec<String>,
+    pub recommended_next_actions: Vec<String>,
+    pub open_tasks: WorkflowOpenTasks,
+    pub recovery_candidates: Vec<WorkflowRecoveryCandidate>,
+    pub feedback_inbox: WorkflowFeedbackInbox,
+    pub execution_plans: WorkflowExecutionPlans,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct WorkflowCheckDigest {
+    pub health: String,
+    pub summary: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct WorkflowCheckScope {
+    pub project: Option<WorkflowProjectSummary>,
+    pub version: Option<WorkflowVersionSummary>,
+    pub task: Option<WorkflowTaskSummary>,
+    pub task_code_prefix: Option<String>,
+    pub workspace_root: Option<String>,
+    pub context_manifest_path: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct WorkflowProjectSummary {
+    pub project_id: String,
+    pub slug: String,
+    pub name: String,
+    pub status: String,
+    pub default_version_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct WorkflowVersionSummary {
+    pub version_id: String,
+    pub project_id: String,
+    pub name: String,
+    pub status: String,
+    pub is_default: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct WorkflowTaskSummary {
+    pub task_id: String,
+    pub project_id: String,
+    pub version_id: Option<String>,
+    pub task_code: Option<String>,
+    pub task_kind: String,
+    pub title: String,
+    pub status: String,
+    pub knowledge_status: String,
+    pub note_count: i64,
+    pub latest_note_summary: Option<String>,
+    pub task_context_digest: String,
+    pub ready_to_start: bool,
+    pub recent_activity_count: Option<usize>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct WorkflowSurfaceStatus {
+    pub surface: String,
+    pub status: String,
+    pub summary: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct WorkflowOpenTasks {
+    pub total: usize,
+    pub ready_to_start_count: usize,
+    pub in_progress_count: usize,
+    pub blocked_count: usize,
+    pub limit_applied: usize,
+    pub tasks: Vec<WorkflowTaskSummary>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct WorkflowRecoveryCandidate {
+    pub source: String,
+    pub reason: String,
+    pub task: WorkflowTaskSummary,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct WorkflowFeedbackInbox {
+    pub configured: bool,
+    pub task: Option<WorkflowTaskSummary>,
+    pub feedback_file: Option<String>,
+    pub source: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct WorkflowExecutionPlans {
+    pub included: bool,
+    pub active_plan_count: usize,
+    pub linked_plan_count: usize,
+    pub linked_plans: Vec<String>,
+    pub unlinked_plans: Vec<String>,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct CreateProjectInput {
     pub slug: String,

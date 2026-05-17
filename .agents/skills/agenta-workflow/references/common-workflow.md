@@ -15,7 +15,21 @@ First decide which scenario the request belongs to:
 
 Before restoring Agenta task context, read the project-maintained files that govern the work: root agent instructions, README, relevant architecture notes, active execution plans, and local skills. Use Agenta after that to recover task history, decisions, evidence, and status.
 
-## 2. Scenario Playbooks
+When available, run a read-only workflow health check during bootstrap or restore. Treat `workflow_check.digest` as the first-pass status, then inspect `missing_surfaces`, `warnings`, and `recommended_next_actions` before deciding whether to expand with task context or search.
+
+## 2. Workflow State Machine
+
+Use these stages for substantial work:
+
+- `bootstrap`: select MCP/CLI, read repository context, run `workflow_check` when available, and identify the current project/version/task scope.
+- `restore`: read the chosen recovery task or task lane. Minimum output is scope, recovery entry, warnings, and missing surfaces.
+- `execute`: perform the requested work and keep adjacent Agenta tasks together when one batch advances them.
+- `verify`: run relevant checks and update the local active execution plan.
+- `closeout`: write Agenta notes/statuses, read back writes, and report `ledger_delta`.
+
+`ledger_delta` must list updated task ids/codes, note kinds written, verification commands, remaining risks, and the next recovery entry.
+
+## 3. Scenario Playbooks
 
 Use these playbooks as default call order. Adapt field names to the selected operating surface, but keep the read-before-write and write-readback shape.
 
@@ -34,10 +48,11 @@ Use these playbooks as default call order. Adapt field names to the selected ope
 ### Context Restore
 
 1. Prefer an explicit task id, task code prefix, project, or version from the user or local plan.
-2. Use sorted task listing or search to find the recovery task.
-3. Read full task context, including notes and attachments when available.
-4. Summarize the reusable conclusions, relevant files, and open risks before continuing.
-5. Do not create replacement tasks when an existing reusable context task already fits.
+2. Run `workflow_check` when available for a digest of recoverability, open tasks, missing surfaces, and recommended next actions.
+3. Use sorted task listing or search to find the recovery task when the digest is not enough.
+4. Read full task context, including notes and attachments when available.
+5. Summarize the reusable conclusions, relevant files, and open risks before continuing.
+6. Do not create replacement tasks when an existing reusable context task already fits.
 
 ### Phase Closeout
 
@@ -46,8 +61,9 @@ Use these playbooks as default call order. Adapt field names to the selected ope
 3. Append one note per directly affected Agenta task.
 4. Update task status only when the task state truly changed.
 5. Read back the updated task or task context.
-6. If the work exposed Agenta workflow friction, submit feedback through `feedback-loop.md`.
-7. Report the verification commands and the Agenta task ids that were updated.
+6. Run `workflow_check` when available if scope drift, missing readback, feedback routing, or execution-plan linkage is unclear.
+7. If the work exposed Agenta workflow friction, submit feedback through `feedback-loop.md`.
+8. Report `ledger_delta`: updated task ids/codes, note kinds, verification commands, remaining risks, and next recovery entry.
 
 ### Workflow Feedback
 
@@ -66,7 +82,7 @@ Use these playbooks as default call order. Adapt field names to the selected ope
 5. If a new lane should become active, set the new version active and update the project default version.
 6. Read back version and project state.
 
-## 3. Read Current State Before Initialization
+## 4. Read Current State Before Initialization
 
 If the goal is initialization:
 
@@ -88,7 +104,7 @@ If the request assumes a new version is now the active lane:
 2. If the previous version was intentionally closed, verify that state instead of assuming it.
 3. Mark the target version `active` and update the project default version before starting implementation, so later tasks inherit the correct lane.
 
-## 4. Decompose Tasks Around Context Recovery
+## 5. Decompose Tasks Around Context Recovery
 
 Do not flatten tasks only by directory. Prefer recovery entry points for task-level work. Long-lived project context belongs in repository files; Agenta tasks should capture work lanes, decisions, verification, risks, and closeout.
 
@@ -118,7 +134,7 @@ When adjacent tasks share one code path or one implementation batch:
 - Keep ownership explicit: note which tasks were directly advanced and which ones only received enabling work.
 - Update every affected task after the batch; do not leave nearby tasks stale just because the code change started from one task.
 
-## 5. Parallel And Serial Work
+## 6. Parallel And Serial Work
 
 Safe to parallelize:
 
@@ -153,7 +169,7 @@ For Agenta repository work specifically, treat cross-surface contract changes as
 
 Avoid landing only one surface and planning to “catch up later” unless the user explicitly wants an intermediate partial state.
 
-## 6. Task Note Style
+## 7. Task Note Style
 
 When appending notes, write reusable context rather than a chat transcript.
 
@@ -179,7 +195,7 @@ Writing rules:
 - Explain why a risk is risky.
 - Use `note_kind=conclusion` when the note is reusable as a conclusion.
 
-## 7. Decision Rules
+## 8. Decision Rules
 
 ### When To Create A New Task
 
@@ -209,7 +225,7 @@ Mark a task as `done` only when these conditions are mostly true:
 
 If the task was just created and does not yet contain useful context, keep it `ready` or `in_progress`.
 
-## 8. Final Checks
+## 9. Final Checks
 
 - The project exists and the slug is correct.
 - The default version is set when needed.
@@ -219,8 +235,9 @@ If the task was just created and does not yet contain useful context, keep it `r
 - Notes use `note_kind` to mark scratch, finding, or conclusion.
 - Status matches the true completion state.
 - Writes were confirmed by reading back the resulting state.
+- Closeout includes `ledger_delta`.
 
-## 9. Avoid These Anti-Patterns
+## 10. Avoid These Anti-Patterns
 
 - Creating task titles without useful notes.
 - Creating many tasks without clear ordering or numbering.

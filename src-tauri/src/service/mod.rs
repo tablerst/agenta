@@ -54,6 +54,7 @@ mod sync_helpers;
 mod tasks;
 mod types;
 mod versions;
+mod workflow;
 
 use approval_helpers::*;
 use context_helpers::*;

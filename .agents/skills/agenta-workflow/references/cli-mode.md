@@ -34,6 +34,13 @@ Context:
 agenta context init --project demo
 ```
 
+Workflow:
+
+```powershell
+agenta workflow check --project demo
+agenta --human workflow check --project demo --task <task-id>
+```
+
 Feedback:
 
 ```powershell
@@ -84,6 +91,7 @@ agenta sync pull --limit 100
 
 - Use CLI mode for batch verification when it is the most stable boundary.
 - Use CLI mode when the user explicitly asks for command-line operation or the Agent Host cannot access MCP tools.
+- Use `agenta workflow check` as the lightweight read-only health check when available. In human mode, expect a short status, gaps, and next-action summary.
 - Run commands from the target project root unless the user or config explicitly points elsewhere.
 - Preserve command sequences when the same operation must be repeated.
 - Use `agenta feedback submit` for Agenta workflow/tooling friction; do not mix product feedback into ordinary task closeout notes.

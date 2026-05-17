@@ -62,6 +62,134 @@ pub struct ContextInitToolOutput {
     pub context: ContextInitRecord,
 }
 
+/// Check whether the current Agent workflow ledger is recoverable and synchronized.
+#[derive(Debug, Deserialize, JsonSchema, Default)]
+pub struct WorkflowCheckToolInput {
+    /// Optional project reference. Defaults to the project in `.agenta/project.yaml` when present.
+    pub project: Option<String>,
+    /// Optional version reference. Defaults to the resolved project's default version.
+    pub version: Option<String>,
+    /// Optional task reference for lightweight readback.
+    pub task: Option<String>,
+    /// Optional task code prefix used to scope open tasks and recovery candidates.
+    pub task_code_prefix: Option<String>,
+    /// Optional workspace root used when resolving `.agenta/project.yaml` and active execution plans.
+    pub workspace_root: Option<String>,
+    /// Whether to inspect `dev_docs/execution-plans/active` for task linkage. Defaults to true.
+    pub include_execution_plans: Option<bool>,
+    /// Maximum open task summaries to return.
+    pub open_task_limit: Option<usize>,
+    /// Recent activity limit used when `task` is provided for lightweight readback.
+    pub recent_activity_limit: Option<usize>,
+}
+
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+pub struct WorkflowCheckDigestRecord {
+    pub health: String,
+    pub summary: String,
+}
+
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+pub struct WorkflowProjectSummaryRecord {
+    pub project_id: String,
+    pub slug: String,
+    pub name: String,
+    pub status: String,
+    pub default_version_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+pub struct WorkflowVersionSummaryRecord {
+    pub version_id: String,
+    pub project_id: String,
+    pub name: String,
+    pub status: String,
+    pub is_default: bool,
+}
+
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+pub struct WorkflowTaskSummaryRecord {
+    pub task_id: String,
+    pub project_id: String,
+    pub version_id: Option<String>,
+    pub task_code: Option<String>,
+    pub task_kind: String,
+    pub title: String,
+    pub status: String,
+    pub knowledge_status: String,
+    pub note_count: i64,
+    pub latest_note_summary: Option<String>,
+    pub task_context_digest: String,
+    pub ready_to_start: bool,
+    pub recent_activity_count: Option<usize>,
+}
+
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+pub struct WorkflowCheckScopeRecord {
+    pub project: Option<WorkflowProjectSummaryRecord>,
+    pub version: Option<WorkflowVersionSummaryRecord>,
+    pub task: Option<WorkflowTaskSummaryRecord>,
+    pub task_code_prefix: Option<String>,
+    pub workspace_root: Option<String>,
+    pub context_manifest_path: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+pub struct WorkflowSurfaceStatusRecord {
+    pub surface: String,
+    pub status: String,
+    pub summary: String,
+}
+
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+pub struct WorkflowOpenTasksRecord {
+    pub total: usize,
+    pub ready_to_start_count: usize,
+    pub in_progress_count: usize,
+    pub blocked_count: usize,
+    pub limit_applied: usize,
+    pub tasks: Vec<WorkflowTaskSummaryRecord>,
+}
+
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+pub struct WorkflowRecoveryCandidateRecord {
+    pub source: String,
+    pub reason: String,
+    pub task: WorkflowTaskSummaryRecord,
+}
+
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+pub struct WorkflowFeedbackInboxRecord {
+    pub configured: bool,
+    pub task: Option<WorkflowTaskSummaryRecord>,
+    pub feedback_file: Option<String>,
+    pub source: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+pub struct WorkflowExecutionPlansRecord {
+    pub included: bool,
+    pub active_plan_count: usize,
+    pub linked_plan_count: usize,
+    pub linked_plans: Vec<String>,
+    pub unlinked_plans: Vec<String>,
+}
+
+/// Result returned by workflow_check.
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+pub struct WorkflowCheckToolOutput {
+    pub digest: WorkflowCheckDigestRecord,
+    pub scope: WorkflowCheckScopeRecord,
+    pub surface_statuses: Vec<WorkflowSurfaceStatusRecord>,
+    pub missing_surfaces: Vec<String>,
+    pub warnings: Vec<String>,
+    pub recommended_next_actions: Vec<String>,
+    pub open_tasks: WorkflowOpenTasksRecord,
+    pub recovery_candidates: Vec<WorkflowRecoveryCandidateRecord>,
+    pub feedback_inbox: WorkflowFeedbackInboxRecord,
+    pub execution_plans: WorkflowExecutionPlansRecord,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 pub(super) struct CursorPayload {
     pub(super) created_at: String,
@@ -1396,6 +1524,145 @@ impl From<crate::service::TaskListSummary> for TaskListSummaryRecord {
                 index: summary.kind_counts.index,
             },
             ready_to_start_count: summary.ready_to_start_count,
+        }
+    }
+}
+
+impl From<crate::service::WorkflowCheckResult> for WorkflowCheckToolOutput {
+    fn from(result: crate::service::WorkflowCheckResult) -> Self {
+        Self {
+            digest: WorkflowCheckDigestRecord {
+                health: result.digest.health,
+                summary: result.digest.summary,
+            },
+            scope: WorkflowCheckScopeRecord {
+                project: result.scope.project.map(WorkflowProjectSummaryRecord::from),
+                version: result.scope.version.map(WorkflowVersionSummaryRecord::from),
+                task: result.scope.task.map(WorkflowTaskSummaryRecord::from),
+                task_code_prefix: result.scope.task_code_prefix,
+                workspace_root: result.scope.workspace_root,
+                context_manifest_path: result.scope.context_manifest_path,
+            },
+            surface_statuses: result
+                .surface_statuses
+                .into_iter()
+                .map(WorkflowSurfaceStatusRecord::from)
+                .collect(),
+            missing_surfaces: result.missing_surfaces,
+            warnings: result.warnings,
+            recommended_next_actions: result.recommended_next_actions,
+            open_tasks: WorkflowOpenTasksRecord::from(result.open_tasks),
+            recovery_candidates: result
+                .recovery_candidates
+                .into_iter()
+                .map(WorkflowRecoveryCandidateRecord::from)
+                .collect(),
+            feedback_inbox: WorkflowFeedbackInboxRecord::from(result.feedback_inbox),
+            execution_plans: WorkflowExecutionPlansRecord::from(result.execution_plans),
+        }
+    }
+}
+
+impl From<crate::service::WorkflowProjectSummary> for WorkflowProjectSummaryRecord {
+    fn from(summary: crate::service::WorkflowProjectSummary) -> Self {
+        Self {
+            project_id: summary.project_id,
+            slug: summary.slug,
+            name: summary.name,
+            status: summary.status,
+            default_version_id: summary.default_version_id,
+        }
+    }
+}
+
+impl From<crate::service::WorkflowVersionSummary> for WorkflowVersionSummaryRecord {
+    fn from(summary: crate::service::WorkflowVersionSummary) -> Self {
+        Self {
+            version_id: summary.version_id,
+            project_id: summary.project_id,
+            name: summary.name,
+            status: summary.status,
+            is_default: summary.is_default,
+        }
+    }
+}
+
+impl From<crate::service::WorkflowTaskSummary> for WorkflowTaskSummaryRecord {
+    fn from(summary: crate::service::WorkflowTaskSummary) -> Self {
+        Self {
+            task_id: summary.task_id,
+            project_id: summary.project_id,
+            version_id: summary.version_id,
+            task_code: summary.task_code,
+            task_kind: summary.task_kind,
+            title: summary.title,
+            status: summary.status,
+            knowledge_status: summary.knowledge_status,
+            note_count: summary.note_count,
+            latest_note_summary: summary.latest_note_summary,
+            task_context_digest: summary.task_context_digest,
+            ready_to_start: summary.ready_to_start,
+            recent_activity_count: summary.recent_activity_count,
+        }
+    }
+}
+
+impl From<crate::service::WorkflowSurfaceStatus> for WorkflowSurfaceStatusRecord {
+    fn from(status: crate::service::WorkflowSurfaceStatus) -> Self {
+        Self {
+            surface: status.surface,
+            status: status.status,
+            summary: status.summary,
+        }
+    }
+}
+
+impl From<crate::service::WorkflowOpenTasks> for WorkflowOpenTasksRecord {
+    fn from(open_tasks: crate::service::WorkflowOpenTasks) -> Self {
+        Self {
+            total: open_tasks.total,
+            ready_to_start_count: open_tasks.ready_to_start_count,
+            in_progress_count: open_tasks.in_progress_count,
+            blocked_count: open_tasks.blocked_count,
+            limit_applied: open_tasks.limit_applied,
+            tasks: open_tasks
+                .tasks
+                .into_iter()
+                .map(WorkflowTaskSummaryRecord::from)
+                .collect(),
+        }
+    }
+}
+
+impl From<crate::service::WorkflowRecoveryCandidate> for WorkflowRecoveryCandidateRecord {
+    fn from(candidate: crate::service::WorkflowRecoveryCandidate) -> Self {
+        Self {
+            source: candidate.source,
+            reason: candidate.reason,
+            task: WorkflowTaskSummaryRecord::from(candidate.task),
+        }
+    }
+}
+
+impl From<crate::service::WorkflowFeedbackInbox> for WorkflowFeedbackInboxRecord {
+    fn from(inbox: crate::service::WorkflowFeedbackInbox) -> Self {
+        Self {
+            configured: inbox.configured,
+            task: inbox.task.map(WorkflowTaskSummaryRecord::from),
+            feedback_file: inbox.feedback_file,
+            source: inbox.source,
+        }
+    }
+}
+
+impl From<crate::service::WorkflowExecutionPlans> for WorkflowExecutionPlansRecord {
+    fn from(plans: crate::service::WorkflowExecutionPlans) -> Self {
+        Self {
+            included: plans.included,
+            active_plan_count: plans.active_plan_count,
+            linked_plan_count: plans.linked_plan_count,
+            linked_plans: plans.linked_plans,
+            unlinked_plans: plans.unlinked_plans,
         }
     }
 }

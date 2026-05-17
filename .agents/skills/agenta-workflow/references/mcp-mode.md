@@ -16,6 +16,10 @@ Context:
 
 - `context_init`
 
+Workflow:
+
+- `workflow_check`
+
 Feedback:
 
 - `feedback_submit`
@@ -64,6 +68,7 @@ Activities, search, and recovery:
 ## MCP Usage Habits
 
 - Use `project_list` or `project_get` first to decide whether to reuse an existing project.
+- Use `workflow_check` as the lightweight read-only health check when available. Read `digest`, `missing_surfaces`, `warnings`, and `recommended_next_actions` before expanding to heavier task context.
 - If a new version is supposed to be the active lane, verify and update `version.status` plus `project.default_version` before implementation starts.
 - After project/version initialization, run `context_init` when the workspace context manifest needs to exist or be refreshed.
 - When Agenta, this skill, or the selected MCP surface causes workflow friction, use `feedback_submit` instead of burying product feedback in the current task closeout note.

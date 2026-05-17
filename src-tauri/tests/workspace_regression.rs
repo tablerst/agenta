@@ -25,7 +25,7 @@ use agenta_lib::{
         ApprovalQuery, ContextInitInput, ContextInitStatus, CreateAttachmentInput, CreateNoteInput,
         CreateProjectInput, CreateTaskInput, CreateVersionInput, PageRequest, SearchEvidenceInput,
         SearchInput, SortOrder, SubmitFeedbackInput, TaskQuery, TaskSortBy, UpdateProjectInput,
-        UpdateTaskInput, UpdateVersionInput,
+        UpdateTaskInput, UpdateVersionInput, WorkflowCheckInput,
     },
 };
 
@@ -366,6 +366,97 @@ fn write_test_config_with_project_context(
 
 fn normalize_path_for_yaml(path: &std::path::Path) -> String {
     path.to_string_lossy().replace('\\', "/")
+}
+
+async fn seed_workflow_check_fixture(
+    runtime: &AppRuntime,
+) -> Result<(String, String, String), Box<dyn std::error::Error>> {
+    let project = runtime
+        .service
+        .create_project(CreateProjectInput {
+            slug: format!("workflow-fixture-{}", Uuid::new_v4()),
+            name: "Workflow Fixture".to_string(),
+            description: None,
+        })
+        .await?;
+    let version = runtime
+        .service
+        .create_version(CreateVersionInput {
+            project: project.slug.clone(),
+            name: "active-lane".to_string(),
+            description: None,
+            status: Some(VersionStatus::Active),
+        })
+        .await?;
+    let recovery = runtime
+        .service
+        .create_task(CreateTaskInput {
+            project: project.slug.clone(),
+            version: Some(version.version_id.to_string()),
+            task_code: Some("WorkflowCtx-00".to_string()),
+            task_kind: Some(TaskKind::Context),
+            title: "Workflow context".to_string(),
+            summary: Some("Reusable workflow context".to_string()),
+            description: None,
+            status: Some(TaskStatus::InProgress),
+            priority: Some(TaskPriority::Normal),
+            created_by: Some("workflow-test".to_string()),
+        })
+        .await?;
+    runtime
+        .service
+        .create_note(CreateNoteInput {
+            task: recovery.task_id.to_string(),
+            content: "Reusable workflow conclusion".to_string(),
+            note_kind: Some(NoteKind::Conclusion),
+            created_by: Some("workflow-test".to_string()),
+        })
+        .await?;
+    runtime
+        .service
+        .create_task(CreateTaskInput {
+            project: project.slug.clone(),
+            version: Some(version.version_id.to_string()),
+            task_code: Some("AgentFeedback-00".to_string()),
+            task_kind: Some(TaskKind::Context),
+            title: "Agent feedback inbox".to_string(),
+            summary: Some("Feedback inbox".to_string()),
+            description: None,
+            status: Some(TaskStatus::InProgress),
+            priority: Some(TaskPriority::Normal),
+            created_by: Some("workflow-test".to_string()),
+        })
+        .await?;
+    let target = runtime
+        .service
+        .create_task(CreateTaskInput {
+            project: project.slug.clone(),
+            version: Some(version.version_id.to_string()),
+            task_code: Some("WorkflowCheck-01".to_string()),
+            task_kind: Some(TaskKind::Standard),
+            title: "Target implementation task".to_string(),
+            summary: None,
+            description: None,
+            status: Some(TaskStatus::InProgress),
+            priority: Some(TaskPriority::Normal),
+            created_by: Some("workflow-test".to_string()),
+        })
+        .await?;
+    runtime
+        .service
+        .init_project_context(ContextInitInput {
+            project: Some(project.slug.clone()),
+            entry_task_code: Some("WorkflowCtx-00".to_string()),
+            feedback_task_code: Some("AgentFeedback-00".to_string()),
+            force: true,
+            ..Default::default()
+        })
+        .await?;
+    Ok((
+        project.slug,
+        version.version_id.to_string(),
+        target.task_id.to_string(),
+    ))
 }
 
 fn scoped_search_input(project: &str, version: &str, text: Option<&str>) -> SearchInput {
@@ -1113,6 +1204,263 @@ async fn task_context_retrieval_fields_sort_summary_and_search(
     assert_eq!(ready_only_search.tasks.len(), 1);
     assert_eq!(ready_only_search.tasks[0].task_id, ctx2.task_id.to_string());
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn workflow_check_reports_healthy_agent_ledger() -> Result<(), Box<dyn std::error::Error>> {
+    let tempdir = TempDir::new()?;
+    let config_path = write_test_config(&tempdir)?;
+    let runtime = AppRuntime::bootstrap(BootstrapOptions {
+        config_path: Some(config_path),
+    })
+    .await?;
+    let project = runtime
+        .service
+        .create_project(CreateProjectInput {
+            slug: "workflow-healthy".to_string(),
+            name: "Workflow Healthy".to_string(),
+            description: None,
+        })
+        .await?;
+    let version = runtime
+        .service
+        .create_version(CreateVersionInput {
+            project: project.slug.clone(),
+            name: "active-lane".to_string(),
+            description: None,
+            status: Some(VersionStatus::Active),
+        })
+        .await?;
+    let recovery = runtime
+        .service
+        .create_task(CreateTaskInput {
+            project: project.slug.clone(),
+            version: Some(version.version_id.to_string()),
+            task_code: Some("WorkflowCtx-00".to_string()),
+            task_kind: Some(TaskKind::Context),
+            title: "Workflow context".to_string(),
+            summary: Some("Reusable workflow context".to_string()),
+            description: None,
+            status: Some(TaskStatus::InProgress),
+            priority: Some(TaskPriority::Normal),
+            created_by: Some("workflow-test".to_string()),
+        })
+        .await?;
+    runtime
+        .service
+        .create_note(CreateNoteInput {
+            task: recovery.task_id.to_string(),
+            content: "Reusable workflow conclusion".to_string(),
+            note_kind: Some(NoteKind::Conclusion),
+            created_by: Some("workflow-test".to_string()),
+        })
+        .await?;
+    runtime
+        .service
+        .create_task(CreateTaskInput {
+            project: project.slug.clone(),
+            version: Some(version.version_id.to_string()),
+            task_code: Some("AgentFeedback-00".to_string()),
+            task_kind: Some(TaskKind::Context),
+            title: "Agent feedback inbox".to_string(),
+            summary: Some("Feedback inbox".to_string()),
+            description: None,
+            status: Some(TaskStatus::InProgress),
+            priority: Some(TaskPriority::Normal),
+            created_by: Some("workflow-test".to_string()),
+        })
+        .await?;
+    runtime
+        .service
+        .init_project_context(ContextInitInput {
+            project: Some(project.slug.clone()),
+            entry_task_code: Some("WorkflowCtx-00".to_string()),
+            feedback_task_code: Some("AgentFeedback-00".to_string()),
+            force: true,
+            ..Default::default()
+        })
+        .await?;
+
+    let check = runtime
+        .service
+        .workflow_check(WorkflowCheckInput {
+            project: Some(project.slug),
+            version: Some(version.version_id.to_string()),
+            include_execution_plans: false,
+            ..Default::default()
+        })
+        .await?;
+
+    assert_eq!(check.digest.health, "healthy");
+    assert!(check.missing_surfaces.is_empty());
+    assert!(check.warnings.is_empty());
+    assert!(check
+        .recommended_next_actions
+        .iter()
+        .any(|action| action.contains("Proceed")));
+    assert!(check.recovery_candidates.iter().any(|candidate| {
+        candidate.source == "context_manifest" && candidate.reason == "entry_task_code"
+    }));
+    assert!(check.feedback_inbox.configured);
+    Ok(())
+}
+
+#[tokio::test]
+async fn workflow_check_reports_missing_surfaces() -> Result<(), Box<dyn std::error::Error>> {
+    let tempdir = TempDir::new()?;
+    let config_path = write_test_config(&tempdir)?;
+    let runtime = AppRuntime::bootstrap(BootstrapOptions {
+        config_path: Some(config_path),
+    })
+    .await?;
+    let project = runtime
+        .service
+        .create_project(CreateProjectInput {
+            slug: "workflow-missing".to_string(),
+            name: "Workflow Missing".to_string(),
+            description: None,
+        })
+        .await?;
+    let version = runtime
+        .service
+        .create_version(CreateVersionInput {
+            project: project.slug.clone(),
+            name: "active-lane".to_string(),
+            description: None,
+            status: Some(VersionStatus::Active),
+        })
+        .await?;
+
+    let check = runtime
+        .service
+        .workflow_check(WorkflowCheckInput {
+            project: Some(project.slug),
+            version: Some(version.version_id.to_string()),
+            include_execution_plans: false,
+            ..Default::default()
+        })
+        .await?;
+
+    assert_eq!(check.digest.health, "attention");
+    assert!(check
+        .missing_surfaces
+        .contains(&"context_manifest".to_string()));
+    assert!(check
+        .missing_surfaces
+        .contains(&"recovery_entry".to_string()));
+    assert!(check
+        .missing_surfaces
+        .contains(&"feedback_route".to_string()));
+    Ok(())
+}
+
+#[tokio::test]
+async fn workflow_check_flags_target_task_without_notes() -> Result<(), Box<dyn std::error::Error>>
+{
+    let tempdir = TempDir::new()?;
+    let config_path = write_test_config(&tempdir)?;
+    let runtime = AppRuntime::bootstrap(BootstrapOptions {
+        config_path: Some(config_path),
+    })
+    .await?;
+    let (project_slug, version_id, target_id) = seed_workflow_check_fixture(&runtime).await?;
+
+    let check = runtime
+        .service
+        .workflow_check(WorkflowCheckInput {
+            project: Some(project_slug),
+            version: Some(version_id),
+            task: Some(target_id),
+            include_execution_plans: false,
+            recent_activity_limit: Some(2),
+            ..Default::default()
+        })
+        .await?;
+
+    assert_eq!(check.digest.health, "attention");
+    assert!(check.missing_surfaces.contains(&"task_notes".to_string()));
+    assert_eq!(
+        check
+            .scope
+            .task
+            .as_ref()
+            .and_then(|task| task.recent_activity_count),
+        Some(0)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn workflow_check_returns_blocked_for_bad_scope() -> Result<(), Box<dyn std::error::Error>> {
+    let tempdir = TempDir::new()?;
+    let config_path = write_test_config(&tempdir)?;
+    let runtime = AppRuntime::bootstrap(BootstrapOptions {
+        config_path: Some(config_path),
+    })
+    .await?;
+
+    let check = runtime
+        .service
+        .workflow_check(WorkflowCheckInput {
+            project: Some("missing-project".to_string()),
+            task: Some("missing-task".to_string()),
+            include_execution_plans: false,
+            ..Default::default()
+        })
+        .await?;
+
+    assert_eq!(check.digest.health, "blocked");
+    assert!(check
+        .warnings
+        .iter()
+        .any(|warning| warning.contains("Project")));
+    assert!(check
+        .warnings
+        .iter()
+        .any(|warning| warning.contains("Task")));
+    assert!(check
+        .recommended_next_actions
+        .iter()
+        .any(|action| action.contains("Resolve invalid")));
+    Ok(())
+}
+
+#[tokio::test]
+async fn workflow_check_flags_unlinked_active_execution_plan(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let tempdir = TempDir::new()?;
+    let config_path = write_test_config(&tempdir)?;
+    let runtime = AppRuntime::bootstrap(BootstrapOptions {
+        config_path: Some(config_path),
+    })
+    .await?;
+    let (project_slug, version_id, _) = seed_workflow_check_fixture(&runtime).await?;
+    let active_dir = tempdir
+        .path()
+        .join("dev_docs")
+        .join("execution-plans")
+        .join("active");
+    std::fs::create_dir_all(&active_dir)?;
+    std::fs::write(active_dir.join("unlinked-plan-v1.md"), "# 未关联计划\n")?;
+
+    let check = runtime
+        .service
+        .workflow_check(WorkflowCheckInput {
+            project: Some(project_slug),
+            version: Some(version_id),
+            workspace_root: Some(tempdir.path().to_path_buf()),
+            include_execution_plans: true,
+            ..Default::default()
+        })
+        .await?;
+
+    assert_eq!(check.digest.health, "attention");
+    assert!(check
+        .missing_surfaces
+        .contains(&"execution_plan_link".to_string()));
+    assert_eq!(check.execution_plans.active_plan_count, 1);
+    assert_eq!(check.execution_plans.unlinked_plans.len(), 1);
     Ok(())
 }
 

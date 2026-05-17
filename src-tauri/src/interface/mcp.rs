@@ -27,7 +27,7 @@ use crate::service::{
     CreateTaskInput, CreateVersionInput, DetachChildTaskInput, PageCursor, PageRequest, PageResult,
     RequestOrigin, ResolveTaskBlockerInput, SearchEvidenceInput, SearchInput, SortOrder,
     SubmitFeedbackInput, TaskContextOptions, TaskDetail, TaskLink, TaskListPageResult, TaskQuery,
-    TaskSortBy, UpdateProjectInput, UpdateTaskInput, UpdateVersionInput,
+    TaskSortBy, UpdateProjectInput, UpdateTaskInput, UpdateVersionInput, WorkflowCheckInput,
 };
 
 #[derive(Clone)]
@@ -156,6 +156,44 @@ impl AgentaMcpServer {
             &result,
         )
         .await;
+
+        result.map(Json)
+    }
+
+    #[tool(
+        name = "workflow_check",
+        description = "Check whether the current Agent workflow ledger is recoverable, which surfaces are missing, and what the next action should be.",
+        annotations(
+            title = "Workflow Check",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    pub async fn workflow_check(
+        &self,
+        Parameters(params): Parameters<WorkflowCheckToolInput>,
+    ) -> Result<Json<WorkflowCheckToolOutput>, ErrorData> {
+        let action = "check";
+        self.log_tool_call("workflow_check", action).await;
+        let result = self
+            .service
+            .workflow_check(WorkflowCheckInput {
+                project: optional_trimmed(params.project),
+                version: optional_trimmed(params.version),
+                task: optional_trimmed(params.task),
+                task_code_prefix: optional_trimmed(params.task_code_prefix),
+                workspace_root: optional_trimmed(params.workspace_root).map(PathBuf::from),
+                include_execution_plans: params.include_execution_plans.unwrap_or(true),
+                open_task_limit: params.open_task_limit,
+                recent_activity_limit: params.recent_activity_limit,
+            })
+            .await
+            .map(WorkflowCheckToolOutput::from)
+            .map_err(error_to_rmcp);
+        self.log_structured_tool_result("workflow_check", action, "Checked workflow", &result)
+            .await;
 
         result.map(Json)
     }
@@ -1307,6 +1345,7 @@ mod tests {
     fn project_tools_follow_min_compat_contract() {
         let tools = [
             AgentaMcpServer::context_init_tool_attr(),
+            AgentaMcpServer::workflow_check_tool_attr(),
             AgentaMcpServer::feedback_submit_tool_attr(),
             AgentaMcpServer::project_create_tool_attr(),
             AgentaMcpServer::project_get_tool_attr(),
@@ -1363,6 +1402,18 @@ mod tests {
         assert!(context_output.contains("\"entry_task_code\""));
         assert!(context_output.contains("\"feedback_task_code\""));
         assert!(context_output.contains("\"feedback_file\""));
+        let workflow_check =
+            serde_json::to_value(AgentaMcpServer::workflow_check_tool_attr()).expect("tool json");
+        assert_eq!(workflow_check["annotations"]["readOnlyHint"], true);
+        let workflow_input =
+            serde_json::to_string(&workflow_check["inputSchema"]).expect("workflow input");
+        let workflow_output =
+            serde_json::to_string(&workflow_check["outputSchema"]).expect("workflow output");
+        assert!(workflow_input.contains("\"workspace_root\""));
+        assert!(workflow_output.contains("\"digest\""));
+        assert!(workflow_output.contains("\"missing_surfaces\""));
+        assert!(workflow_output.contains("\"recommended_next_actions\""));
+        assert!(workflow_output.contains("\"execution_plans\""));
         let feedback_submit =
             serde_json::to_value(AgentaMcpServer::feedback_submit_tool_attr()).expect("tool json");
         assert_eq!(feedback_submit["annotations"]["readOnlyHint"], false);

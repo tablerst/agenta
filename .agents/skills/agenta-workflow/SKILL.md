@@ -33,15 +33,31 @@ Use this when Agenta MCP tools are available in the current environment, or when
 
 Do not assume CLI is the default, and do not treat MCP as the only valid entry point. Choose the most direct and stable boundary for the current environment before proceeding.
 
-## Default Loop
+## Default State Machine
 
-1. Select MCP or CLI mode from `references/operating-surfaces.md`.
-2. Restore or initialize the Agenta project and active version.
-3. Restore any relevant task/index context before making changes.
-4. Do the requested work and run the appropriate verification.
-5. Sync code/verifications, local execution plans, and Agenta task notes/statuses.
-6. Read back every Agenta write before reporting completion.
-7. If Agenta itself, this skill, or the selected operating surface caused friction, submit concise Agent feedback through `references/feedback-loop.md`.
+Use this workflow as a lightweight state machine. The tool-side `workflow_check` result supplies facts; this skill defines when to call it and how to close the loop.
+
+1. `bootstrap`
+   - Select MCP or CLI mode from `references/operating-surfaces.md`.
+   - Read repository context first: root agent instructions, README, architecture notes, active execution plans, and local skills.
+   - Run `workflow_check` when available to confirm project/version scope, context manifest, feedback route, recovery candidates, open tasks, and execution-plan linkage before substantial work.
+2. `restore`
+   - Restore or initialize the Agenta project and active version.
+   - Read the relevant task, context, or index task before making changes.
+   - Minimum output: current project/version/task scope, chosen recovery entry, and any warnings or missing surfaces.
+3. `execute`
+   - Do the requested code, documentation, or investigation work.
+   - Keep adjacent tasks together when they share one implementation batch.
+   - Minimum output: affected tasks and files, plus the implementation or investigation conclusion.
+4. `verify`
+   - Run the appropriate verification commands.
+   - Update any local execution plan that exists.
+   - Minimum output: commands run, results, and any residual risks.
+5. `closeout`
+   - Append notes and update statuses for every directly affected Agenta task.
+   - Read back every Agenta write before reporting completion.
+   - Produce a `ledger_delta` in the final report: updated tasks, notes, verification commands, remaining risks, and the next recovery entry.
+   - If Agenta itself, this skill, or the selected operating surface caused friction, submit concise Agent feedback through `references/feedback-loop.md`.
 
 ## References To Read
 
@@ -62,6 +78,7 @@ After using this skill, produce one or more of these artifacts:
 - Agent feedback notes routed to a configured feedback inbox task when the Agenta workflow itself needs improvement.
 - Trustworthy task state and knowledge state.
 - An index-style task only when a task lane genuinely needs a reusable recovery entry.
+- A `ledger_delta` at closeout for substantive work: task ids/codes updated, note kinds written, verification commands, remaining risks, and next recovery entry.
 
 ## Constraints
 
@@ -70,6 +87,7 @@ After using this skill, produce one or more of these artifacts:
 - Use first-class Agenta fields explicitly: `task_code`, `task_kind`, and `note_kind`.
 - When a single implementation batch advances multiple adjacent tasks, update every affected task and note rather than pretending only one task moved.
 - Treat local execution plans and Agenta task state as one workflow surface; do not let code, plan docs, and task notes drift for long.
+- Prefer `workflow_check` as the lightweight read-only health check when available. Use its digest first, then expand with `task_context_get`, `task_list`, or search only when needed.
 - Parallelize read-only exploration when useful, but keep writes, status updates, and read-back verification serialized.
 - Confirm every write by reading back the task, note, attachment, or equivalent state.
 

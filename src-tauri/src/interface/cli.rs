@@ -17,7 +17,7 @@ use crate::service::{
     CreateTaskInput, CreateVersionInput, DetachChildTaskInput, RequestOrigin,
     ResolveTaskBlockerInput, SearchBackfillSummary, SearchEvidenceInput, SearchInput,
     SearchQueueRecoverySummary, SubmitFeedbackInput, TaskContextOptions, TaskQuery,
-    UpdateProjectInput, UpdateTaskInput, UpdateVersionInput,
+    UpdateProjectInput, UpdateTaskInput, UpdateVersionInput, WorkflowCheckInput,
 };
 
 #[derive(Debug, Parser)]
@@ -36,6 +36,8 @@ struct Cli {
 enum TopLevelCommand {
     #[command(subcommand)]
     Context(ContextCommand),
+    #[command(subcommand)]
+    Workflow(WorkflowCommand),
     #[command(subcommand)]
     Feedback(FeedbackCommand),
     #[command(subcommand)]
@@ -57,6 +59,11 @@ enum TopLevelCommand {
 #[derive(Debug, Subcommand)]
 enum ContextCommand {
     Init(ContextInitArgs),
+}
+
+#[derive(Debug, Subcommand)]
+enum WorkflowCommand {
+    Check(WorkflowCheckArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -170,6 +177,26 @@ struct ContextInitArgs {
     force: bool,
     #[arg(long = "dry-run")]
     dry_run: bool,
+}
+
+#[derive(Debug, Args)]
+struct WorkflowCheckArgs {
+    #[arg(long)]
+    project: Option<String>,
+    #[arg(long)]
+    version: Option<String>,
+    #[arg(long)]
+    task: Option<String>,
+    #[arg(long = "task-code-prefix")]
+    task_code_prefix: Option<String>,
+    #[arg(long = "workspace-root")]
+    workspace_root: Option<PathBuf>,
+    #[arg(long = "include-execution-plans", default_value_t = true, action = clap::ArgAction::Set)]
+    include_execution_plans: bool,
+    #[arg(long = "open-task-limit")]
+    open_task_limit: Option<usize>,
+    #[arg(long = "recent-activity-limit")]
+    recent_activity_limit: Option<usize>,
 }
 
 #[derive(Debug, Args)]
@@ -577,6 +604,7 @@ fn config_path_from_args() -> Option<PathBuf> {
 fn cli_action(command: &TopLevelCommand) -> &'static str {
     match command {
         TopLevelCommand::Context(ContextCommand::Init(_)) => "context.init",
+        TopLevelCommand::Workflow(WorkflowCommand::Check(_)) => "workflow.check",
         TopLevelCommand::Feedback(FeedbackCommand::Submit(_)) => "feedback.submit",
         TopLevelCommand::Project(ProjectCommand::Create(_)) => "project.create",
         TopLevelCommand::Project(ProjectCommand::Get(_)) => "project.get",
@@ -639,6 +667,7 @@ async fn execute(
 ) -> AppResult<SuccessEnvelope> {
     match command {
         TopLevelCommand::Context(command) => execute_context(app, command).await,
+        TopLevelCommand::Workflow(command) => execute_workflow(app, command).await,
         TopLevelCommand::Feedback(command) => execute_feedback(app, command).await,
         TopLevelCommand::Project(command) => execute_project(app, command).await,
         TopLevelCommand::Version(command) => execute_version(app, command).await,
@@ -671,6 +700,27 @@ async fn execute_context(app: AgentaApp, command: ContextCommand) -> AppResult<S
                 })
                 .await?;
             success("context.init", result, "Initialized project context")
+        }
+    }
+}
+
+async fn execute_workflow(app: AgentaApp, command: WorkflowCommand) -> AppResult<SuccessEnvelope> {
+    match command {
+        WorkflowCommand::Check(args) => {
+            let result = app
+                .service
+                .workflow_check(WorkflowCheckInput {
+                    project: args.project,
+                    version: args.version,
+                    task: args.task,
+                    task_code_prefix: args.task_code_prefix,
+                    workspace_root: args.workspace_root,
+                    include_execution_plans: args.include_execution_plans,
+                    open_task_limit: args.open_task_limit,
+                    recent_activity_limit: args.recent_activity_limit,
+                })
+                .await?;
+            success("workflow.check", result, "Checked workflow")
         }
     }
 }
@@ -1245,6 +1295,10 @@ where
 
 fn print_success(envelope: &SuccessEnvelope, human: bool) {
     if human {
+        if envelope.action == "workflow.check" {
+            print_workflow_check_human(&envelope.result);
+            return;
+        }
         println!("{}", envelope.summary);
         println!(
             "{}",
@@ -1255,6 +1309,64 @@ fn print_success(envelope: &SuccessEnvelope, human: bool) {
             "{}",
             serde_json::to_string_pretty(envelope).unwrap_or_else(|_| "{}".to_string())
         );
+    }
+}
+
+fn print_workflow_check_human(result: &serde_json::Value) {
+    let health = result["digest"]["health"].as_str().unwrap_or("unknown");
+    let summary = result["digest"]["summary"].as_str().unwrap_or("");
+    let project = result["scope"]["project"]["slug"]
+        .as_str()
+        .unwrap_or("unresolved");
+    let version = result["scope"]["version"]["name"]
+        .as_str()
+        .unwrap_or("unresolved");
+    let task = result["scope"]["task"]["task_code"]
+        .as_str()
+        .or_else(|| result["scope"]["task"]["task_id"].as_str())
+        .unwrap_or("none");
+    let missing = json_string_array(&result["missing_surfaces"]);
+    let warnings = json_string_array(&result["warnings"]);
+    let next = json_string_array(&result["recommended_next_actions"]);
+    let open_total = result["open_tasks"]["total"].as_u64().unwrap_or(0);
+    let recovery_count = result["recovery_candidates"]
+        .as_array()
+        .map(Vec::len)
+        .unwrap_or(0);
+    println!("Workflow health: {health}");
+    println!("Summary: {summary}");
+    println!("Scope: project={project} version={version} task={task}");
+    println!("Open tasks: {open_total}; recovery candidates: {recovery_count}");
+    println!(
+        "Manifest: {}",
+        result["scope"]["context_manifest_path"]
+            .as_str()
+            .unwrap_or("not found")
+    );
+    println!("Missing: {}", empty_label(&missing));
+    println!("Warnings: {}", empty_label(&warnings));
+    println!("Next: {}", empty_label(&next));
+}
+
+fn json_string_array(value: &serde_json::Value) -> String {
+    value
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str())
+                .take(3)
+                .collect::<Vec<_>>()
+                .join("; ")
+        })
+        .unwrap_or_default()
+}
+
+fn empty_label(value: &str) -> &str {
+    if value.is_empty() {
+        "none"
+    } else {
+        value
     }
 }
 
